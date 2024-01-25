@@ -11,9 +11,9 @@ voxel2 = -voxel1;
 if(~isfile('projections.mat'))
    projection_num = 5000;
    rots1 = rand_rots(projection_num);
-   projs1 = cryo_project(voxel1,rots1,L,'double');
+   projs1 = cryo_project(voxel1,rots1,L,'double'); projs1 = transposeTensor(projs1);
    rots2 = rand_rots(projection_num);
-   projs2 = cryo_project(voxel2,rots2,L,'double');
+   projs2 = cryo_project(voxel2,rots2,L,'double'); projs2 = transposeTensor(projs2);
    save('projections.mat','projection_num','rots1','projs1','rots2','projs2');
 else
     load('projections.mat')
@@ -26,7 +26,7 @@ meu = (voxel1+voxel2)/2;
 %%
 %learn_rate = 5/10;
 %momentum = 0.9;
-learn_rate = 0.5;
+learn_rate = 0.5/100;
 momentum = 0.9;
 vel = [];
 batch_size = 8;
@@ -40,6 +40,7 @@ norm_err = zeros(numIter/verbose_freq,1);
 u_0 = randn(L,L,L);
 %u_0 = voxel1;
 
+
 reg_param = 0;
 for i = 1:numIter
     s = randi(n,1,batch_size);
@@ -47,9 +48,9 @@ for i = 1:numIter
     rot_s = rots(:,:,s);
     rot_s_inv = transposeTensor(rot_s);
     
-    P_u0 = cryo_project(u_0,rot_s);
+    P_u0 = cryo_project(u_0,rot_s); P_u0 = transposeTensor(P_u0);
     PtP_u0 = im_backproject_arr(P_u0,rot_s_inv);
-    P_meu = cryo_project(meu,rot_s);
+    P_meu = cryo_project(meu,rot_s); P_meu = transposeTensor(P_meu);
     Pt_y = im_backproject_arr((proj_s-P_meu),rot_s_inv);
     
     grad_u0 = 4*sum((sum(PtP_u0.*u_0,[1 2 3]).*PtP_u0 + reg_param*u_0 - sum(Pt_y.*u_0,[1 2 3]).*Pt_y),4) / (L^3 * batch_size);
@@ -81,6 +82,6 @@ voxelSurf((abs(u_0) > 0.8).*u_0)
 
 
 
-%save('result1.mat','u_0','norm_err','cost_func_val','numIter','batch_size','learn_rate','momentum')
+%save('result2.mat','u_0','norm_err','cost_func_val','numIter','batch_size','learn_rate','momentum','vel')
 
 %%
