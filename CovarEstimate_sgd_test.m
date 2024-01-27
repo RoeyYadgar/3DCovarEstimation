@@ -30,7 +30,7 @@ rots = cat(3,rots1,rots2);
 %meu = (voxel1+voxel2)/2;
 meu = zeros(size(voxel1));
 %%
-learn_rate = 0.5*1e-3;
+learn_rate = 0.005;
 momentum = 0.9;
 vel = [];
 batch_size = 8;
@@ -65,7 +65,7 @@ for i = 1:numIter
     Pt_y_yt_P_u =sum(Pt_y.*u_0,[1,2,3]).*Pt_y; 
 
     grad_u0 = 4*(sum(PtP_Sigma_PtP_ui,5) - sum(Pt_y_yt_P_u,5))/(L^3 * batch_size);
-
+    grad_u0 = grad_u0./norm(grad_u0(:));
     if(any(isnan(grad_u0(:))))
         break
     end
