@@ -1,6 +1,5 @@
 function cost_val = covar_cost_func(y,Pu)
-    %cost_func = ||y||^4 -2*(<y,\Sum Pu>)^2 + ||\Sum Pu||^4 (fix cuz that
-    %shit aint true)
+    
     L = size(Pu,1);
     r = size(Pu,3);
     n = size(Pu,4);
@@ -10,7 +9,7 @@ function cost_val = covar_cost_func(y,Pu)
 
     y_Pu_inner_prod = (sum(y.*Pu,[1,2]));
     y_Pu_term = squeeze(sum(y_Pu_inner_prod.^2,3));
-    %y_Pu_term = squeeze(sum((sum((sum(y.*Pu,[1,2])).*Pu,3)).*y,[1,2,3]));
+    
     
     
     Pu = reshape(Pu,L^2,r,n);
