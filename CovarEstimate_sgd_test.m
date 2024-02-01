@@ -30,10 +30,11 @@ rots = cat(3,rots1,rots2);
 %meu = (voxel1+voxel2)/2;
 meu = zeros(size(voxel1));
 %%
-learn_rate = 0.005;
+learn_rate = 0.5;
+learn_rate_exp = 0.998;
 momentum = 0.9;
 vel = [];
-batch_size = 8;
+batch_size = 16;
 n = size(projs,3);
 
 
@@ -42,7 +43,7 @@ verbose_freq = 50;
 cost_func_val = zeros(numIter/verbose_freq,1);
 singular_vals = zeros(numIter/verbose_freq,r);
 
-u_0 = randn(L,L,L,r);
+u_0 = randn(L,L,L,r); u_0(:,:,:,1) = voxel1;
 P_u0 = zeros(L,L,r,batch_size);
 PtP_u0 = zeros(L^3,r,batch_size);
 
@@ -65,25 +66,29 @@ for i = 1:numIter
     Pt_y_yt_P_u =sum(Pt_y.*u_0,[1,2,3]).*Pt_y; 
 
     grad_u0 = 4*(sum(PtP_Sigma_PtP_ui,5) - sum(Pt_y_yt_P_u,5))/(L^3 * batch_size);
-    grad_u0 = grad_u0./norm(grad_u0(:));
+    grad_u0 = grad_u0./norm(grad_u0(:)); grad_u0(:,:,:,1) = 0;
     if(any(isnan(grad_u0(:))))
         break
     end
 
     [u_0,vel] = sgdmupdate(u_0,grad_u0,vel,learn_rate,momentum);
-    learn_rate = (1) * learn_rate;
+    learn_rate = (learn_rate_exp) * learn_rate;
    
     %min(norm(u_0(:) - voxel1(:)),norm(u_0(:) + voxel1(:)))/norm(voxel1(:))
+    v(i) = min(norm(reshape(u_0(:,:,:,2),[],1) - voxel2(:)),norm(reshape(u_0(:,:,:,2),[],1) + voxel2(:)))/norm(voxel2(:));
+    v(i)
     if(mod(i,verbose_freq) == 0)
         cost_func_val(i/verbose_freq) = covar_cost_func(proj_s-P_meu,P_u0);
         singular_vals(i/verbose_freq,:) = cosineSimilarity(cat(4,voxel1,voxel2),u_0);
         display(['Cost function val ' sprintf('%0.5e',cost_func_val(i/verbose_freq))]);
         display(['Cosine Similiraity singular values ' sprintf('%f , ',singular_vals(i/verbose_freq,:))]);
 
-        subplot(2,1,1)
+        subplot(2,2,1)
         voxelSurf((abs(u_0(:,:,:,1)) > 0.5).*u_0(:,:,:,1));
-        subplot(2,1,2)
+        subplot(2,2,2)
         voxelSurf((abs(u_0(:,:,:,2)) > 0.5).*u_0(:,:,:,2));
+        subplot(2,2,3)
+        plot(v((max(i-400,1)):i))
         drawnow
     end
 end
