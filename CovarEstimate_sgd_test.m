@@ -12,16 +12,16 @@ voxel2 = double(((x+0.6).^2 + ((y).^2)' + reshape(z,1,1,[]).^2) <= 0.25);
 
 
 
-if(~isfile('projections.mat'))
+if(~isfile('data/projections.mat'))
    projection_num = 5000;
    rots1 = rand_rots(projection_num);
    projs1 = cryo_project(voxel1,rots1,L); projs1 = transposeTensor(projs1);
    projs1 = projs1.*(randi(2,1,1,projection_num)-1.5)*2;
    rots2 = rand_rots(projection_num); 
    projs2 = cryo_project(voxel2,rots2,L).*(randi(2,1,1,projection_num)-1.5)*2; projs2 = transposeTensor(projs2);
-   save('projections.mat','projection_num','rots1','projs1','rots2','projs2');
+   save('data/projections.mat','projection_num','rots1','projs1','rots2','projs2');
 else
-    load('projections.mat')
+    load('data/projections.mat')
 end
 
 
@@ -49,6 +49,7 @@ PtP_u0 = zeros(L^3,r,batch_size);
 
 
 reg_param = 0;
+profile on
 for i = 1:numIter
     s = randi(n,1,batch_size);
     proj_s = projs(:,:,s);
@@ -85,22 +86,22 @@ for i = 1:numIter
         display(['Cosine Similiraity singular values ' sprintf('%f , ',singular_vals(i/verbose_freq,:))]);
 
 
-        subplot(2,2,1)
-        voxelSurf((abs(u_0(:,:,:,1)) > 0.5).*u_0(:,:,:,1));
-        subplot(2,2,2)
-        voxelSurf((abs(u_0(:,:,:,2)) > 0.5).*u_0(:,:,:,2));
-        subplot(2,2,3)
-        plot(v((max(i-400,1)):i))
-        drawnow
+        %subplot(2,2,1)
+        %voxelSurf((abs(u_0(:,:,:,1)) > 0.5).*u_0(:,:,:,1));
+        %subplot(2,2,2)
+        %voxelSurf((abs(u_0(:,:,:,2)) > 0.5).*u_0(:,:,:,2));
+        %subplot(2,2,3)
+        %plot(v((max(i-400,1)):i))
+        %drawnow
     end
 end
-
+profile viewer
 %norm_diff = min(norm(u_0(:) - voxel1(:)),norm(u_0(:) + voxel1(:)))/norm(voxel1(:));
 %display(['Norm Difference from ground turth: ' sprintf('%0.5e',norm_diff)]);
 
 
 
-voxelSurf((abs(u_0(:,:,:,1)) > 0.5).*u_0(:,:,:,1))
+%voxelSurf((abs(u_0(:,:,:,1)) > 0.5).*u_0(:,:,:,1))
 
 
 
