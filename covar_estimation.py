@@ -10,10 +10,14 @@ import torch
 
 
 
-def covar_cost_gradient(u,projections,rots,mean_vol = None):
+def covar_cost_gradient(vols,src,image_ind,images):
     
-    #inverted_rots = rots.invert().matrices #No need to invert?
-    inverted_rots = rots.matrices
+    batch_size = images.n_images
+    
+    vols_forward = vol_stack_forward(vols,src,image_ind,batch_size)
+    vols_backproject = im_stack_backward(vols_forwrard, src, image_ind)
+    
+    vols_forward_norm = norm(vols_forward.asnumpy(), axis = (2,3))
     
     p_u = project_stack(u,rots)
     pbp_u = backproject_stack(p_u, inverted_rots)
@@ -42,9 +46,10 @@ def covar_cost_gradient(u,projections,rots,mean_vol = None):
     return grad
     
 def covar_cost(projected_vols,projections):
+    #TODO check need for ordering
     rank,batch_size,L,_ = projected_vols.shape
-    projected_vols = projected_vols.asnumpy().reshape((rank,batch_size,-1),order = 'F')
-    projections = projections.asnumpy().reshape((batch_size,-1),order='F')
+    projected_vols = projected_vols.asnumpy().reshape((rank,batch_size,-1))#,order = 'F') 
+    projections = projections.asnumpy().reshape((batch_size,-1))#,order='F')
     
     norm_proj_term = mean(np.power(
                 norm(projections,axis=(1)),4))
@@ -55,42 +60,38 @@ def covar_cost(projected_vols,projections):
     norm_projvols_term = np.sum(np.power(
                 np.matmul(projected_vols,projected_vols,axes = [(0,2),(2,0),(0,2)]),2),axis=(0,1,2))/batch_size
     
+    #proj_inner_prod = np.matmul(projected_vols,projected_vols,axes = [(0,2),(2,0),(0,2)]).transpose(0,2,1)
     
     cost_val = norm_proj_term - 2*inner_prod_term + norm_projvols_term
     
     return cost_val/(L**4)
     
-def project_stack(volume_stack,rots):
-    L = volume_stack.resolution
-    n = len(rots)
-    volume_len = volume_stack.stack_shape[0]
-    projection_stack = np.zeros((volume_len,n,L,L),dtype=np.single)
-    for i in range(volume_len):
-        projection_stack[i,:,:,:] = volume_stack[i].project(rots)
-        
-    projection_stack = Image(projection_stack)
-        
-    return projection_stack
+def vol_stack_forward(vols,src,image_ind,image_num):
+    L = vols.resolution
+    vols_num = len(vols)
+    vols_forward = Image(np.zeros((vols_num,image_num,L,L),dtype=vols.dtype))
+    
+    for i in range(vols_num):
+        vols_forward[i] = src.vol_forward(vols[i],image_ind,image_num)
     
     
+    return vols_forward
     
+def im_stack_backward(ims,src,image_ind):
     
-def backproject_stack(im_stack,rots):
-    #im_stack is of size (d,n,L,L) and rots is of size (n,3,3)
-    L = im_stack.resolution
-    n = len(rots)
-    stack_shape = im_stack.stack_shape
-    backprojection_stack = np.zeros(np.concatenate((stack_shape,(L,L,L))),dtype=np.single)
+    L = ims.resolution
+    
+    stack_shape = ims.stack_shape
+    im_backward = Volume(np.zeros(np.concatenate((stack_shape,(L,L,L))),dtype=ims.dtype))
     
     for i in range(stack_shape[0]):
         for j in range(stack_shape[1]):
             
-            backprojection_stack[i,j,:,:,:] = im_stack[i,j].backproject(rots[j].reshape(1,3,3))
+            im_backward[i,j] = src.im_backward(ims[i][j],image_ind+j).T
             
             
-    #backprojection_stack = Volume(backprojection_stack)
-    backprojection_stack = Volume(backprojection_stack.transpose((0,1,4,3,2)))
-    return backprojection_stack
+    
+    return im_backward
     
 
 
