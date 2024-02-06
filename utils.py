@@ -1,8 +1,9 @@
 
 import numpy as np
+import torch
 from numpy import random
 from aspire.utils import coor_trans,Rotation
-
+import aspire
 
 
 def generateBallVoxel(center,radius,L):
@@ -29,10 +30,31 @@ def rademacherDist(sz):
     return val
 
     
-        
-
-
-if __name__ == "__main__":
-    L = 15
-    voxel = generateBallVoxel([0,0,0],0.5,15)
+def cosineSimilarity(vec1,vec2):
     
+    vec1 = asnumpy(vec1).reshape((vec1.shape[0],-1))
+    vec2 = asnumpy(vec2).reshape((vec2.shape[0],-1))
+    
+    vec1_norm = np.linalg.norm(vec1,axis=(-1)).reshape((vec1.shape[0],1))
+    vec2_norm = np.linalg.norm(vec2,axis=(-1)).reshape((vec2.shape[0],1))
+    
+    vec1 = vec1/vec1_norm
+    vec2 = vec2/vec2_norm
+    
+    cosine_sim = np.matmul(vec1,vec2.transpose())
+    
+    
+    return cosine_sim
+    
+    
+
+def asnumpy(data):
+    if(type(data) == aspire.volume.volume.Volume or type(data) == aspire.image.image.Image):
+        data = data.asnumpy()
+        
+    return data
+
+
+def np2torchDtype(np_dtype):
+
+    return torch.float64 if (np_dtype == np.double) else torch.float32

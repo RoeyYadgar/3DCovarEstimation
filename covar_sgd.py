@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
+from tqdm import tqdm
+import pickle
 from aspire.volume import Volume
 from aspire.utils import Rotation
 
@@ -24,14 +26,15 @@ class ProjDataset(Dataset):
         return projection,rotation
 '''
 
-class Covar(nn.Module):
-    def __init__(self,resolution,rank,mean_vol,vectors = None):
+class Covar():
+    def __init__(self,resolution,rank,mean_vol,src,vectors = None,vectorsGD = None):
         
-        super(Covar,self).__init__()
+
         
         self.rank = rank
         self.resolution = resolution 
         self.mean = mean_vol        
+        self.src = src
         
         if vectors is None:
             self.vectors = (np.float32(np.random.randn(rank,resolution,resolution,resolution)))
@@ -42,62 +45,86 @@ class Covar(nn.Module):
                 self.vectors = vectors.asnumpy()
             
         
-        self.vectors = torch.tensor(self.vectors,dtype=torch.float32,requires_grad = True)
+        self.vectors = torch.tensor(self.vectors,dtype= np2torchDtype(self.vectors.dtype),requires_grad = True)
         
         #self.device = torch.device('cuda')
         #self.to(self.device)
         
         self.verbose_freq = 50
+        self.epoch_ind_log = []
+        self.cost_log = []
+        
+        self.vectorsGD = vectorsGD
+        if(vectorsGD is not None):
+            self.cosine_sim_log = []
+        
     
     def toVol(self):
         
         return Volume(self.vectors.detach().numpy())
         
-    def cost(self,projections,rotations):
+    def cost(self,image_ind,images):
         
-        return CovarCost.apply(self.vectors,projections,rotations)
+        return CovarCost.apply(self.vectors,self.src,image_ind,images)
         
         
-    def train(self,projections,rotations,batch_size,epoch_num,lr = 0.05,momentum = 0.9):
-        
-        #proj_loader = DataLoader(dataset= ProjDataset(projections,rotations),
-        #                         batch_size=batch_size,shuffle = True,collate_fn= lambda x : x)
+    def train(self,batch_size,epoch_num,lr = 100,momentum = 0.9):
         
         optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = 1)
+        #optimizer = torch.optim.Adam([self.vectors],lr = lr)
         
         
         for i in range(1,epoch_num+1):
-            self.train_epoch(projections,rotations,batch_size,optimizer)
+            self.train_epoch(batch_size,optimizer)
+            scheduler.step()
     
-    def train_epoch(self,projections,rotations,batch_size,optimizer):
+    def train_epoch(self,batch_size,optimizer):
         
         #self.train() #Todo check if needed
         #projections = projections.to(self.device)
         #rotations = rotations.to(self.device)
-        dataset_len = len(rotations)
+        
+        dataset_len = self.src.n
+        #pbar = tqdm(total=int(np.ceil(dataset_len/batch_size)), desc="SGD Progress",position=0,leave=True)
+        
+        #for batch_idx in tqdm(range(int(np.ceil(dataset_len/batch_size))),position=0,leave=True):
         for batch_idx in range(int(np.ceil(dataset_len/batch_size))):
             
-            batch_samples = np.random.randint(0,dataset_len,batch_size)
-            projs = projections[batch_samples]
-            rots = Rotation.from_matrix(rotations[batch_samples])
+            batch_image_ind = (batch_idx)*batch_size
+            images = self.src.images[batch_image_ind + np.arange(0,batch_size)]
             
             optimizer.zero_grad()
-            cost = self.cost(projs,rots)
+            cost = self.cost(batch_image_ind,images)
             cost.backward()
+    
+            #torch.nn.utils.clip_grad_norm_([self.vectors],1e-4)
+           
             
             optimizer.step()
             
+            #pbar.update(1)
             
             if(batch_idx % self.verbose_freq == 0):
-                print("{:e}".format(cost))
-                print(batch_idx)
+                #tqdm.write(" {:e}\r".format(cost),end='\r')
+                print(f'batch index : {batch_idx}, {cost} cost value')
+                #bar.update(batch_idx * batch_size)
+                #bar.finish()        
+                self.log_training(cost.detach().numpy(), batch_size / dataset_len)
+
+    def log_training(self,cost_val,epoch_ratio):
+        if(len(self.epoch_ind_log) != 0):
+            self.epoch_ind_log.append(self.epoch_ind_log[-1] + epoch_ratio)
+        else:
+            self.epoch_ind_log.append(epoch_ratio)
+        self.cost_log.append(cost_val)
         
-        
-        
-        
-    
+        if(self.vectorsGD is not None):
+            self.cosine_sim_log.append(cosineSimilarity(self.vectors.detach().numpy(),self.vectorsGD)[0,0])
         
 
-
-    
-    
+    def save(self,filepath):
+        
+        pickle.dump(self,open(filepath,'wb'))
+        
+        
