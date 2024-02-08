@@ -3,6 +3,7 @@ import pandas as pd
 import torch
 from numpy import random
 from aspire.utils import coor_trans,Rotation
+from aspire.volume import Volume
 import aspire
 
 
@@ -22,6 +23,12 @@ def generateCylinderVoxel(center,radius,L,axis = 2):
     voxel = ((grid[cylinder_axes[0]]-center[0])**2 + (grid[cylinder_axes[1]]-center[1])**2) <= np.power(radius,2)
     
     return np.single(voxel.reshape((1,L**3)))
+
+
+def replicateVoxelSign(voxels):
+    
+    return Volume(np.concatenate((voxels.asnumpy(),-voxels.asnumpy()),axis=0))
+    
 
 
 def rademacherDist(sz):
@@ -44,9 +51,21 @@ def cosineSimilarity(vec1,vec2):
     cosine_sim = np.matmul(vec1,vec2.transpose())
     
     
+    
     return cosine_sim
     
+
+def principalAngles(vec1,vec2):
     
+    vec1 = asnumpy(vec1).reshape((vec1.shape[0],-1))
+    vec2 = asnumpy(vec2).reshape((vec2.shape[0],-1))
+    
+    svd1 = np.linalg.svd(vec1,full_matrices=False)[2]
+    svd2 = np.linalg.svd(vec2,full_matrices=False)[2]
+
+    principal_angles = np.arccos(np.clip(np.abs(np.dot(svd1, svd2.T)), -1.0, 1.0))
+    
+    return np.min(np.degrees(principal_angles))
 
 def asnumpy(data):
     if(type(data) == aspire.volume.volume.Volume or type(data) == aspire.image.image.Image):

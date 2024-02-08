@@ -14,7 +14,8 @@ import pandas as pd
 L = 15
 n = 2048
 voxels = Volume.from_vec(np.concatenate((generateBallVoxel([-0.6,0,0],0.5,15),
-                                         -generateBallVoxel([-0.6,0,0],0.5,15))))
+                                         -generateBallVoxel([0.6,0,0],0.5,15))))
+                                         
 #voxels = Volume.from_vec((generateBallVoxel([-0.6,0,0],0.5,15)))
  
 
@@ -22,7 +23,7 @@ mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
 #voxels.save('tmp.mrc',overwrite=True)
 
 
-sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+sim = Simulation(n = n , vols = replicateVoxelSign(voxels),amplitudes= 1,offsets = 0)
 #projections = sim.images[:]
 #rots = Rotation.from_euler(sim.angles)
 #projections[:5].show()
@@ -53,7 +54,7 @@ for lr in learning_rate:
             
             if(not os.path.isfile(filepath)):
                 covar_dataframe.append([filepath,lr,mu,reg])
-                c = Covar(L,1,mean_voxel,sim,vectors= None,vectorsGD = voxels[0])
+                c = Covar(L,1,mean_voxel,sim,vectors= None,vectorsGD = voxels)
                 c.train(batch_size = 1,epoch_num = 10,lr= lr,momentum=mu , reg = reg)
                 pickle.dump(c,open(filepath,'wb'))
                 
@@ -62,3 +63,6 @@ covar_dataframe = pd.DataFrame(covar_dataframe,columns = ['filename','learning_r
 #covar_dataframe.to_csv('data/results/results.csv',mode = 'a',header = False)
 appendCSV(covar_dataframe, 'data/results/results.csv')
             
+
+c = Covar(L,2,mean_voxel,sim,vectors= None,vectorsGD = voxels)
+c.train(batch_size = 1,epoch_num = 10,lr= 10,momentum=0.9 , reg = 1e-4)

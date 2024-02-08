@@ -1,4 +1,5 @@
 from covar_estimation import *
+from utils import principalAngles , cosineSimilarity
 
 import torch.nn as nn
 import torch
@@ -9,22 +10,6 @@ import pickle
 from aspire.volume import Volume
 from aspire.utils import Rotation
 
-'''
-class ProjDataset(Dataset):
-    def __init__(self,projections,rotations):
-        
-        self.projections= projections
-        self.rotations = rotations
-        
-    def __len__(self):
-        return len(self.rotations)
-    
-    def __getitem__(self,index):
-        projection = self.projections[index]
-        rotation = self.rotations[index]
-        
-        return projection,rotation
-'''
 
 class Covar():
     def __init__(self,resolution,rank,mean_vol,src,vectors = None,vectorsGD = None):
@@ -58,6 +43,7 @@ class Covar():
         self.vectorsGD = vectorsGD
         if(vectorsGD is not None):
             self.cosine_sim_log = []
+            self.principal_angles_log = []
         
     
     def toVol(self):
@@ -87,9 +73,9 @@ class Covar():
         #rotations = rotations.to(self.device)
         
         dataset_len = self.src.n
-        #pbar = tqdm(total=int(np.ceil(dataset_len/batch_size)), desc="SGD Progress",position=0,leave=True)
+        pbar = tqdm(total=int(np.ceil(dataset_len/batch_size)), desc="SGD Progress",position=0,leave=True)
         
-        #for batch_idx in tqdm(range(int(np.ceil(dataset_len/batch_size))),position=0,leave=True):
+        
         for batch_idx in range(int(np.ceil(dataset_len/batch_size))):
             
             batch_image_ind = (batch_idx)*batch_size
@@ -98,22 +84,25 @@ class Covar():
             optimizer.zero_grad()
             cost = self.cost(batch_image_ind,images,reg)
             cost.backward()
-    
-            #torch.nn.utils.clip_grad_norm_([self.vectors],1e-4)
-           
-            
+                    
             optimizer.step()
             
-            #pbar.update(1)
+            pbar.update(1)
             
-            if(batch_idx % self.verbose_freq == 0):
-                #tqdm.write(" {:e}\r".format(cost),end='\r')
-                print(f'batch index : {batch_idx}, {cost} cost value')
-                #bar.update(batch_idx * batch_size)
-                #bar.finish()        
-                
+            
+            
             if(batch_idx % self.log_freq == 0):
                 self.log_training(cost.detach().numpy(), batch_size*self.log_freq / dataset_len)
+            
+            if(batch_idx % self.verbose_freq == 0):
+                if(self.vectorsGD is not None):
+                    #pbar_description  = "cost value : {:.2e}".format(cost) +   ",  cosine sim : {:.2e}".format(self.cosine_sim_log[-1])
+                    pbar_description  = "cost value : {:.2e}".format(cost) +   ",  cosine sim : {:.2e}".format(self.principal_angles_log[-1])
+                else:
+                    pbar_description  = f'cost value : {cost}'
+                pbar.set_description(pbar_description)
+                
+            
 
     def log_training(self,cost_val,epoch_ratio):
         if(len(self.epoch_ind_log) != 0):
@@ -123,7 +112,8 @@ class Covar():
         self.cost_log.append(cost_val)
         
         if(self.vectorsGD is not None):
-            self.cosine_sim_log.append(cosineSimilarity(self.vectors.detach().numpy(),self.vectorsGD)[0,0])
+            self.cosine_sim_log.append(cosineSimilarity(self.vectors.detach().numpy(),self.vectorsGD))
+            self.principal_angles_log.append(principalAngles(self.vectors.detach().numpy(),self.vectorsGD))
         
 
     def save(self,filename):        
