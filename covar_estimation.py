@@ -10,7 +10,7 @@ import torch
 from utils import *
 
 
-def covar_cost_gradient(vols,vols_backproject,images_backproject,images_volsforward_prod ,volsforward_prod):
+def covar_cost_gradient(vols_backproject,images_backproject,images_volsforward_prod ,volsforward_prod,vols = None, reg = 0, vols_prod = None):
     rank,batch_size,L,_,_ = vols_backproject.shape
     
     vols_backproject = vols_backproject.asnumpy().reshape((rank,batch_size,-1))
@@ -18,19 +18,24 @@ def covar_cost_gradient(vols,vols_backproject,images_backproject,images_volsforw
     
     batch_size = images_backproject.shape[1]
     
-    #newvols = np.zeros(vols_backproject.shape)
     grad = (np.matmul(volsforward_prod,vols_backproject,axes=[(0,1),(0,2),(0,2)])
             - np.matmul(images_volsforward_prod,images_backproject,axes=[(0,1),(0,2),(0,2)]))
     
+    grad = 4 * np.mean(grad,axis=(1))
     
-    grad = 4*np.mean(grad,axis=(1)).reshape(rank,L,L,L)
+    if(reg != 0):
+        vols = vols.asnumpy().reshape((rank,-1))
+        grad += 4 * reg * np.matmul(vols_prod,vols,axes=[(0,1),(0,1),(0,1)])
+    
+    grad = grad.reshape(rank,L,L,L)
     
     
     
     return grad/(L**3)
     
-def covar_cost(vols_forward,images):
+def covar_cost(vols_forward,images,vols = None,reg = 0):
     #TODO check need for ordering in reshape
+    #TODO check normalizaiton by L^k
     
     rank,batch_size,L,_ = vols_forward.shape
     
@@ -49,9 +54,18 @@ def covar_cost(vols_forward,images):
     cost_val = (norm_images_term 
                 - 2*np.sum(np.power(images_volsforward_prod,2),axis=0)
                 + np.sum(np.power(volsforward_prod,2),axis=(0,1)))
-                
     
-    return np.mean(cost_val)/(L**2) , images_volsforward_prod , volsforward_prod
+    cost_val = np.mean(cost_val)/(L**2)
+    
+    if(reg != 0):
+        vols = vols.asnumpy().reshape((rank,-1))
+        vols_prod = np.matmul(vols,vols,axes=[(0,1),(1,0),(0,1)])
+        reg_cost = np.sum(np.power(vols_prod,2),axis=(0,1))/(L**3)
+        cost_val += reg * reg_cost
+    else:
+        vols_prod = None
+    
+    return  cost_val, images_volsforward_prod , volsforward_prod, vols_prod
     
 
 
@@ -88,12 +102,13 @@ def im_stack_backward(ims,src,image_ind):
 
 class CovarCost(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input,src,image_ind,images):
+    def forward(ctx, input,src,image_ind,images,reg = 0):
         
         #ctx.save_for_backward(input)
         ctx.images = images
         ctx.src = src
         ctx.image_ind = image_ind
+        ctx.reg = reg
         
         vols = Volume(input.numpy())
         vols_forward = vol_stack_forward(vols,src,image_ind,images.shape[0])
@@ -101,10 +116,11 @@ class CovarCost(torch.autograd.Function):
         ctx.vols = vols
         ctx.vols_forward = vols_forward
         
-        cost_val,images_volsforward_prod , volsforward_prod = covar_cost(vols_forward,images)
+        cost_val,images_volsforward_prod , volsforward_prod , vols_prod = covar_cost(vols_forward,images,vols,reg)
         
         ctx.images_volsforward_prod = images_volsforward_prod
         ctx.volsforward_prod = volsforward_prod
+        ctx.vols_prod = vols_prod
         
         return torch.tensor(cost_val)
     
@@ -116,11 +132,12 @@ class CovarCost(torch.autograd.Function):
         images_backproject = im_stack_backward(ctx.images.stack_reshape((1,batch_size)), ctx.src, ctx.image_ind)
         
         
-        grad_input_np = covar_cost_gradient(ctx.vols, vols_backproject, images_backproject, ctx.images_volsforward_prod, ctx.volsforward_prod)
+        grad_input_np = covar_cost_gradient(vols_backproject, images_backproject, ctx.images_volsforward_prod, ctx.volsforward_prod,
+                                            ctx.vols,ctx.reg,ctx.vols_prod)
         grad_input = torch.tensor(grad_input_np,dtype= np2torchDtype(ctx.vols.dtype))
         
     
-        return grad_input * grad_output, None, None,None
+        return grad_input * grad_output, None, None,None ,None
     
     
     

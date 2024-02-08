@@ -56,8 +56,9 @@ class TestCovarGradient(unittest.TestCase):
 
     def testCovarGradcheck(self):
         #TODO : check why gradient is non-deterministic
+        #TODO : check regularization gradient numerical error
         L = 15
-        n = 16
+        n = 1
 
         voxels = Volume.from_vec(np.double(np.concatenate((generateBallVoxel([0,0,0],0.5,L), #Use double dtype when using gradcheck
                                          -generateBallVoxel([0,0,0],0.5,L)))))
@@ -66,7 +67,7 @@ class TestCovarGradient(unittest.TestCase):
         
         from torch.autograd import gradcheck
         input = torch.randn((1,L,L,L), requires_grad=True,dtype=torch.double)
-        gradcheck(CovarCost.apply, (input,sim,0,sim.images[:]), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
+        gradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
 
 
 

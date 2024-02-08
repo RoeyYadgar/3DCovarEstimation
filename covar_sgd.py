@@ -51,6 +51,7 @@ class Covar():
         #self.to(self.device)
         
         self.verbose_freq = 50
+        self.log_freq = 10
         self.epoch_ind_log = []
         self.cost_log = []
         
@@ -63,12 +64,12 @@ class Covar():
         
         return Volume(self.vectors.detach().numpy())
         
-    def cost(self,image_ind,images):
+    def cost(self,image_ind,images,reg = 0):
         
-        return CovarCost.apply(self.vectors,self.src,image_ind,images)
+        return CovarCost.apply(self.vectors,self.src,image_ind,images,reg)
         
         
-    def train(self,batch_size,epoch_num,lr = 100,momentum = 0.9):
+    def train(self,batch_size,epoch_num,lr = 100,momentum = 0.9,reg = 0):
         
         optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = 1)
@@ -76,10 +77,10 @@ class Covar():
         
         
         for i in range(1,epoch_num+1):
-            self.train_epoch(batch_size,optimizer)
+            self.train_epoch(batch_size,optimizer,reg)
             scheduler.step()
     
-    def train_epoch(self,batch_size,optimizer):
+    def train_epoch(self,batch_size,optimizer ,reg = 0):
         
         #self.train() #Todo check if needed
         #projections = projections.to(self.device)
@@ -95,7 +96,7 @@ class Covar():
             images = self.src.images[batch_image_ind + np.arange(0,batch_size)]
             
             optimizer.zero_grad()
-            cost = self.cost(batch_image_ind,images)
+            cost = self.cost(batch_image_ind,images,reg)
             cost.backward()
     
             #torch.nn.utils.clip_grad_norm_([self.vectors],1e-4)
@@ -110,7 +111,9 @@ class Covar():
                 print(f'batch index : {batch_idx}, {cost} cost value')
                 #bar.update(batch_idx * batch_size)
                 #bar.finish()        
-                self.log_training(cost.detach().numpy(), batch_size / dataset_len)
+                
+            if(batch_idx % self.log_freq == 0):
+                self.log_training(cost.detach().numpy(), batch_size*self.log_freq / dataset_len)
 
     def log_training(self,cost_val,epoch_ratio):
         if(len(self.epoch_ind_log) != 0):
@@ -123,8 +126,13 @@ class Covar():
             self.cosine_sim_log.append(cosineSimilarity(self.vectors.detach().numpy(),self.vectorsGD)[0,0])
         
 
-    def save(self,filepath):
+    def save(self,filename):        
+        with open(filename,'wb') as file:
+            pickle.dump(self,file)
         
-        pickle.dump(self,open(filepath,'wb'))
-        
+
+    @staticmethod
+    def load(filename):
+        with open(filename,'rb') as file:
+            return pickle.load(file)
         

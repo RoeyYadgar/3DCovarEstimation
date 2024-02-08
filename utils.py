@@ -1,5 +1,5 @@
-
 import numpy as np
+import pandas as pd
 import torch
 from numpy import random
 from aspire.utils import coor_trans,Rotation
@@ -58,3 +58,10 @@ def asnumpy(data):
 def np2torchDtype(np_dtype):
 
     return torch.float64 if (np_dtype == np.double) else torch.float32
+
+
+def appendCSV(dataframe,csv_file):
+    current_dataframe = pd.read_csv(csv_file,index_col =0)
+    updated_dataframe = pd.concat([current_dataframe,dataframe],ignore_index = True)
+
+    updated_dataframe.to_csv(csv_file)

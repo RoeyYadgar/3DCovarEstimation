@@ -9,6 +9,7 @@ import scipy
 import torch
 import pickle
 import os
+import pandas as pd
 
 L = 15
 n = 2048
@@ -39,14 +40,25 @@ estimated_vol = c.toVol()
 estimated_vol.save('data/test.mrc',overwrite= True)
 '''
 
-learning_rate = [1000, 10, 100 ,1000]
-momentum = [0.8, 0.9, 0.95]
+learning_rate = [10]
+momentum = [0.9]
+regularization = [1e-5,1e-4, 1e-3 ,1e-2]
 
 
+covar_dataframe = []
 for lr in learning_rate:
     for mu in momentum:
-        filepath = f'data/results/covar_est_lr{lr}_momentum{mu}.bins'
-        if(not os.path.isfile(filepath)):
-            c = Covar(L,1,mean_voxel,sim,vectors= None,vectorsGD = voxels[0])
-            c.train(batch_size = 1,epoch_num = 3,lr= lr,momentum=mu)
-            pickle.dump(c,open(filepath,'wb'))
+        for reg in regularization:
+            filepath = f'data/results/covar_est_lr{lr}_momentum{mu}_reg{reg}.bin'
+            
+            if(not os.path.isfile(filepath)):
+                covar_dataframe.append([filepath,lr,mu,reg])
+                c = Covar(L,1,mean_voxel,sim,vectors= None,vectorsGD = voxels[0])
+                c.train(batch_size = 1,epoch_num = 10,lr= lr,momentum=mu , reg = reg)
+                pickle.dump(c,open(filepath,'wb'))
+                
+            
+covar_dataframe = pd.DataFrame(covar_dataframe,columns = ['filename','learning_rate','momentum','reg'])
+#covar_dataframe.to_csv('data/results/results.csv',mode = 'a',header = False)
+appendCSV(covar_dataframe, 'data/results/results.csv')
+            
