@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import os
 import torch
 from numpy import random
 from aspire.utils import coor_trans,Rotation
@@ -42,11 +43,14 @@ def cosineSimilarity(vec1,vec2):
     vec1 = asnumpy(vec1).reshape((vec1.shape[0],-1))
     vec2 = asnumpy(vec2).reshape((vec2.shape[0],-1))
     
-    vec1_norm = np.linalg.norm(vec1,axis=(-1)).reshape((vec1.shape[0],1))
-    vec2_norm = np.linalg.norm(vec2,axis=(-1)).reshape((vec2.shape[0],1))
+    #vec1_norm = np.linalg.norm(vec1,axis=(-1)).reshape((vec1.shape[0],1))
+    #vec2_norm = np.linalg.norm(vec2,axis=(-1)).reshape((vec2.shape[0],1))
     
-    vec1 = vec1/vec1_norm
-    vec2 = vec2/vec2_norm
+    #vec1 = vec1/vec1_norm
+    #vec2 = vec2/vec2_norm
+    
+    vec1 = np.linalg.svd(vec1,full_matrices=False)[2]
+    vec2 = np.linalg.svd(vec2,full_matrices=False)[2]
     
     cosine_sim = np.matmul(vec1,vec2.transpose())
     
@@ -69,7 +73,7 @@ def principalAngles(vec1,vec2):
 
 def asnumpy(data):
     if(type(data) == aspire.volume.volume.Volume or type(data) == aspire.image.image.Image):
-        data = data.asnumpy()
+        return data.asnumpy()
         
     return data
 
@@ -80,7 +84,10 @@ def np2torchDtype(np_dtype):
 
 
 def appendCSV(dataframe,csv_file):
-    current_dataframe = pd.read_csv(csv_file,index_col =0)
-    updated_dataframe = pd.concat([current_dataframe,dataframe],ignore_index = True)
-
-    updated_dataframe.to_csv(csv_file)
+    if(os.path.isfile(csv_file)):
+        current_dataframe = pd.read_csv(csv_file,index_col =0)
+        updated_dataframe = pd.concat([current_dataframe,dataframe],ignore_index = True)
+        updated_dataframe.to_csv(csv_file)
+        
+    else:
+        dataframe.to_csv(csv_file)

@@ -73,11 +73,12 @@ class CovarAnalyzer():
                 label = ','.join(f'{column}_{self.dataframe.iloc[i][column]}' for column in self.dataframe.columns if column != 'filename')
                 plt.plot(covar.epoch_ind_log,metric(covar),label=label)
         
-        plt.show()
+        #plt.show()
         plt.legend()
         
     def plotCosineSim(self):
-        cosine_sim_metric = lambda covar: np.abs(covar.cosine_sim_log)
+        #cosine_sim_metric = lambda covar: np.abs(covar.cosine_sim_log)
+        cosine_sim_metric = lambda covar : np.abs([np.mean(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0))) for i in range(len(covar.cosine_sim_log))])
         self.plotMetric(cosine_sim_metric)
         
     def plotCostval(self):

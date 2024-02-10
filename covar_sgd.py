@@ -93,6 +93,8 @@ class Covar():
             
             if(batch_idx % self.log_freq == 0):
                 self.log_training(cost.detach().numpy(), batch_size*self.log_freq / dataset_len)
+                if(torch.isnan(cost)):
+                    raise Exception('Cost value is nan')
             
             if(batch_idx % self.verbose_freq == 0):
                 if(self.vectorsGD is not None):

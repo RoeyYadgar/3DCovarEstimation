@@ -31,7 +31,7 @@ def covar_cost_gradient(vols_backproject,images_backproject,images_volsforward_p
     
     
     
-    return grad/(L**3)
+    return grad/(L**2)
     
 def covar_cost(vols_forward,images,vols = None,reg = 0):
     #TODO check need for ordering in reshape
@@ -60,7 +60,7 @@ def covar_cost(vols_forward,images,vols = None,reg = 0):
     if(reg != 0):
         vols = vols.asnumpy().reshape((rank,-1))
         vols_prod = np.matmul(vols,vols,axes=[(0,1),(1,0),(0,1)])
-        reg_cost = np.sum(np.power(vols_prod,2),axis=(0,1))/(L**3)
+        reg_cost = np.sum(np.power(vols_prod,2),axis=(0,1))/(L**2)
         cost_val += reg * reg_cost
     else:
         vols_prod = None
