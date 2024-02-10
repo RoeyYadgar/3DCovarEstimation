@@ -4,5 +4,9 @@ data/*
 logs/*
 papers/*
 writing/*
+scripts/*
 
 *.asv
+
+
+
