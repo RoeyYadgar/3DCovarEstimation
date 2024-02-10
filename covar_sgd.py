@@ -55,15 +55,19 @@ class Covar():
         return CovarCost.apply(self.vectors,self.src,image_ind,images,reg)
         
         
-    def train(self,batch_size,epoch_num,lr = 100,momentum = 0.9,reg = 0):
+    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,reg = 0,gamma_lr = 1 ,gamma_reg = 1):
         
         optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = 1)
         #optimizer = torch.optim.Adam([self.vectors],lr = lr)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = gamma_lr)
         
+        lr_normalization_factor = np.mean(np.linalg.norm(self.src.images[:],axis=(1,2)) ** 2)
+        lr /= lr_normalization_factor #Normalizaiton factor should scale with 1/(norm^2)
         
         for i in range(1,epoch_num+1):
             self.train_epoch(batch_size,optimizer,reg)
+            
+            reg *= gamma_reg
             scheduler.step()
     
     def train_epoch(self,batch_size,optimizer ,reg = 0):

@@ -106,9 +106,9 @@ class CovarAnalyzer():
 
 if __name__ == "__main__":
     
-    c = CovarAnalyzer.load('data/results/results.csv')
+    c = CovarAnalyzer.load('data/results4/results.csv')
     #c.plotCosineSim()
     #c.plotCostval()
     
-    c.get('learning_rate == 10 and momentum == 0.9').plotCosineSim()
+    c.plotCosineSim()
     

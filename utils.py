@@ -10,7 +10,7 @@ import aspire
 
 def generateBallVoxel(center,radius,L):
     
-    grid = coor_trans.grid_3d(L)#,indexing='xyz')
+    grid = coor_trans.grid_3d(L)
     voxel = ((grid['x']-center[0])**2 + (grid['y']-center[1])**2 + (grid['z']-center[2])**2) <= np.power(radius,2)
     
     return np.single(voxel.reshape((1,L**3)))
@@ -18,7 +18,7 @@ def generateBallVoxel(center,radius,L):
 
 def generateCylinderVoxel(center,radius,L,axis = 2):
     
-    grid = coor_trans.grid_3d(L)#,indexing='xyz')
+    grid = coor_trans.grid_3d(L)
     dims= ('x','y','z')
     cylinder_axes = tuple(dims[i] for i in range(3) if i != axis)
     voxel = ((grid[cylinder_axes[0]]-center[0])**2 + (grid[cylinder_axes[1]]-center[1])**2) <= np.power(radius,2)
@@ -30,6 +30,16 @@ def replicateVoxelSign(voxels):
     
     return Volume(np.concatenate((voxels.asnumpy(),-voxels.asnumpy()),axis=0))
     
+
+def volsCovarEigenvec(vols,eigenval_threshold = 1e-3):
+    vols_num = vols.shape[0]
+    vols0mean = asnumpy((vols -  np.mean(vols,axis=0))).reshape((vols_num,-1))
+
+    _,volsSTD,volsSpan = np.linalg.svd(vols0mean,full_matrices=False) 
+    volsSTD /= np.sqrt(vols_num)  #standard devation is volsSTD / sqrt(n)
+    eigenval_num = np.sum(volsSTD > np.sqrt(eigenval_threshold))
+    volsSpan = volsSpan[:eigenval_num,:] * volsSTD[:eigenval_num,np.newaxis] 
+    return Volume.from_vec(volsSpan) 
 
 
 def rademacherDist(sz):
