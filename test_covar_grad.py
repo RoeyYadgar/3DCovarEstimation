@@ -58,7 +58,8 @@ class TestCovarGradient(unittest.TestCase):
         #TODO : check why gradient is non-deterministic
         #TODO : check regularization gradient numerical error
         L = 15
-        n = 1
+        n = 8
+        r = 2
 
         voxels = Volume.from_vec(np.double(np.concatenate((generateBallVoxel([0,0,0],0.5,L), #Use double dtype when using gradcheck
                                          -generateBallVoxel([0,0,0],0.5,L)))))
@@ -66,10 +67,56 @@ class TestCovarGradient(unittest.TestCase):
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
         
         from torch.autograd import gradcheck
-        input = torch.randn((1,L,L,L), requires_grad=True,dtype=torch.double)
+        input = torch.randn((r,L,L,L), requires_grad=True,dtype=torch.double)
+        #input = torch.tensor(voxels[0].asnumpy(),requires_grad = True, dtype=torch.double)
         gradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
+        
+        
+    def testAmplitudeEffect(self):
+        #gradient scales with ampltitude^3 - learning_rate should scale with 1/ampltidue^2
+        n = 8 
+        L = 15
+        amp = 100
+        voxels = Volume.from_vec((generateBallVoxel([-0.6,0,0],0.5,L)))
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+        
+        v1 = torch.randn((1,L,L,L),dtype=torch.float)
+        v2 = amp * v1
+        v1.requires_grad = True
+        v2.requires_grad = True
+        cost_val = CovarCost.apply(v1,sim,0,sim.images[:],1e-4)
+        cost_val.backward()
+        cost_val = CovarCost.apply(v2,sim,0,sim.images[:] * amp,1e-4)
+        cost_val.backward()
+        
+        
+        self.assertFalse(bool(torch.any(torch.abs(torch.div(v1.grad,v2.grad) * (amp ** 3) - 1) > 1e-3)))
+        
+        
+        
+    def testResolutionNorm(self):
+        n = 8
+        #Projection backrpojection scales values of volume by 1/(2L)
+        
+        L1 = 15
+        voxels = Volume.from_vec((generateBallVoxel([-0.6,0,0],0.5,L1)))
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+        rots = sim.rotations
+        
+        norm_vol_l1 = (np.linalg.norm(voxels))
+        norm_images_l1 = np.linalg.norm(sim.images[:],axis=(1,2))
+                                       
+        
+        L2 = 101
+        voxels = Volume.from_vec((generateBallVoxel([-0.6,0,0],0.5,L2)))
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,angles=Rotation.from_matrix(rots).as_rotvec())
+        rots = sim.rotations
+        
+        norm_vol_l2 = (np.linalg.norm(voxels))
+        norm_images_l2 = np.linalg.norm(sim.images[:],axis=(1,2))
 
 
+        
 
 if __name__ == "__main__":
     
