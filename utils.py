@@ -101,3 +101,9 @@ def appendCSV(dataframe,csv_file):
         
     else:
         dataframe.to_csv(csv_file)
+        
+        
+def meanCTFPSD(ctfs,L):
+    ctfs_eval_grid = [np.power(ctf.evaluate_grid(L),2) for ctf in ctfs]
+    return np.mean(np.array(ctfs_eval_grid),axis=0)
+    
