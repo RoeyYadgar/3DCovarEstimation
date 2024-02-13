@@ -31,7 +31,7 @@ def run_all_hyperparams(init_covar,folder_name,param_names,*args):
             open(filepath,'wb') #Create the 'decoy' file so other threads will not run the same training with the same parameters
             c = init_covar()
             try:
-                c.train(batch_size = 1,epoch_num = 10,
+                c.train(batch_size = 1,epoch_num = 1,
                         lr = param_vals[param_dict['lr']],
                         momentum = param_vals[param_dict['momentum']],
                         reg = param_vals[param_dict['reg']],
@@ -122,6 +122,33 @@ def rank2_ctf_test(folder_name = None):
     covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
     run_all_hyperparams(covar_init,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],learning_rate,momentum,regularization,gamma_lr,gamma_reg)
+    
+def rank1_resolution_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank1_res'
+
+    L = 64
+    n = 2048
+    r = 4
+    voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
+    voxels -= np.mean(voxels,axis=0)
+
+    mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+
+   
+    learning_rate = [1e-4,5e-5]
+    momentum = [0.9]
+    regularization = [1e-5]
+    gamma_lr = [1]
+    gamma_reg = [0.8]
+
+    covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
+    run_all_hyperparams(covar_init,folder_name,
+                        ['lr','momentum','reg','gammaLr','gammaReg'],learning_rate,momentum,regularization,gamma_lr,gamma_reg)
 
 if __name__ == "__main__":
-    rank2_ctf_test()
+    rank1_resolution_test('data/tmp')
+    from covar_analyzer import CovarAnalyzer
+    c = CovarAnalyzer.load('data/tmp/results.csv')
+    c.plotCosineSim()

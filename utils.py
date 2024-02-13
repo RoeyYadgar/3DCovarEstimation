@@ -5,6 +5,7 @@ import torch
 from numpy import random
 from aspire.utils import coor_trans,Rotation
 from aspire.volume import Volume
+from aspire.source.image import ArrayImageSource
 import aspire
 
 
@@ -41,6 +42,9 @@ def volsCovarEigenvec(vols,eigenval_threshold = 1e-3):
     volsSpan = volsSpan[:eigenval_num,:] * volsSTD[:eigenval_num,np.newaxis] 
     return Volume.from_vec(volsSpan) 
 
+
+def sim2imgsrc(sim):
+    return ArrayImageSource(sim.images[:],pd.DataFrame(sim.get_metadata()),sim.angles)
 
 def rademacherDist(sz):
     val = random.randint(0,2,sz)

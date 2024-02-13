@@ -1,5 +1,5 @@
 from covar_estimation import *
-from utils import principalAngles , cosineSimilarity
+from utils import principalAngles , cosineSimilarity , sim2imgsrc
 
 import torch.nn as nn
 import torch
@@ -18,11 +18,19 @@ class Covar():
         
         self.rank = rank
         self.resolution = resolution 
-        self.mean = mean_vol        
+        self.mean = mean_vol     
         self.src = src
         
+        if(type(self.src) == aspire.source.simulation.Simulation):
+            self.src = sim2imgsrc(src)
+        
+        self.im_norm_factor = np.mean(np.linalg.norm(self.src.images[:],axis=(1,2))) / self.resolution 
+        
+        self.src._cached_im /= self.im_norm_factor
+        
+        
         if vectors is None:
-            self.vectors = (np.float32(np.random.randn(rank,resolution,resolution,resolution)))
+            self.vectors = (np.float32(np.random.randn(rank,resolution,resolution,resolution)))/np.sqrt(self.resolution**3) 
         else:
             if(type(vectors) == np.ndarray):
                 self.vectors = vectors.reshape((rank,resolution,resolution,resolution))
@@ -42,6 +50,7 @@ class Covar():
         
         self.vectorsGD = vectorsGD
         if(vectorsGD is not None):
+            self.vectorsGD /= self.im_norm_factor
             self.cosine_sim_log = []
             self.principal_angles_log = []
         
@@ -56,13 +65,10 @@ class Covar():
         
         
     def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,reg = 0,gamma_lr = 1 ,gamma_reg = 1):
-        
+            
         optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
         #optimizer = torch.optim.Adam([self.vectors],lr = lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = gamma_lr)
-        
-        lr_normalization_factor = np.mean(np.linalg.norm(self.src.images[:],axis=(1,2)) ** 2)
-        lr /= lr_normalization_factor #Normalizaiton factor should scale with 1/(norm^2)
         
         for i in range(1,epoch_num+1):
             self.train_epoch(batch_size,optimizer,reg)
@@ -83,7 +89,7 @@ class Covar():
         for batch_idx in range(int(np.ceil(dataset_len/batch_size))):
             
             batch_image_ind = (batch_idx)*batch_size
-            images = self.src.images[batch_image_ind + np.arange(0,batch_size)]
+            images = Image(self.src.images[batch_image_ind + np.arange(0,batch_size)])
             
             optimizer.zero_grad()
             cost = self.cost(batch_image_ind,images,reg)

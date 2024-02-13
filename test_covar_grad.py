@@ -3,6 +3,8 @@ import scipy
 from aspire.volume import Volume
 from aspire.utils import Rotation
 from aspire.source import Simulation
+from aspire.operators import RadialCTFFilter
+from torch.autograd import gradcheck
 
 from covar_estimation import *
 from utils import *
@@ -53,7 +55,7 @@ class TestCovarGradient(unittest.TestCase):
         Volume(vec.detach().numpy()).save('data/test/grad_input.mrc',overwrite = True)
         Volume(vec.grad.detach().numpy()).save('data/test/grad_output.mrc',overwrite = True)
 
-
+    @unittest.skip("not needed")
     def testCovarGradcheck(self):
         #TODO : check why gradient is non-deterministic
         #TODO : check regularization gradient numerical error
@@ -66,11 +68,22 @@ class TestCovarGradient(unittest.TestCase):
         
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
         
-        from torch.autograd import gradcheck
         input = torch.randn((r,L,L,L), requires_grad=True,dtype=torch.double)
-        #input = torch.tensor(voxels[0].asnumpy(),requires_grad = True, dtype=torch.double)
         gradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
         
+    def testCovarGradcheckCTF(self):
+        L = 15
+        n = 8
+        r = 2
+
+        voxels = Volume.from_vec(np.double(np.concatenate((generateBallVoxel([0,0,0],0.5,L), #Use double dtype when using gradcheck
+                                         -generateBallVoxel([0,0,0],0.5,L)))))
+        
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
+        
+        
+        input = torch.randn((r,L,L,L), requires_grad=True,dtype=torch.double)
+        gradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
         
     def testAmplitudeEffect(self):
         #gradient scales with ampltitude^3 - learning_rate should scale with 1/ampltidue^2
@@ -96,25 +109,30 @@ class TestCovarGradient(unittest.TestCase):
         
     def testResolutionNorm(self):
         n = 8
-        #Projection backrpojection scales values of volume by 1/(2L)
+        #Projection scales values of volume by 1/(L^*1.5)
         
         L1 = 15
         voxels = Volume.from_vec((generateBallVoxel([-0.6,0,0],0.5,L1)))
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
         rots = sim.rotations
         
-        norm_vol_l1 = (np.linalg.norm(voxels))
-        norm_images_l1 = np.linalg.norm(sim.images[:],axis=(1,2))
-                                       
+        norm_vol1 = (np.linalg.norm(voxels))
+        norm_images1 = np.linalg.norm(sim.images[:],axis=(1,2))
+        norm_backproj1 = np.linalg.norm(sim.images[0].backproject(rots[0].reshape((1,3,3))))                                
         
-        L2 = 101
+        L2 = 200
         voxels = Volume.from_vec((generateBallVoxel([-0.6,0,0],0.5,L2)))
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,angles=Rotation.from_matrix(rots).as_rotvec())
-        rots = sim.rotations
         
-        norm_vol_l2 = (np.linalg.norm(voxels))
-        norm_images_l2 = np.linalg.norm(sim.images[:],axis=(1,2))
-
+        
+        
+        norm_vol2 = (np.linalg.norm(voxels))
+        norm_images2 = np.linalg.norm(sim.images[:],axis=(1,2))
+        norm_backproj2 = np.linalg.norm(sim.images[0].backproject(rots[0].reshape((1,3,3))))
+        
+        print(norm_vol2/norm_vol1)
+        print(norm_images2/norm_images1)
+        print(norm_backproj2/norm_backproj1)
 
         
 
