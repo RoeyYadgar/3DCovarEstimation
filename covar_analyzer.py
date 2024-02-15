@@ -106,9 +106,7 @@ class CovarAnalyzer():
 
 if __name__ == "__main__":
     
-    c = CovarAnalyzer.load('data/results4/results.csv')
-    #c.plotCosineSim()
-    #c.plotCostval()
-    
+    c = CovarAnalyzer.load('data/rank4_L64_test/results.csv')
+
     c.plotCosineSim()
     

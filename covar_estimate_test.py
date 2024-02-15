@@ -31,7 +31,7 @@ def run_all_hyperparams(init_covar,folder_name,param_names,*args):
             open(filepath,'wb') #Create the 'decoy' file so other threads will not run the same training with the same parameters
             c = init_covar()
             try:
-                c.train(batch_size = 1,epoch_num = 1,
+                c.train(batch_size = 1,epoch_num = 10,
                         lr = param_vals[param_dict['lr']],
                         momentum = param_vals[param_dict['momentum']],
                         reg = param_vals[param_dict['reg']],
@@ -53,7 +53,7 @@ def run_all_hyperparams(init_covar,folder_name,param_names,*args):
 def rank2_lr_params_test(folder_name = None):
 
     if(folder_name == None):
-        folder_name = 'data/results3'
+        folder_name = 'data/rank2_L15_lr_test'
 
     L = 15
     n = 2048
@@ -64,9 +64,9 @@ def rank2_lr_params_test(folder_name = None):
     mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
-    learning_rate = [5,0.5,50]
-    momentum = [0.9,0.95,0.8]
-    regularization = [1e-6,1e-5,1e-4, 1e-3 ,1e-2]
+    learning_rate = [5e-4 ,1e-4 ,5e-5 ,1e-5 ,5e-6]
+    momentum = [0.9]
+    regularization = [1e-6,1e-5,1e-4]
     gamma_lr = [1]
     gamma_reg = [1]
 
@@ -77,7 +77,7 @@ def rank2_lr_params_test(folder_name = None):
 
 def rank2_gamma_params_test(folder_name = None):
     if(folder_name == None):
-        folder_name = 'data/results4'
+        folder_name = 'data/rank2_L15_gamma_test'
 
     L = 15
     n = 2048
@@ -88,9 +88,9 @@ def rank2_gamma_params_test(folder_name = None):
     mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
-    learning_rate = [5]
+    learning_rate = [1e-4,1e-5]
     momentum = [0.9]
-    regularization = [1e-4]
+    regularization = [1e-4,1e-5]
     gamma_lr = [1, 0.8, 0.5, 0.2, 0.1]
     gamma_reg = [1, 0.8, 0.5, 0.2, 0.1]
 
@@ -102,7 +102,7 @@ def rank2_gamma_params_test(folder_name = None):
 
 def rank2_ctf_test(folder_name = None):
     if(folder_name == None):
-        folder_name = 'data/results_ctf'
+        folder_name = 'data/rank2_L15_ctf_test'
 
     L = 15
     n = 2048
@@ -113,7 +113,7 @@ def rank2_ctf_test(folder_name = None):
     mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
 
-    learning_rate = [50,5]
+    learning_rate = [1e-4,1e-5]
     momentum = [0.9]
     regularization = [1e-4,1e-5,1e-3]
     gamma_lr = [1,0.8,0.5]
@@ -123,9 +123,9 @@ def rank2_ctf_test(folder_name = None):
     run_all_hyperparams(covar_init,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],learning_rate,momentum,regularization,gamma_lr,gamma_reg)
     
-def rank1_resolution_test(folder_name = None):
+def rank4_resolution_test(folder_name = None):
     if(folder_name == None):
-        folder_name = 'data/rank1_res'
+        folder_name = 'data/rank4_L64_test'
 
     L = 64
     n = 2048
@@ -137,18 +137,19 @@ def rank1_resolution_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
    
-    learning_rate = [1e-4,5e-5]
+    learning_rate = [1e-4,5e-5,1e-5,1e-6,5e-6]
     momentum = [0.9]
-    regularization = [1e-5]
+    regularization = [1e-5,1e-4]
     gamma_lr = [1]
-    gamma_reg = [0.8]
+    gamma_reg = [1,0.8,0.5]
 
     covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
     run_all_hyperparams(covar_init,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],learning_rate,momentum,regularization,gamma_lr,gamma_reg)
 
 if __name__ == "__main__":
-    rank1_resolution_test('data/tmp')
-    from covar_analyzer import CovarAnalyzer
-    c = CovarAnalyzer.load('data/tmp/results.csv')
-    c.plotCosineSim()
+    rank2_lr_params_test()
+    rank2_gamma_params_test()
+    rank2_ctf_test()
+    rank4_resolution_test()
+    
