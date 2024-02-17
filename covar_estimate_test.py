@@ -204,7 +204,7 @@ def rank4_eigngap_test(folder_name = None):
 
         voxels *= np.array(scaling_factor[i],dtype = np.float32).reshape((r+1,1,1,1))        
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
-        learning_rate = [1e-5 * 10]
+        learning_rate = [1e-5,1e-4]
         momentum = [0.9]
         regularization = [1e-5 , 1e-4 ,1e-3]
         gamma_lr = [1]
@@ -239,7 +239,7 @@ def rank4_orthoreg_test(folder_name = None):
         gamma_lr = [1]
         gamma_reg = [0.8]
         orthogonal_projection = [False]
-        orthoreg = [10 ** i for i in range(-5,5)]
+        orthoreg = [10 ** i for i in range(-5,5)] + [0]
 
         covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
         run_all_hyperparams(covar_init,folder_name,
@@ -254,6 +254,6 @@ if __name__ == "__main__":
     rank2_ctf_test()
     rank2_resolution_test()
     rank4_resolution_test()
-    rank4_eigngap_test()
     '''
-    rank4_orthoreg_test('data/tmp')
+    rank4_eigngap_test()
+    rank4_orthoreg_test()
