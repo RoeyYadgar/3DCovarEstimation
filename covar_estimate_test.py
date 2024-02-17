@@ -37,7 +37,8 @@ def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefi
             open(filepath,'wb') #Create the 'decoy' file so other threads will not run the same training with the same parameters
             c = init_covar()
             try:
-                c.train(batch_size = 1,epoch_num = 10,
+                c.train(batch_size = param_vals[param_dict['batchSize']],
+                        epoch_num = param_vals[param_dict['epochNum']],
                         lr = param_vals[param_dict['lr']],
                         momentum = param_vals[param_dict['momentum']],
                         reg = param_vals[param_dict['reg']],
@@ -46,8 +47,13 @@ def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefi
                         orthogonal_projection= param_vals[param_dict['orthogonalProjection']]
                         )
                 pickle.dump(c,open(filepath,'wb'))
-                df_row = pd.DataFrame([[filepath] + (list(param_vals))],
-                                      columns = ['filename'] + (param_names))
+
+                if(filename_prefix == ''):
+                    df_row = pd.DataFrame([[filepath] + (list(param_vals))],
+                                      columns = ['filename'] + (param_names))   
+                else:
+                    df_row = pd.DataFrame([[filepath] + (list(param_vals)) + [filename_prefix]],
+                                      columns = ['filename'] + (param_names) + ['prefix'])
                 appendCSV(df_row,
                           os.path.join(folder_name,'results.csv'))
             except Exception:
