@@ -96,6 +96,24 @@ def principalAngles(vec1,vec2):
     
     return np.min(np.degrees(principal_angles))
 
+def frobeniusNorm(vecs):
+    #returns the frobenius norm of a matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval))
+    vecs = asnumpy(vecs).reshape((vecs.shape[0],-1))
+    vecs_inn_prod = np.matmul(vecs,vecs.transpose())
+    return np.sqrt(np.sum(vecs_inn_prod ** 2))
+    
+
+def frobeniusNormDiff(vec1,vec2):
+    #returns the frobenius norm of the diffrence of two matrices given by their eigenvectors (multiplied by the corresponding sqrt(eigenval))
+    
+    vec1 = asnumpy(vec1).reshape((vec1.shape[0],-1))
+    vec2 = asnumpy(vec2).reshape((vec2.shape[0],-1))
+
+    normdiff_squared = frobeniusNorm(vec1) ** 2 + frobeniusNorm(vec2) ** 2  - 2*np.sum(np.matmul(vec1,vec2.transpose()) **2)
+    
+    return np.sqrt(normdiff_squared)
+
+
 def asnumpy(data):
     if(type(data) == aspire.volume.volume.Volume or type(data) == aspire.image.image.Image):
         return data.asnumpy()
