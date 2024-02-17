@@ -70,7 +70,7 @@ class CovarAnalyzer():
             if(add_legend):
                 plt.plot(covar.epoch_ind_log,metric(covar),plot_style[i])
             else:
-                label = ','.join(f'{column}_{self.dataframe.iloc[i][column]}' for column in self.dataframe.columns if column != 'filename')
+                label = ','.join(f'{column}_{self.dataframe.iloc[i][column]}' for column in self.dataframe.columns if (column != 'filename' and len(pd.unique(self.dataframe[column])) > 1))
                 plt.plot(covar.epoch_ind_log,metric(covar),label=label)
         
         #plt.show()
