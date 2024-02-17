@@ -16,7 +16,7 @@ from itertools import product
 
 def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefix = ''):
     
-    default_params = {'lr' : 5e-5,'momentum' : 0.9,'reg' : 1e-5,'gammaLr' : 1,'gammaReg' : 1, 'batchSize' : 1, 'epochNum' : 10, 'orthogonalProjection' : False}
+    default_params = {'lr' : 5e-5,'momentum' : 0.9,'reg' : 1e-5,'gammaLr' : 1,'gammaReg' : 1, 'batchSize' : 1, 'epochNum' : 10, 'orthogonalProjection' : False , 'orthoReg' : 0}
     for default_param_name,default_param_val in default_params.items(): #add default parameters if they aren't in param_names
         if(default_param_name not in param_names):
             param_names.append(default_param_name)
@@ -44,7 +44,8 @@ def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefi
                         reg = param_vals[param_dict['reg']],
                         gamma_lr = param_vals[param_dict['gammaLr']],
                         gamma_reg = param_vals[param_dict['gammaReg']],
-                        orthogonal_projection= param_vals[param_dict['orthogonalProjection']]
+                        orthogonal_projection= param_vals[param_dict['orthogonalProjection']],
+                        ortho_reg = param_vals[param_dict['orthoReg']]
                         )
                 pickle.dump(c,open(filepath,'wb'))
 
@@ -214,12 +215,45 @@ def rank4_eigngap_test(folder_name = None):
         run_all_hyperparams(covar_init,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg','orthogonalProjection'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,orthogonal_projection],filename_prefix[i])
 
+def rank4_orthoreg_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank4_L15_orthoreg_test'
+
+    L = 15
+    n = 2048
+    r = 4
+    voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
+    voxels -= np.mean(voxels,axis=0)
+    mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
+
+    scaling_factor = [[1,1,1,1,1],[10,5,2,1,1]]
+    filename_prefix = ['smallEigengap_' , 'largeEigengap_']
+
+    for i in range(len(scaling_factor)):
+
+        voxels *= np.array(scaling_factor[i],dtype = np.float32).reshape((r+1,1,1,1))        
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+        learning_rate = [1e-4]
+        momentum = [0.9]
+        regularization = [1e-5]
+        gamma_lr = [1]
+        gamma_reg = [0.8]
+        orthogonal_projection = [False]
+        orthoreg = [10 ** i for i in range(-5,5)]
+
+        covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
+        run_all_hyperparams(covar_init,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg','orthogonalProjection','orthoReg'],
+                            [learning_rate,momentum,regularization,gamma_lr,gamma_reg,orthogonal_projection,orthoreg],
+                            filename_prefix[i])
 
 if __name__ == "__main__":
+    '''
     rank2_lr_params_test()
     rank2_gamma_params_test()
     rank2_ctf_test()
     rank2_resolution_test()
     rank4_resolution_test()
     rank4_eigngap_test()
-    
+    '''
+    rank4_orthoreg_test('data/tmp')

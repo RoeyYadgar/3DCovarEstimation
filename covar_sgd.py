@@ -59,24 +59,33 @@ class Covar():
         
         return Volume(self.vectors.detach().numpy())
         
-    def cost(self,image_ind,images,reg = 0):
+    def cost(self,image_ind,images,reg = 0, ortho_reg = 0):
         
-        return CovarCost.apply(self.vectors,self.src,image_ind,images,reg)
+        return CovarCost.apply(self.vectors,self.src,image_ind,images,reg) + self.orthoreg_cost(ortho_reg)
+    
+
+    def orthoreg_cost(self,ortho_reg = 0):
+        if(ortho_reg == 0):
+            return torch.tensor(0)
+        vecs = self.vectors.reshape((self.rank,-1))
+        normalized_vecs = vecs / torch.norm(vecs,dim=1).reshape((self.rank,-1))
+        inn_prod = torch.matmul(normalized_vecs,torch.transpose(normalized_vecs,1,0))
+        log_inn_prod = torch.log(inn_prod ** 2)
+        return ortho_reg * torch.sum(log_inn_prod)
         
-        
-    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,reg = 0,gamma_lr = 1 ,gamma_reg = 1, orthogonal_projection = False):
+    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,reg = 0,gamma_lr = 1 ,gamma_reg = 1, orthogonal_projection = False,ortho_reg = 0):
         
         optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
         #optimizer = torch.optim.Adam([self.vectors],lr = lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = gamma_lr)
         
         for i in range(1,epoch_num+1):
-            self.train_epoch(batch_size,optimizer,reg,orthogonal_projection)
+            self.train_epoch(batch_size,optimizer,reg,orthogonal_projection,ortho_reg)
             
             reg *= gamma_reg
             scheduler.step()
     
-    def train_epoch(self,batch_size,optimizer ,reg = 0 , orthogonal_projection = False):
+    def train_epoch(self,batch_size,optimizer ,reg = 0 , orthogonal_projection = False,ortho_reg = 0):
         
         #self.train() #Todo check if needed
         #projections = projections.to(self.device)
@@ -92,7 +101,7 @@ class Covar():
             images = Image(self.src.images[batch_image_ind + np.arange(0,batch_size)])
             
             optimizer.zero_grad()
-            cost = self.cost(batch_image_ind,images,reg)
+            cost = self.cost(batch_image_ind,images,reg,ortho_reg)
             cost.backward()
                     
             optimizer.step()
