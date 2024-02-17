@@ -51,7 +51,18 @@ def rademacherDist(sz):
     val[val == 0] = -1
     return val
 
-    
+
+def nonNormalizedGS(vecs):
+    vecnum = vecs.shape[0]
+    ortho_vecs = torch.zeros(vecs.shape)
+    ortho_vecs[0] = vecs[0]
+    for i in range(1,vecnum):
+        ortho_vecs[i] = vecs[i]
+        for j in range(i):
+            ortho_vecs[i] = ortho_vecs[i] - torch.sum(vecs[i]*ortho_vecs[j])/(torch.norm(ortho_vecs[j])**2)*ortho_vecs[j]
+
+    return ortho_vecs
+
 def cosineSimilarity(vec1,vec2):
     
     vec1 = asnumpy(vec1).reshape((vec1.shape[0],-1))
