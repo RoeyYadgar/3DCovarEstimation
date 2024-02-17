@@ -1,5 +1,5 @@
 from covar_estimation import *
-from utils import principalAngles , cosineSimilarity , sim2imgsrc
+from utils import principalAngles , cosineSimilarity , sim2imgsrc , nonNormalizedGS
 
 import torch.nn as nn
 import torch
@@ -64,19 +64,19 @@ class Covar():
         return CovarCost.apply(self.vectors,self.src,image_ind,images,reg)
         
         
-    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,reg = 0,gamma_lr = 1 ,gamma_reg = 1):
-            
+    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,reg = 0,gamma_lr = 1 ,gamma_reg = 1, orthogonal_projection = False):
+        
         optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
         #optimizer = torch.optim.Adam([self.vectors],lr = lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = gamma_lr)
         
         for i in range(1,epoch_num+1):
-            self.train_epoch(batch_size,optimizer,reg)
+            self.train_epoch(batch_size,optimizer,reg,orthogonal_projection)
             
             reg *= gamma_reg
             scheduler.step()
     
-    def train_epoch(self,batch_size,optimizer ,reg = 0):
+    def train_epoch(self,batch_size,optimizer ,reg = 0 , orthogonal_projection = False):
         
         #self.train() #Todo check if needed
         #projections = projections.to(self.device)
@@ -96,6 +96,16 @@ class Covar():
             cost.backward()
                     
             optimizer.step()
+            
+            if(orthogonal_projection):
+                with torch.no_grad():
+                    self.vectors.data = nonNormalizedGS(self.vectors)             
+                    #vectors_svd = torch.linalg.svd(self.vectors.reshape((self.rank,-1)), full_matrices = False)
+                    #orthogonal_vecs = vectors_svd[1].reshape((self.rank,-1)) * vectors_svd[2]
+                    #self.vectors.data = orthogonal_vecs.reshape((self.rank,self.resolution,self.resolution,self.resolution))
+                    
+
+                    
             
             pbar.update(1)
             

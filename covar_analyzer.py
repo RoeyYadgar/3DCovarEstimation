@@ -86,6 +86,15 @@ class CovarAnalyzer():
         self.plotMetric(cosine_sim_metric)
     
     
+    def innprod(self):
+        innprod_mat = []
+        for covar in self.covars:
+            vectors = covar.vectors.detach().numpy().reshape((covar.rank,-1))
+            vectors = vectors / np.linalg.norm(vectors,axis=1).reshape((covar.rank,-1))
+            innprod_mat.append(np.matmul(vectors,vectors.transpose()))
+    
+        return innprod_mat
+    
     def updateResultFilesName(self,pattern):
         
         
