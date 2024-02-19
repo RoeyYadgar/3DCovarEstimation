@@ -49,7 +49,7 @@ class CovarAnalyzer():
         return CovarAnalyzer(covars,dataframe)
     
     
-    def plotMetric(self,metric,add_legend = False):
+    def plotMetric(self,metric,add_legend = False,xlabel = None,ylabel = None, title = None):
         
             
         #parameter_mapping = [('color'),('linestyle' , ['-','--','-.',':']),('color' , ['red','green','blue'])]
@@ -65,25 +65,39 @@ class CovarAnalyzer():
                     
                     parameter_counter+=1
                     
-                    
+        ax = plt.axes()          
         for i,covar in enumerate(self.covars):
             if(add_legend):
-                plt.plot(covar.epoch_ind_log,metric(covar),plot_style[i])
+                ax.plot(covar.epoch_ind_log,metric(covar),plot_style[i])
             else:
                 label = ','.join(f'{column}_{self.dataframe.iloc[i][column]}' for column in self.dataframe.columns if (column != 'filename' and len(pd.unique(self.dataframe[column])) > 1))
-                plt.plot(covar.epoch_ind_log,metric(covar),label=label)
+                ax.plot(covar.epoch_ind_log,metric(covar),label=label)
         
         #plt.show()
-        plt.legend()
+        ax.legend()
+
+        if(xlabel != None):
+            ax.set_xlabel(xlabel)
+        if(ylabel != None):
+            ax.set_ylabel(ylabel)
+        if(title != None):
+            ax.set_title(title)
+
+        return ax
         
-    def plotCosineSim(self):
-        #cosine_sim_metric = lambda covar: np.abs(covar.cosine_sim_log)
+    def plotCosineSim(self, title = None):
         cosine_sim_metric = lambda covar : np.abs([np.mean(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0))) for i in range(len(covar.cosine_sim_log))])
-        self.plotMetric(cosine_sim_metric)
+        return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Mean Cosine Simlarity', title = title)
+
+    def plotWeightedCosineSim(self, title = None):
+        singular_vals = lambda covar : np.linalg.norm(covar.vectorsGD.asnumpy().reshape((covar.rank,-1)),axis=1)
+        cosine_sim_metric = lambda covar : [np.sum(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0)) * singular_vals(covar))/np.sum(singular_vals(covar)) for i in range(len(covar.cosine_sim_log))]
+        return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Weighted Cosine Simlarity', title = title)
+
         
-    def plotCostval(self):
+    def plotCostval(self, title = None):
         cosine_sim_metric = lambda covar: np.log10(covar.cost_log)
-        self.plotMetric(cosine_sim_metric)
+        return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Cost Value', title = title)
     
     
     def innprod(self):
