@@ -86,11 +86,11 @@ class CovarAnalyzer():
         return ax
         
     def plotCosineSim(self, title = None):
-        cosine_sim_metric = lambda covar : np.abs([np.mean(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0))) for i in range(len(covar.cosine_sim_log))])
+        cosine_sim_metric = lambda covar : [np.mean(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0))) for i in range(len(covar.cosine_sim_log))]
         return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Mean Cosine Simlarity', title = title)
 
     def plotWeightedCosineSim(self, title = None):
-        singular_vals = lambda covar : np.linalg.norm(covar.vectorsGD.asnumpy().reshape((covar.rank,-1)),axis=1)
+        singular_vals = lambda covar : np.linalg.norm(covar.vectorsGD.asnumpy().reshape((covar.rank,-1)),axis=0)
         cosine_sim_metric = lambda covar : [np.sum(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0)) * singular_vals(covar))/np.sum(singular_vals(covar)) for i in range(len(covar.cosine_sim_log))]
         return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Weighted Cosine Simlarity', title = title)
 

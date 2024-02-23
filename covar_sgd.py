@@ -64,10 +64,12 @@ class Covar():
         return CovarCost.apply(self.vectors,self.src,image_ind,images,reg)
         
         
-    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,reg = 0,gamma_lr = 1 ,gamma_reg = 1, orthogonal_projection = False):
+    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1 ,gamma_reg = 1, orthogonal_projection = False):
         
-        optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
-        #optimizer = torch.optim.Adam([self.vectors],lr = lr)
+        if(optim_type == 'SGD'):
+            optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
+        elif(optim_type == 'Adam'):
+            optimizer = torch.optim.Adam([self.vectors],lr = lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = gamma_lr)
         
         for i in range(1,epoch_num+1):
@@ -118,8 +120,8 @@ class Covar():
             
             if(batch_idx % self.verbose_freq == 0):
                 if(self.vectorsGD is not None):
-                    #pbar_description  = "cost value : {:.2e}".format(cost) +   ",  cosine sim : {:.2e}".format(self.cosine_sim_log[-1])
-                    pbar_description  = "cost value : {:.2e}".format(cost) +   ",  cosine sim : {:.2e}".format(self.principal_angles_log[-1])
+                    cosine_sim_val = np.mean(np.sqrt(np.sum(self.cosine_sim_log[-1] ** 2,axis = 0)))
+                    pbar_description  = "cost value : {:.2e}".format(cost) +   ",  cosine sim : {:.2f}".format(cosine_sim_val)
                 else:
                     pbar_description  = f'cost value : {cost}'
                 pbar.set_description(pbar_description)
