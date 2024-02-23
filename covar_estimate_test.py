@@ -275,6 +275,30 @@ def rank4_optim_test(folder_name = None):
     run_all_hyperparams(covar_init,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg','optimType'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,optim])
 
+def rank2_cont_resolution_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank2_cont_L100_test'
+
+    L = 100
+    n = 2048
+    r = 2
+    voxels = Volume.from_vec(scipy.io.loadmat('data/vols.mat')['vols'].transpose())
+    voxels -= np.mean(voxels,axis=0)
+
+    mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+
+   
+    learning_rate = [1e-4,5e-5,1e-5]
+    momentum = [0.9]
+    regularization = [1e-5,1e-6]
+    gamma_lr = [1]
+    gamma_reg = [1,0.8,0.5]
+
+    covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2))
+    run_all_hyperparams(covar_init,folder_name,
+                        ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
+
 if __name__ == "__main__":
     '''
     rank2_lr_params_test()
@@ -284,6 +308,7 @@ if __name__ == "__main__":
     rank4_resolution_test()
     rank4_eigngap_test()
     '''
-    rank4_lr_test()
-    rank4_optim_test()
+    #rank4_lr_test()
+    #rank4_optim_test()
+    rank2_cont_resolution_test()
     

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import PCA
 import os
 import torch
 from numpy import random
@@ -32,14 +33,22 @@ def replicateVoxelSign(voxels):
     return Volume(np.concatenate((voxels.asnumpy(),-voxels.asnumpy()),axis=0))
     
 
-def volsCovarEigenvec(vols,eigenval_threshold = 1e-3):
+def volsCovarEigenvec(vols,eigenval_threshold = 1e-3,randomized_alg = False,max_eigennum = None):
     vols_num = vols.shape[0]
     vols0mean = asnumpy((vols -  np.mean(vols,axis=0))).reshape((vols_num,-1))
 
-    _,volsSTD,volsSpan = np.linalg.svd(vols0mean,full_matrices=False) 
-    volsSTD /= np.sqrt(vols_num)  #standard devation is volsSTD / sqrt(n)
-    eigenval_num = np.sum(volsSTD > np.sqrt(eigenval_threshold))
-    volsSpan = volsSpan[:eigenval_num,:] * volsSTD[:eigenval_num,np.newaxis] 
+    if(not randomized_alg):
+        _,volsSTD,volsSpan = np.linalg.svd(vols0mean,full_matrices=False)
+        volsSTD /= np.sqrt(vols_num)  #standard devation is volsSTD / sqrt(n)
+        eigenval_num = np.sum(volsSTD > np.sqrt(eigenval_threshold))
+        volsSpan = volsSpan[:eigenval_num,:] * volsSTD[:eigenval_num,np.newaxis] 
+    else:
+        if(max_eigennum == None):
+            max_eigennum = vols_num
+        pca = PCA(n_components=max_eigennum,svd_solver='randomized')
+        fitvols = pca.fit(vols0mean)
+        volsSpan = fitvols.components_ * np.sqrt(fitvols.explained_variance_.reshape((-1,1)))
+
     return Volume.from_vec(volsSpan) 
 
 
