@@ -7,6 +7,8 @@ import os
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import cnames
+import mplcursors
+
 
 class CovarAnalyzer():
     
@@ -65,16 +67,22 @@ class CovarAnalyzer():
                     
                     parameter_counter+=1
                     
-        ax = plt.axes()          
+        ax = plt.axes()    
+        
         for i,covar in enumerate(self.covars):
             if(add_legend):
                 ax.plot(covar.epoch_ind_log,metric(covar),plot_style[i])
             else:
                 label = ','.join(f'{column}_{self.dataframe.iloc[i][column]}' for column in self.dataframe.columns if (column != 'filename' and len(pd.unique(self.dataframe[column])) > 1))
                 ax.plot(covar.epoch_ind_log,metric(covar),label=label)
+                mplcursors.cursor().connect(
+                        "add",
+                        lambda sel: sel.annotation.set_text(sel.artist.get_label()))
         
         #plt.show()
         ax.legend()
+        
+        
 
         if(xlabel != None):
             ax.set_xlabel(xlabel)
