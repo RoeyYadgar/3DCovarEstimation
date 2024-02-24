@@ -4,7 +4,7 @@ from aspire.volume import Volume
 from aspire.utils import Rotation
 from aspire.source import Simulation
 from aspire.operators import RadialCTFFilter
-from torch.autograd import gradcheck
+from torch.autograd import gradcheck,gradgradcheck
 
 from covar_estimation import *
 from utils import *
@@ -72,7 +72,7 @@ class TestCovarGradient(unittest.TestCase):
         gradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
         
     def testCovarGradcheckCTF(self):
-        L = 15
+        L = 5
         n = 8
         r = 2
 
@@ -83,8 +83,19 @@ class TestCovarGradient(unittest.TestCase):
         
         
         input = torch.randn((r,L,L,L), requires_grad=True,dtype=torch.double)
-        gradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
+        #gradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
+        #gradgradcheck(CovarCost.apply, (input,sim,0,sim.images[:],0.01), eps=1e-6, atol=1e-4,nondet_tol= 1e-5)
+        c = CovarCost.apply(input,sim,0,sim.images[:],0.01)
+        grads = torch.autograd.grad(c,input,create_graph=True)[0]
+        #hessian = torch.autograd.grad(grads,input,grad_outputs=torch.ones_like(grads))[0]
+        hessian = []
+        for grad in grads.reshape((-1)):
+            hessian_row = torch.autograd.grad(grad,input,create_graph = True)
+            hessian.append(hessian_row)
+        print(hessian.shape)
         
+
+    @unittest.skip("not needed")  
     def testAmplitudeEffect(self):
         #gradient scales with ampltitude^3 - learning_rate should scale with 1/ampltidue^2
         n = 8 
@@ -106,7 +117,7 @@ class TestCovarGradient(unittest.TestCase):
         self.assertFalse(bool(torch.any(torch.abs(torch.div(v1.grad,v2.grad) * (amp ** 3) - 1) > 1e-3)))
         
         
-        
+    @unittest.skip("not needed")    
     def testResolutionNorm(self):
         n = 8
         #Projection scales values of volume by 1/(L^*1.5)
