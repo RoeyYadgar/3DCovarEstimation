@@ -1,7 +1,7 @@
 run('~/aspire/initpath');
 E_orig = C4_params;
-L = 100;
-k = 360;
+L = 512;
+k = 1;
 thetas = linspace(0,360,k);
 vols = single(zeros(L^3,length(thetas)));
 for i = 1:length(thetas)
@@ -15,10 +15,10 @@ for i = 1:length(thetas)
     
     vols(:,i) = single(reshape(cryo_gaussian_phantom_3d(f_handle,L,1),[],1));
    
-    
+    display("Iteration Num : " + num2str(i))
 end
 vols = vols + single(reshape(cryo_gaussian_phantom_3d('micky',L,1),[],1));
 %WriteMRC(reshape(vols,L,L,[]),1,p)
 %c = cov(vols');
 %[V,D] = eigs(c,10);
-save("data/vols.mat","vols");
+save("data/vols512.mat","vols");

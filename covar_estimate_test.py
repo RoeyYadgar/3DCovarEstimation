@@ -6,6 +6,10 @@ from aspire.volume import Volume,LegacyVolume
 from aspire.utils import Rotation
 from aspire.source import Simulation
 from aspire.operators import RadialCTFFilter
+from aspire.basis import FBBasis3D
+from aspire.covariance import CovarianceEstimator
+from aspire.noise import WhiteNoiseEstimator
+from aspire.reconstruction import MeanEstimator
 import scipy
 import torch
 import pickle
@@ -73,6 +77,17 @@ def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefi
                 os.remove(filepath) #Remove the 'decoy' file
     
     
+def run_classic_alg(filepath,src,basis = None):
+    if(not os.path.isfile(filepath)):
+        print(f'Running Classical Algo on : {filepath}')
+        open(filepath,'wb') #Create the 'decoy' file so other threads will not run the same training with the same parameters
+
+        if(basis != None):
+            basis = FBBasis3D((src.L, src.L, src.L))
+
+        noise_estimator = WhiteNoiseEstimator(sim, batchSize=500)
+        noise_variance = noise_estimator.estimate()
+
 
 
 def rank2_lr_params_test(folder_name = None):
@@ -322,6 +337,72 @@ def rank2_cont_ctf_resolution_test(folder_name = None):
     covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2))
     run_all_hyperparams(covar_init,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
+    
+def rank4_imsize_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank4_L15_imsize_test'
+
+    L = 15
+    imnum = [2048 * (2 ** i) for i in range(4)]
+    r = 4
+    voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
+    voxels -= np.mean(voxels,axis=0)
+
+    mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
+    
+
+   
+    learning_rate = [5e-4]
+    momentum = [0.9]
+    regularization = [1e-5]
+    gamma_lr = [0.8]
+    gamma_reg = [0.8]
+    epochNum = [5]
+    
+    filename_prefix = ['numIm=' + str(n) + '_' for n in imnum]
+    
+    for i,n in enumerate(imnum): 
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+        covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
+        run_all_hyperparams(covar_init,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg','epochNum'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,epochNum],filename_prefix[i])
+    
+def rank2_cont_ctf_highresolution_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank2_cont_ctf_LHigh_test'
+
+    from scipy.spatial.transform import Rotation as spRot
+    vol_rots = np.single(spRot.from_euler('z', np.arange(0,100)/100*2*np.pi).as_matrix())
+    
+    resolutions = [256,512]
+    
+    for i,L in enumerate(resolutions):
+    
+        vol_highres = Volume.from_vec(scipy.io.loadmat('data/vols512.mat')['vols'].transpose()).downsample(L)
+        high_res = vol_highres.resolution
+        voxels = Volume(np.zeros((len(vol_rots),high_res,high_res,high_res)),dtype=np.single)
+        for j in range(len(vol_rots)):
+            voxels[j] = vol_highres.rotate(Rotation.from_matrix(vol_rots[j]))
+        
+        n = 2048
+        r = 2
+      
+        voxels -= np.mean(voxels,axis=0)
+    
+        mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
+    
+       
+        learning_rate = [1e-4]
+        momentum = [0.9]
+        regularization = [1e-5]
+        gamma_lr = [0.5]
+        gamma_reg = [0.5]
+    
+        covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2))
+        run_all_hyperparams(covar_init,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],filename_prefix = f'L={L}_')
+        
 
 if __name__ == "__main__":
     '''
@@ -331,9 +412,10 @@ if __name__ == "__main__":
     rank2_resolution_test()
     rank4_resolution_test()
     rank4_eigngap_test()
-    '''
     rank4_lr_test()
     rank4_optim_test()
-    #rank2_cont_resolution_test()
+    rank2_cont_resolution_test()
     rank2_cont_ctf_resolution_test()
-    
+    rank4_imsize_test()
+    '''
+    rank2_cont_ctf_highresolution_test()
