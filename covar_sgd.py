@@ -38,7 +38,7 @@ class Covar():
                 self.vectors = vectors.asnumpy()
             
         
-        self.vectors = torch.tensor(self.vectors,dtype= np2torchDtype(self.vectors.dtype),requires_grad = True)
+        self.vectors = torch.tensor(self.vectors/self.im_norm_factor,dtype= np2torchDtype(self.vectors.dtype),requires_grad = True)
         
         #self.device = torch.device('cuda')
         #self.to(self.device)

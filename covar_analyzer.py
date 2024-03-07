@@ -1,13 +1,17 @@
 
 from covar_sgd import Covar
+from covar_estimation import CovarCost
 import numpy as np
 import pandas as pd
+import torch
 from glob import glob
 import os
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import cnames
 import mplcursors
+
+from aspire.image import Image
 
 
 class CovarAnalyzer():
@@ -116,6 +120,17 @@ class CovarAnalyzer():
             innprod_mat.append(np.matmul(vectors,vectors.transpose()))
     
         return innprod_mat
+    
+    def compareCostToGD(self,reg = 0):
+        cost_estimted_vec = []
+        cost_ground_truth = []
+        for cov in self.covars: 
+            images = Image(cov.src.images[:])
+            cost_estimted_vec.append(cov.cost(0,images,reg).item())
+
+            cost_ground_truth.append(CovarCost.apply(torch.tensor(cov.vectorsGD.asnumpy()),cov.src,0,images,reg).item())
+
+        return cost_estimted_vec,cost_ground_truth
     
     def updateResultFilesName(self,pattern):
         

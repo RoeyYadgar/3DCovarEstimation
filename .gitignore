@@ -7,7 +7,7 @@ logs/*
 papers/*
 writing/*
 scripts/*
-
+aspire.err.log
 *.asv
 
 

@@ -77,16 +77,24 @@ def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefi
                 os.remove(filepath) #Remove the 'decoy' file
     
     
-def run_classic_alg(filepath,src,basis = None):
+def run_classic_alg(filepath,src,rank,basis = None):
     if(not os.path.isfile(filepath)):
         print(f'Running Classical Algo on : {filepath}')
         open(filepath,'wb') #Create the 'decoy' file so other threads will not run the same training with the same parameters
 
-        if(basis != None):
+        if(basis == None):
             basis = FBBasis3D((src.L, src.L, src.L))
 
-        noise_estimator = WhiteNoiseEstimator(sim, batchSize=500)
+        noise_estimator = WhiteNoiseEstimator(src, batchSize=500)
         noise_variance = noise_estimator.estimate()
+        mean_estimator = MeanEstimator(src)
+        mean_est = mean_estimator.estimate()
+        covar_estimator = CovarianceEstimator(src, basis, mean_kernel=mean_estimator.kernel)
+        covar_est = covar_estimator.estimate(mean_est, noise_variance)
+        eigs_est, lambdas_est = aspire.utils.eigs(covar_est, rank)
+        covar_dict = {'covar' : covar_est , 'eigenvecs' : eigs_est, 'eigenvals' : lambdas_est}
+        with open(filepath,'wb') as file:
+           pickle.dump(covar_dict,file)
 
 
 
@@ -403,6 +411,46 @@ def rank2_cont_ctf_highresolution_test(folder_name = None):
         run_all_hyperparams(covar_init,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],filename_prefix = f'L={L}_')
         
+def rank4_alg_cmp_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank4_L15_alg_cmp'
+
+    L = 15
+    r = 4
+    n = 2048
+    voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
+    voxels -= np.mean(voxels,axis=0)
+
+    mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
+
+   
+    learning_rate = [5e-4]
+    momentum = [0.9]
+    regularization = [1e-5]
+    gamma_lr = [0.8]
+    gamma_reg = [0.8]
+    
+    
+    covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
+    run_all_hyperparams(covar_init,folder_name,
+                        ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],'SGD_')
+    
+    run_classic_alg(os.path.join(folder_name,'classical_covar.bin'),sim,r)
+
+    #Sim with 'balanced' data
+    num_reps = int(np.ceil(n/(r+1)))
+    rotations = Rotation.generate_random_rotations(num_reps)
+    rotations = np.repeat(rotations.angles, r+1,axis=0)[:n]
+    states = np.tile(np.array([i+1 for i in range(r+1)]),num_reps)[:n]
+
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)],angles = rotations,states = states)
+    covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
+    
+    run_all_hyperparams(covar_init,folder_name,
+                        ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],'Balanced_SGD_')
+    
+    run_classic_alg(os.path.join(folder_name,'Balanced_classical_covar.bin'),sim,r)
 
 if __name__ == "__main__":
     '''
@@ -418,4 +466,5 @@ if __name__ == "__main__":
     rank2_cont_ctf_resolution_test()
     rank4_imsize_test()
     '''
-    rank2_cont_ctf_highresolution_test()
+    #rank2_cont_ctf_highresolution_test()
+    rank4_alg_cmp_test()
