@@ -380,22 +380,32 @@ def rank2_cont_ctf_highresolution_test(folder_name = None):
         folder_name = 'data/rank2_cont_ctf_LHigh_test'
 
     from scipy.spatial.transform import Rotation as spRot
-    vol_rots = np.single(spRot.from_euler('z', np.arange(0,100)/100*2*np.pi).as_matrix())
+    num_rots = 50
+    vol_rots = np.single(spRot.from_euler('z', np.arange(0,num_rots)/num_rots*2*np.pi).as_matrix())
     
     resolutions = [256,512]
     
     for i,L in enumerate(resolutions):
-    
-        vol_highres = Volume.from_vec(scipy.io.loadmat('data/vols512.mat')['vols'].transpose()).downsample(L)
-        high_res = vol_highres.resolution
-        voxels = Volume(np.zeros((len(vol_rots),high_res,high_res,high_res)),dtype=np.single)
-        for j in range(len(vol_rots)):
-            voxels[j] = vol_highres.rotate(Rotation.from_matrix(vol_rots[j]))
-        
+        vol_path = f'data/vols_rots_L={L}.bin'
+        if(not os.path.isfile(vol_path)):
+            vol_highres = Volume.from_vec(scipy.io.loadmat('data/vols512.mat')['vols'].transpose()).downsample(L)
+            high_res = vol_highres.resolution
+            voxels = Volume(np.zeros((len(vol_rots),high_res,high_res,high_res)),dtype=np.single)
+            for j in range(len(vol_rots)):
+                print(j)
+                voxels[j] = vol_highres.rotate(Rotation.from_matrix(vol_rots[j]))
+            voxels -= np.mean(voxels,axis=0)
+            vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
+            pickle.dump({'vols' : voxels, 'eigenvols' : vectorsGD},open(vol_path,'wb'))
+            print('saved file')
+        else:
+            vol_dict = pickle.load(open(vol_path,'rb'))
+            voxels = vol_dict['vols']
+            vectorsGD = vol_dict['eigenvols']
         n = 2048
         r = 2
       
-        voxels -= np.mean(voxels,axis=0)
+        
     
         mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
@@ -407,7 +417,7 @@ def rank2_cont_ctf_highresolution_test(folder_name = None):
         gamma_lr = [0.5]
         gamma_reg = [0.5]
     
-        covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2))
+        covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = vectorsGD)
         run_all_hyperparams(covar_init,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],filename_prefix = f'L={L}_')
         
@@ -422,7 +432,7 @@ def rank4_alg_cmp_test(folder_name = None):
     voxels -= np.mean(voxels,axis=0)
 
     mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
-    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,)#unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
 
    
     learning_rate = [5e-4]
@@ -444,7 +454,7 @@ def rank4_alg_cmp_test(folder_name = None):
     rotations = np.repeat(rotations.angles, r+1,axis=0)[:n]
     states = np.tile(np.array([i+1 for i in range(r+1)]),num_reps)[:n]
 
-    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)],angles = rotations,states = states)
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,angles = rotations,states = states)#,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)]
     covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
     
     run_all_hyperparams(covar_init,folder_name,
@@ -466,5 +476,5 @@ if __name__ == "__main__":
     rank2_cont_ctf_resolution_test()
     rank4_imsize_test()
     '''
-    #rank2_cont_ctf_highresolution_test()
-    rank4_alg_cmp_test()
+    rank2_cont_ctf_highresolution_test()
+    #rank4_alg_cmp_test('data/tmp')
