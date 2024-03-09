@@ -16,6 +16,9 @@ class NUFFTCachedSource(ArrayImageSource):
         self.init_nufft_plans()
 
     def init_nufft_plans(self,epsilon = 1e-8):
+        #TODO : figure out if its allowed to remove the conversion of fourier_pts to double in cufinufft to save up on memory.
+        #TODO : figure out if batch size > 1 is usefull in backprojection to save up on memory
+        #TODO : use different cufinufft options (gpu_method,gpu_device_id)
         forward_sz = (self.L, ) * 3
         num_plans = int(np.ceil(self.n/self.batch_size))
         forward_plans = [0 for i in range(num_plans)]
@@ -56,11 +59,40 @@ class NUFFTCachedSource(ArrayImageSource):
 
         vols_proj = vols_proj[:,image_ind % self.batch_size : (image_ind % self.batch_size + image_num)] #Get only the requested images out of the computed batches
         vols_proj = aspire.image.Image(vols_proj).stack_reshape(-1)
-        vols_proj = self._apply_source_filters(vols_proj,np.tile(np.arange(image_ind,image_ind + image_num),self.stack_size)).stack_reshape((self.stack_size,image_num))
+        vols_proj = self._apply_source_filters(vols_proj,np.tile(np.arange(image_ind,image_ind + image_num),self.stack_size))
+        vols_proj = vols_proj.stack_reshape((self.stack_size,image_num))
         return vols_proj
+
+
+    def im_backward(self,ims,image_ind):
+        
+        image_num = ims.stack_shape[1]
+        batch_ind_start = int(image_ind / self.batch_size)
+        batch_ind_stop = int(np.ceil((image_ind + image_num) / self.batch_size))
+        num_batches = batch_ind_stop - batch_ind_start
+
+        ims_backproj = np.empty((self.stack_size,image_num,self.L,self.L,self.L),dtype= ims.dtype)
+
+        ims = ims.stack_reshape(-1)
+        ims = self._apply_source_filters(ims,np.tile(np.arange(image_ind,image_ind + image_num),self.stack_size))
+        im_f = xp.asnumpy(fft.centered_fft2(xp.asarray(ims._data))) / (self.L**2)
+        
+
+        if(self.L % 2 == 0):
+            im_f[:,0,:] = 0
+            im_f[:,:,0] = 0
+
+        im_f = im_f.reshape((self.stack_size,image_num,-1))
+         
+        for i in range(num_batches):
+            ims_backproj[:,i] = np.real(self.forward_plans[i + batch_ind_start].adjoint(im_f[:,i])) / self.L
+            #im_f[:,i:i+2].reshape((self.stack_size,-1))
+        
+        return ims_backproj
     
 if __name__ == "__main__":
-
+    #%%
+    import aspire
     import numpy as np
     import pandas as pd
     from aspire.operators import RadialCTFFilter
@@ -68,10 +100,10 @@ if __name__ == "__main__":
     from aspire.volume import LegacyVolume, Volume
     from utils import volsCovarEigenvec
     import time
-
+    from covar_estimation import im_stack_backward
     # Specify parameters
     img_size = 15  # image size in square
-    num_imgs = 2000  # number of images
+    num_imgs = 200  # number of images
     dtype = np.float32
 
     
@@ -93,22 +125,25 @@ if __name__ == "__main__":
     sim.n
     from nufft_cached_source import NUFFTCachedSource
 
-    batch_size = 50
+    batch_size = 1
     src = NUFFTCachedSource(sim.images[:],pd.DataFrame(sim.get_metadata()),sim.angles,batch_size = batch_size,stack_size = c)
     src.filter_indices = sim.filter_indices
     src.unique_filters = sim.unique_filters
     
-    im_num = 1500
+    im_num = 100
     im_ind = 7
     
     start = time.process_time()
     images_from_cached = src.vol_forward(vols,im_ind,im_num)
+    im_backproj_from_cached = src.im_backward(images_from_cached,im_ind)
     print(time.process_time() - start)
     
     images = aspire.image.Image(np.zeros(images_from_cached.shape))
+    
     start = time.process_time()
     for i in range(images.shape[0]):
         images[i] = sim.vol_forward(vols[i], im_ind, im_num)
+    im_backproj = im_stack_backward(images,sim,im_ind)
     print(time.process_time() - start)
     '''
     x = aspire.image.Image(images.asnumpy()/images_from_cached.asnumpy())
@@ -118,3 +153,6 @@ if __name__ == "__main__":
     '''
     err = np.linalg.norm(images - images_from_cached) / np.linalg.norm(vols)
     print(err)
+    
+    err_back = np.linalg.norm(im_backproj - im_backproj_from_cached) / np.linalg.norm(vols)
+    print(err_back)
