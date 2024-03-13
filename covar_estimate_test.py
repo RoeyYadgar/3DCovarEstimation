@@ -351,7 +351,7 @@ def rank4_imsize_test(folder_name = None):
         folder_name = 'data/rank4_L15_imsize_test'
 
     L = 15
-    imnum = [2048 * (2 ** i) for i in range(4)]
+    imnum = [2048 * (2 ** i) for i in range(4)] + [100000]
     r = 4
     voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
     voxels -= np.mean(voxels,axis=0)
@@ -432,7 +432,7 @@ def rank4_alg_cmp_test(folder_name = None):
     voxels -= np.mean(voxels,axis=0)
 
     mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
-    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,)#unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
 
    
     learning_rate = [5e-4]
@@ -454,7 +454,7 @@ def rank4_alg_cmp_test(folder_name = None):
     rotations = np.repeat(rotations.angles, r+1,axis=0)[:n]
     states = np.tile(np.array([i+1 for i in range(r+1)]),num_reps)[:n]
 
-    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,angles = rotations,states = states)#,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)]
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,angles = rotations,states = states,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
     covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
     
     run_all_hyperparams(covar_init,folder_name,
@@ -474,7 +474,11 @@ if __name__ == "__main__":
     rank4_optim_test()
     rank2_cont_resolution_test()
     rank2_cont_ctf_resolution_test()
-    rank4_imsize_test()
     '''
-    rank2_cont_ctf_highresolution_test()
-    #rank4_alg_cmp_test('data/tmp')
+    from aspire import config
+    config['nufft']['backends'] = 'finufft'
+    rank4_imsize_test()
+    
+    rank2_cont_ctf_highresolution_test('data/tmp2')
+    #config['nufft']['backends'] = 'cufinufft'
+    rank4_alg_cmp_test()

@@ -30,15 +30,15 @@ class Covar():
         
         
         if vectors is None:
-            self.vectors = (np.float32(np.random.randn(rank,resolution,resolution,resolution)))/np.sqrt(self.resolution**3) 
+            self.vectors = (np.float32(np.random.randn(rank,resolution,resolution,resolution)))/self.resolution**2
         else:
             if(type(vectors) == np.ndarray):
                 self.vectors = vectors.reshape((rank,resolution,resolution,resolution))
             else:
                 self.vectors = vectors.asnumpy()
             
-        
-        self.vectors = torch.tensor(self.vectors/self.im_norm_factor,dtype= np2torchDtype(self.vectors.dtype),requires_grad = True)
+        self.vectors /= self.im_norm_factor
+        self.vectors = torch.tensor(self.vectors,dtype= np2torchDtype(self.vectors.dtype),requires_grad = True)
         
         #self.device = torch.device('cuda')
         #self.to(self.device)
