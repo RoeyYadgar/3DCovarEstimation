@@ -5,6 +5,7 @@ from aspire.nufft import Plan
 from aspire.numeric import fft, xp
 from aspire.volume import rotated_grids
 from aspire.utils import complex_type
+import pycuda.driver as cuda
 
 
 class NUFFTCachedSource(ArrayImageSource):
@@ -18,7 +19,9 @@ class NUFFTCachedSource(ArrayImageSource):
     def init_nufft_plans(self,epsilon = 1e-8):
         #TODO : figure out if its allowed to remove the conversion of fourier_pts to double in cufinufft to save up on memory.
         #TODO : figure out if batch size > 1 is usefull in backprojection to save up on memory
-        #TODO : use different cufinufft options (gpu_method,gpu_device_id)
+        #TODO : use different cufinufft options (gpu_method,gpu_device_id,gpu_stream)
+        #cuda.init()
+        #context = cuda.Device(6).make_context()
         forward_sz = (self.L, ) * 3
         num_plans = int(np.ceil(self.n/self.batch_size))
         forward_plans = [0 for i in range(num_plans)]
@@ -26,10 +29,12 @@ class NUFFTCachedSource(ArrayImageSource):
             rots = self.rotations[i*self.batch_size : ((i+1) * self.batch_size)]
             pts_rot = rotated_grids(self.L,rots)
             pts_rot = pts_rot.reshape((3,self.batch_size * self.L ** 2))
-            plan = Plan(sz=forward_sz,fourier_pts = pts_rot,ntransforms = self.stack_size,epsilon = epsilon)
+            
+            plan = Plan(sz=forward_sz,fourier_pts = pts_rot,ntransforms = self.stack_size,epsilon = epsilon)#,gpu_device_id=6)
+            
             forward_plans[i] = plan
 
-
+        #context.pop()
         self.forward_plans = forward_plans
 
     def vol_forward(self,vols,image_ind,image_num):
@@ -156,3 +161,5 @@ if __name__ == "__main__":
     
     err_back = np.linalg.norm(im_backproj - im_backproj_from_cached) / np.linalg.norm(vols)
     print(err_back)
+
+# %%
