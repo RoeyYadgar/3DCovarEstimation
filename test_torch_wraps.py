@@ -11,8 +11,9 @@ from aspire.nufft import nufft as aspire_nufft
 from aspire.nufft import anufft as aspire_anufft
 
 import nufft_plan
+import projection_funcs
 
-class TestNufftPlan(unittest.TestCase):
+class TestTorchWraps(unittest.TestCase):
     
     def setUp(self):
         self.img_size = 15
@@ -111,7 +112,34 @@ class TestNufftPlan(unittest.TestCase):
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
         gradcheck(nufft_plan.nufft_adjoint, (im,plan), eps=1e-6, rtol=1e-4,nondet_tol= 1e-5)
 
-        
+
+    def test_vol_project(self):
+        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+
+        vol_forward_aspire = self.sim.vol_forward(self.vols[0],0,1)
+
+        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+        vol_torch = torch.tensor(self.vols[0].asnumpy()).to(self.device)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,1)
+        plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
+        vol_forward_torch = projection_funcs.vol_forward(vol_torch,plan)
+        vol_forward_torch = vol_forward_torch.cpu().numpy()
+
+        np.testing.assert_allclose(vol_forward_torch,vol_forward_aspire,rtol = 1e-2)
+
+    def test_im_backproject(self):
+  
+        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+        imgs = self.sim.images[0]
+        im_backproject_aspire = self.sim.im_backward(imgs,0).T
+
+        im_torch = torch.tensor(imgs.asnumpy()).to(self.device)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,1,eps=1e-10)
+        plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
+        im_backproject_torch = projection_funcs.im_backward(im_torch,plan)
+        im_backproject_torch = im_backproject_torch.cpu().numpy()
+
+        np.testing.assert_allclose(im_backproject_torch,im_backproject_aspire,rtol = 1e-2)        
 
 if __name__ == "__main__":
     
