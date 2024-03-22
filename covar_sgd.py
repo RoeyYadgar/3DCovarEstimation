@@ -9,16 +9,112 @@ from tqdm import tqdm
 import pickle
 from aspire.volume import Volume
 from aspire.utils import Rotation
+from aspire.volume import rotated_grids
+from pytorch_finufft import functional as torchnufft
+from nufft_plan import NufftPlan
+from projection_funcs import vol_forward
 
-
-class Covar():
-    def __init__(self,resolution,rank,mean_vol,src,vectors = None,vectorsGD = None):
+class CovarDataset(Dataset):
+    def __init__(self,src,rank):
+        images = src.images[:]
+        self.rank = rank
+        self.resolution = src.L
+        #self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution 
+        self.im_norm_factor = 1
+        self.images = torch.tensor(images.asnumpy()/self.im_norm_factor)
+        self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         
+        
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self,idx):
+        plans = []
+        if(type(idx) == int):
+            plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1e-6)
+            plan.setpts(self.pts_rot[:,idx].to('cuda:0')) #TODO : load to the same gpu of the image
+            plans = plan
+        elif(type(idx) == slice):
+            start = idx.start if idx.start != None else 0
+            stop = idx.stop if idx.stop != None else self.images.shape[0]
+            step = idx.step if idx.step != None else 1
+            for i in range(start,stop,step):
+                plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1e-6)
+                plan.setpts(self.pts_rot[:,i].to('cuda:0')) #TODO : load to the same gpu of the image
+                plans.append(plan)
+        return self.images[idx] , plans#self.pts_rot[:,idx]
 
+def dataset_collate(batch):
+    images,plans = zip(*batch)
+    return torch.stack(images),plans
+
+class CovarTrainer():
+    def __init__(self,covar,train_data,optimizer,device):
+        self.device = device
+        self.train_data = train_data
+        self.optimizer = optimizer
+        self.covar = covar.to(device)
+        #self.covar = DDP(covar,device_ids=[device])
+
+    def run_batch(self,images,nufft_plans):
+        cost_val = self.covar.cost(images,nufft_plans)
+        
+        print(cost_val)
+        cost_val.backward()
+        self.optimizer.step()
+
+    def run_epoch(self,epoch):
+        #batch_size = len(next(iter(self.train_data)))
+        #self.train_data.sampler.set_epoch(epoch)
+        for images,nufft_plans in self.train_data:
+            images = images.to(self.device)
+            self.run_batch(images,nufft_plans)
+
+    def train(self,max_epochs):
+        for epoch in range(max_epochs):
+            self.run_epoch(epoch)
+
+class Covar(torch.nn.Module):
+    def __init__(self,resolution,rank,dtype = torch.float32,norm_factor = 1,vectors = None):
+        super(Covar,self).__init__()
+        self.resolution = resolution
+        self.rank = rank
+        self.dtype = dtype
+        if(vectors == None):
+            self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype))/(self.resolution ** 2) 
+        else:
+            self.vectors = torch.clone(vectors)
+        self.vectors /= norm_factor
+        self.vectors.requires_grad = True 
+        self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
+
+
+    def cost(self,images,nufft_plans):
+        batch_size = images.shape[0]
+        rank = self.vectors.shape[0]
+        projected_vols = vol_forward(self.vectors,nufft_plans)
+
+        images = images.reshape((batch_size,1,-1))
+        projected_vols = projected_vols.reshape((batch_size,rank,-1))
+
+        norm_images_term = torch.pow(torch.norm(images,dim=(1,2)),4)
+        images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
+        projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2))
+        
+        cost_val = (norm_images_term - 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
+                    + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
+        
+        cost_val = torch.mean(cost_val,dim=0)
+        #TODO : add regulairzation
+
+        return cost_val
+
+'''
+class Covar():
+    def __init__(self,resolution,rank,src,vectors = None,vectorsGD = None):
         
         self.rank = rank
         self.resolution = resolution 
-        self.mean = mean_vol     
         self.src = src
         
         if(type(self.src) == aspire.source.simulation.Simulation):
@@ -149,4 +245,4 @@ class Covar():
     def load(filename):
         with open(filename,'rb') as file:
             return pickle.load(file)
-        
+'''
