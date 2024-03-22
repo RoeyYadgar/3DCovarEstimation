@@ -45,12 +45,16 @@ class TorchNufftForward(torch.autograd.Function):
     def forward(ctx,signal,nufft_plan):
         ctx.signal_shape = signal.shape
         ctx.nufft_plan = nufft_plan
+        ctx.complex_input = signal.is_complex()
         return nufft_plan.execute_forward(signal)
     
     @staticmethod
     def backward(ctx,grad_output):
         nufft_plan = ctx.nufft_plan
-        return nufft_plan.execute_adjoint(grad_output).reshape(ctx.signal_shape) , None
+        signal_grad = nufft_plan.execute_adjoint(grad_output).reshape(ctx.signal_shape)
+        if(not ctx.complex_input): #If input to forward method is real the gradient should also be real
+            signal_grad = signal_grad.real
+        return signal_grad , None
     
 
 class TorchNufftAdjoint(torch.autograd.Function):
@@ -58,12 +62,16 @@ class TorchNufftAdjoint(torch.autograd.Function):
     def forward(ctx,signal,nufft_plan):
         ctx.signal_shape = signal.shape
         ctx.nufft_plan = nufft_plan
+        ctx.complex_input = signal.is_complex()
         return nufft_plan.execute_adjoint(signal)
     
     @staticmethod
     def backward(ctx,grad_output):
         nufft_plan = ctx.nufft_plan
-        return nufft_plan.execute_forward(grad_output).reshape(ctx.signal_shape) , None
+        signal_grad = nufft_plan.execute_forward(grad_output).reshape(ctx.signal_shape)
+        if(not ctx.complex_input): #If input to forward method is real the gradient should also be real
+            signal_grad = signal_grad.real
+        return signal_grad, None
     
 
 nufft_forward = TorchNufftForward.apply

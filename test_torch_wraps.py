@@ -98,7 +98,7 @@ class TestTorchWraps(unittest.TestCase):
 
     def test_grad_forward(self):
         pts_rot = np.float64(self.pts_rot[:,:self.img_size ** 2])
-        vol = torch.randn((self.img_size,)*3,dtype = torch.complex128, device = self.device)
+        vol = torch.randn((self.img_size,)*3,dtype = torch.double, device = self.device)
         vol.requires_grad = True
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,dtype=torch.float64)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
@@ -106,7 +106,7 @@ class TestTorchWraps(unittest.TestCase):
 
     def test_grad_adjoint(self):
         pts_rot = np.float64(self.pts_rot[:,:self.img_size ** 2])
-        im = torch.randn((self.img_size,)*2,dtype = torch.complex128, device = self.device)
+        im = torch.randn((self.img_size,)*2,dtype = torch.double, device = self.device)
         im.requires_grad = True
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,dtype=torch.float64)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
