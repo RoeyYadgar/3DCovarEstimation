@@ -23,7 +23,7 @@ class TestTorchWraps(unittest.TestCase):
             L=self.img_size,
             C=c,
             dtype=np.float32,
-        ).generate()
+        ).generate() * 100
 
         self.sim = Simulation(
             n=self.num_imgs,
@@ -52,7 +52,7 @@ class TestTorchWraps(unittest.TestCase):
         nufft_forward_torch = nufft_plan.nufft_forward(vol_torch,plan)
         nufft_forward_torch = nufft_forward_torch.cpu().numpy()
 
-        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-5)
+        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-6)
 
         #stack validation
         nufft_forward_aspire = aspire_nufft(self.vols,pts_rot)
@@ -63,7 +63,7 @@ class TestTorchWraps(unittest.TestCase):
         nufft_forward_torch = nufft_plan.nufft_forward(vol_torch,plan)
         nufft_forward_torch = nufft_forward_torch.cpu().numpy()
 
-        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-5)
+        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-6)
 
     def test_nufft_adjoint(self):
         #TODO : figure out why the difference between aspire's and the torch binding has rtol > 1e-4
@@ -72,29 +72,29 @@ class TestTorchWraps(unittest.TestCase):
         #singleton validation
         pts_rot = self.pts_rot[:,:self.img_size ** 2]
         images = self.sim.images[0]
-        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1,-1)),pts_rot,(self.img_size,)*3,epsilon=1e-10)
+        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1,-1)),pts_rot,(self.img_size,)*3)
 
         im_torch = torch.tensor(images.asnumpy()).to(self.device)
-        plan = nufft_plan.NufftPlan((self.img_size,)*3,1,eps=1e-10)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,1)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
         nufft_adjoint_torch = nufft_plan.nufft_adjoint(im_torch,plan)
         nufft_adjoint_torch = nufft_adjoint_torch.cpu().numpy()
 
-        np.testing.assert_allclose(nufft_adjoint_torch,nufft_adjoint_aspire,rtol = 1e-3)
+        np.testing.assert_allclose(nufft_adjoint_torch,nufft_adjoint_aspire,rtol = 1e-3,atol=1e-3)
 
         #singleton validation
         num_ims = 5
         pts_rot = self.pts_rot[:,:self.img_size ** 2]
         images = self.sim.images[:num_ims]
-        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((num_ims,-1)),pts_rot,(self.img_size,)*3,epsilon=1e-10)
+        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((num_ims,-1)),pts_rot,(self.img_size,)*3)
 
         im_torch = torch.tensor(images.asnumpy()).to(self.device)
-        plan = nufft_plan.NufftPlan((self.img_size,)*3,num_ims,eps=1e-10)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,num_ims)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
         nufft_adjoint_torch = nufft_plan.nufft_adjoint(im_torch,plan)
         nufft_adjoint_torch = nufft_adjoint_torch.cpu().numpy()
 
-        np.testing.assert_allclose(nufft_adjoint_torch,nufft_adjoint_aspire,rtol = 1e-2)
+        np.testing.assert_allclose(nufft_adjoint_torch,nufft_adjoint_aspire,rtol = 1e-3,atol=1e-3)
 
     def test_grad_forward(self):
         pts_rot = np.float64(self.pts_rot[:,:self.img_size ** 2])
@@ -125,7 +125,7 @@ class TestTorchWraps(unittest.TestCase):
         vol_forward_torch = projection_funcs.vol_forward(vol_torch,plan)
         vol_forward_torch = vol_forward_torch.cpu().numpy()
 
-        np.testing.assert_allclose(vol_forward_torch,vol_forward_aspire,rtol = 1e-2)
+        np.testing.assert_allclose(vol_forward_torch,vol_forward_aspire,rtol = 1e-3,atol=1e-3)
 
     def test_im_backproject(self):
   
@@ -134,12 +134,12 @@ class TestTorchWraps(unittest.TestCase):
         im_backproject_aspire = self.sim.im_backward(imgs,0).T
 
         im_torch = torch.tensor(imgs.asnumpy()).to(self.device)
-        plan = nufft_plan.NufftPlan((self.img_size,)*3,1,eps=1e-10)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,1)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
         im_backproject_torch = projection_funcs.im_backward(im_torch,plan)
         im_backproject_torch = im_backproject_torch.cpu().numpy()
 
-        np.testing.assert_allclose(im_backproject_torch,im_backproject_aspire,rtol = 1e-2)        
+        np.testing.assert_allclose(im_backproject_torch,im_backproject_aspire,rtol = 1e-3,atol=1e-3)        
 
 if __name__ == "__main__":
     

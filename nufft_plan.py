@@ -16,6 +16,8 @@ class NufftPlan():
             self.complex_dtype = torch.complex128
             np_dtype = np.float64
             
+        eps = max(eps, np.finfo(np_dtype).eps) #dtype determines determines the eps bottleneck
+
         self.forward_plan = Plan(nufft_type = 2,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,**kwargs)
         self.adjoint_plan = Plan(nufft_type = 1,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,**kwargs)
 

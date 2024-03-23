@@ -60,9 +60,10 @@ class CovarTrainer():
         if(vectorsGD != None):
             self.log_cosine_sim = []
     def run_batch(self,images,nufft_plans):
+        self.optimizer.zero_grad()
         cost_val = self.covar.cost(images,nufft_plans)
         cost_val.backward()
-        torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1000) #TODO : check for effect of gradient clipping
+        #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1000) #TODO : check for effect of gradient clipping
         self.optimizer.step()
 
         return cost_val
