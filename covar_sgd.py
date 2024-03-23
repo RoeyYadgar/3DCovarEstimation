@@ -19,8 +19,7 @@ class CovarDataset(Dataset):
         images = src.images[:]
         self.rank = rank
         self.resolution = src.L
-        #self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution 
-        self.im_norm_factor = 1
+        self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution 
         self.images = torch.tensor(images.asnumpy()/self.im_norm_factor)
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         
@@ -31,7 +30,7 @@ class CovarDataset(Dataset):
     def __getitem__(self,idx):
         plans = []
         if(type(idx) == int):
-            plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1e-6)
+            plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1.2e-6)
             plan.setpts(self.pts_rot[:,idx].to('cuda:0')) #TODO : load to the same gpu of the image
             plans = plan
         elif(type(idx) == slice):
@@ -39,7 +38,7 @@ class CovarDataset(Dataset):
             stop = idx.stop if idx.stop != None else self.images.shape[0]
             step = idx.step if idx.step != None else 1
             for i in range(start,stop,step):
-                plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1e-6)
+                plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1.2e-6)
                 plan.setpts(self.pts_rot[:,i].to('cuda:0')) #TODO : load to the same gpu of the image
                 plans.append(plan)
         return self.images[idx] , plans#self.pts_rot[:,idx]
@@ -49,30 +48,66 @@ def dataset_collate(batch):
     return torch.stack(images),plans
 
 class CovarTrainer():
-    def __init__(self,covar,train_data,optimizer,device):
+    def __init__(self,covar,train_data,device,training_log_freq = 20,vectorsGD = None):
         self.device = device
         self.train_data = train_data
-        self.optimizer = optimizer
         self.covar = covar.to(device)
         #self.covar = DDP(covar,device_ids=[device])
+        self.training_log_freq = training_log_freq
+        self.vectorsGD = vectorsGD
 
+        self.log_epoch_ind = []
+        if(vectorsGD != None):
+            self.log_cosine_sim = []
     def run_batch(self,images,nufft_plans):
         cost_val = self.covar.cost(images,nufft_plans)
-        
-        print(cost_val)
         cost_val.backward()
+        torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1000) #TODO : check for effect of gradient clipping
         self.optimizer.step()
+
+        return cost_val
 
     def run_epoch(self,epoch):
         #batch_size = len(next(iter(self.train_data)))
         #self.train_data.sampler.set_epoch(epoch)
-        for images,nufft_plans in self.train_data:
+        pbar = tqdm(total=len(self.train_data), desc=f'Epoch {epoch} , ',position=0,leave=True)
+        for batch_ind,data in enumerate(self.train_data):
+            images,nufft_plans = data
             images = images.to(self.device)
-            self.run_batch(images,nufft_plans)
+            cost_val = self.run_batch(images,nufft_plans)
 
-    def train(self,max_epochs):
+            if(batch_ind % self.training_log_freq == 0):
+                self.log_training()
+                cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
+                pbar_description =  "cost value : {:.2e}".format(cost_val) +",  cosine sim : {:.2f}".format(cosine_sim_val)
+                pbar.set_description(pbar_description)
+
+            pbar.update(1)
+            #print(torch.norm(self.covar.vectors.detach()))
+
+    def train(self,max_epochs,lr = 5e-5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False):
+        if(optim_type == 'SGD'):
+            self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
+        elif(optim_type == 'Adam'):
+            self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
+        
+        scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,step_size = 1, gamma = gamma_lr)
         for epoch in range(max_epochs):
             self.run_epoch(epoch)
+
+            reg *= gamma_reg
+            scheduler.step()
+
+
+    def log_training(self):
+        if(len(self.log_epoch_ind) != 0):
+            self.log_epoch_ind.append(self.log_epoch_ind[-1] + self.training_log_freq / len(self.train_data))
+        else:
+            self.log_epoch_ind.append(self.training_log_freq / len(self.train_data))
+        
+
+        if(self.vectorsGD != None):
+            self.log_cosine_sim.append(cosineSimilarity(self.covar.vectors.cpu().detach().numpy(),self.vectorsGD.numpy()))
 
 class Covar(torch.nn.Module):
     def __init__(self,resolution,rank,dtype = torch.float32,norm_factor = 1,vectors = None):
