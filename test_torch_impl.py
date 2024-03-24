@@ -41,10 +41,11 @@ class TestTorchImpl(unittest.TestCase):
     def test_cost_function(self):
         num_ims = 50
         rank = 4
-        vectors = torch.tensor(volsCovarEigenvec(self.vols).asnumpy(),dtype=torch.float32,requires_grad = True)
-        #vectors = torch.randn((rank,self.img_size,self.img_size,self.img_size),dtype = torch.float32,requires_grad = True)
+        reg = 1e-5
+        #vectors = torch.tensor(volsCovarEigenvec(self.vols).asnumpy(),dtype=torch.float32,requires_grad = True)
+        vectors = torch.randn((rank,self.img_size,self.img_size,self.img_size),dtype = torch.float32,requires_grad = True)
         images = self.sim.images[:num_ims]
-        old_impl_cost = CovarCost.apply(vectors,self.sim,0,images)
+        old_impl_cost = CovarCost.apply(vectors,self.sim,0,images,reg)
 
         device = torch.device("cuda:0")
         vectors_new = torch.tensor(vectors.detach(),device=device)
@@ -58,7 +59,7 @@ class TestTorchImpl(unittest.TestCase):
         images = torch.tensor(images.asnumpy()).to(device)
 
         covar = Covar(self.img_size,rank,dtype=torch.float32,vectors=vectors_new)
-        new_impl_cost = covar.cost(images,plans)
+        new_impl_cost = covar.cost(images,plans,reg=reg)
 
         old_impl_cost.backward()
         new_impl_cost.backward()

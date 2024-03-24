@@ -1,0 +1,33 @@
+import torch
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.multiprocessing as mp
+from torch import distributed as dist
+import os
+from covar_sgd import CovarTrainer
+
+def ddp_setup(rank,world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl",rank=rank,world_size=world_size)
+    torch.cuda.set_device(rank)
+
+
+def ddp_train(rank,world_size,covar_model,dataset,batch_size = 1,vectorsGD = None,kwargs = {}):
+    ddp_setup(rank,world_size)
+    device = torch.device(f'cuda:{rank}')
+    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = False,sampler = DistributedSampler(dataset))
+    covar_model = covar_model.to(device)
+    covar_model = DDP(covar_model,device_ids=[rank])
+    trainer = CovarTrainer(covar_model,dataloader,device,vectorsGD = vectorsGD)
+
+    trainer.train(**kwargs)
+    dist.destroy_process_group()
+
+
+def trainParallel(covar_model,dataset,num_gpus = 'max',batch_size = 1,vectorsGD = None,**kwargs):
+    if(num_gpus == 'max'):
+        num_gpus = torch.cuda.device_count()
+    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size,vectorsGD,kwargs),nprocs = num_gpus)
+
+
