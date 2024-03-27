@@ -10,7 +10,6 @@ import pickle
 from aspire.volume import Volume
 from aspire.utils import Rotation
 from aspire.volume import rotated_grids
-from pytorch_finufft import functional as torchnufft
 from nufft_plan import NufftPlan
 from projection_funcs import vol_forward
 
@@ -18,6 +17,7 @@ def ptsrot2nufftplan(pts_rot,img_size,**kwargs):
     num_plans = pts_rot.shape[0] #pts_rot has a shape [num_images,3,L^2]
     plans = []
     for i in range(num_plans):
+        #plan = NufftPlan((img_size,)*3,gpu_method=1,gpu_sort=0,**kwargs)
         plan = NufftPlan((img_size,)*3,**kwargs)
         plan.setpts(pts_rot[i]) 
         plans.append(plan)
@@ -39,29 +39,14 @@ class CovarDataset(Dataset):
         return len(self.images)
     
     def __getitem__(self,idx):
-        '''
-        plans = []
-        if(type(idx) == int):
-            plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1.2e-6)
-            plan.setpts(self.pts_rot[:,idx].to('cuda:0')) #TODO : load to the same gpu of the image
-            plans = plan
-        elif(type(idx) == slice):
-            start = idx.start if idx.start != None else 0
-            stop = idx.stop if idx.stop != None else self.images.shape[0]
-            step = idx.step if idx.step != None else 1
-            for i in range(start,stop,step):
-                plan = NufftPlan((self.resolution,)*3,batch_size = self.rank,dtype = self.images.dtype,eps = 1.2e-6)
-                plan.setpts(self.pts_rot[:,i].to('cuda:0')) #TODO : load to the same gpu of the image
-                plans.append(plan)
-        '''
-        return self.images[idx] , self.pts_rot[idx]#plans
+        return self.images[idx] , self.pts_rot[idx]
 
 def dataset_collate(batch):
     images,plans = zip(*batch)
     return torch.stack(images),plans
 
 class CovarTrainer():
-    def __init__(self,covar,train_data,device,training_log_freq = 20,vectorsGD = None):
+    def __init__(self,covar,train_data,device,training_log_freq = 50,vectorsGD = None):
         self.device = device
         self.train_data = train_data
         self.covar = covar.to(device)
@@ -71,6 +56,20 @@ class CovarTrainer():
         self.log_epoch_ind = []
         if(vectorsGD != None):
             self.log_cosine_sim = []
+
+
+        batch_size = train_data.batch_size
+        self.isDDP = type(self.covar) == torch.nn.parallel.distributed.DistributedDataParallel
+        vectors = self.covar_vectors()
+        rank = vectors.shape[0]
+        dtype = vectors.dtype
+        vol_shape = vectors.shape[1:] 
+        #TODO : check gpu_sort effect
+        self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
+
+    def covar_vectors(self):
+        return self.covar.module.vectors if self.isDDP else self.covar.vectors
+
     def run_batch(self,images,nufft_plans):
         self.optimizer.zero_grad()
         cost_val,vectors = self.covar.forward(images,nufft_plans,self.reg)
@@ -81,15 +80,17 @@ class CovarTrainer():
         return cost_val,vectors
 
     def run_epoch(self,epoch):
-        #batch_size = len(next(iter(self.train_data)))
         #self.train_data.sampler.set_epoch(epoch)
         pbar = tqdm(total=len(self.train_data), desc=f'Epoch {epoch} , ',position=0,leave=True)
         for batch_ind,data in enumerate(self.train_data):
             images,pts_rot = data
+            num_ims = images.shape[0]
             pts_rot = pts_rot.to(self.device)
-            nufft_plans = ptsrot2nufftplan(pts_rot,img_size = images.shape[-1],batch_size=4,dtype = images.dtype,gpu_device_id = self.device.index)
             images = images.to(self.device)
-            cost_val,vectors = self.run_batch(images,nufft_plans)
+            for i in range(num_ims):
+                self.nufft_plans[i].setpts(pts_rot[i])
+            
+            cost_val,vectors = self.run_batch(images,self.nufft_plans[:num_ims])
 
             if(batch_ind % self.training_log_freq == 0):
                 self.log_training(vectors)
@@ -101,6 +102,7 @@ class CovarTrainer():
             pbar.update(1)
 
     def train(self,max_epochs,lr = 5e-5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1,gamma_reg = 1):
+        #TODO : add orthogonal projection option
         lr *= self.train_data.batch_size
 
         if(optim_type == 'SGD'):
@@ -143,167 +145,35 @@ class Covar(torch.nn.Module):
 
 
     def cost(self,images,nufft_plans,reg = 0):
-        batch_size = images.shape[0]
-        rank = self.vectors.shape[0]
-        projected_vols = vol_forward(self.vectors,nufft_plans)
+        return cost(self.vectors,images,nufft_plans,reg)
 
-        images = images.reshape((batch_size,1,-1))
-        projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
-        norm_images_term = torch.pow(torch.norm(images,dim=(1,2)),4)
-        images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
-        projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2))
-        
-        cost_val = (norm_images_term - 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
-                    + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
-        
-        cost_val = torch.mean(cost_val,dim=0)
-        if(reg != 0):
-            vols = self.vectors.reshape((rank,-1))
-            vols_prod = torch.matmul(vols,vols.transpose(0,1))
-            reg_cost = torch.sum(torch.pow(vols_prod,2))
-            cost_val += reg * reg_cost
-
-        return cost_val
+    def forward(self,images,nufft_plans,reg):
+        return self.cost(images,nufft_plans,reg),self.vectors
     
-    def forward(self,images,nufft_plans,reg): #forward method is the same as cost but is needed even DistributedDataParallel is used on the model
-        return self.cost(images,nufft_plans,reg) , self.vectors #also returns vectors to be used for computing metrics
 
 
-'''
-class Covar():
-    def __init__(self,resolution,rank,src,vectors = None,vectorsGD = None):
-        
-        self.rank = rank
-        self.resolution = resolution 
-        self.src = src
-        
-        if(type(self.src) == aspire.source.simulation.Simulation):
-            self.src = sim2imgsrc(src)
-        
-        self.im_norm_factor = np.mean(np.linalg.norm(self.src.images[:],axis=(1,2))) / self.resolution 
-        
-        self.src._cached_im /= self.im_norm_factor
-        
-        
-        if vectors is None:
-            self.vectors = (np.float32(np.random.randn(rank,resolution,resolution,resolution)))/np.sqrt(self.resolution**3) 
-        else:
-            if(type(vectors) == np.ndarray):
-                self.vectors = vectors.reshape((rank,resolution,resolution,resolution))
-            else:
-                self.vectors = vectors.asnumpy()
-            
-        
-        self.vectors = torch.tensor(self.vectors/self.im_norm_factor,dtype= np2torchDtype(self.vectors.dtype),requires_grad = True)
-        
-        #self.device = torch.device('cuda')
-        #self.to(self.device)
-        
-        self.verbose_freq = 50
-        self.log_freq = 10
-        self.epoch_ind_log = []
-        self.cost_log = []
-        
-        self.vectorsGD = vectorsGD
-        if(vectorsGD is not None):
-            self.vectorsGD /= self.im_norm_factor
-            self.cosine_sim_log = []
-            self.principal_angles_log = []
-        
+def cost(vols,images,nufft_plans,reg = 0):
+    batch_size = images.shape[0]
+    rank = vols.shape[0]
+    projected_vols = vol_forward(vols,nufft_plans)
+
+    images = images.reshape((batch_size,1,-1))
+    projected_vols = projected_vols.reshape((batch_size,rank,-1))
+
+    norm_images_term = torch.pow(torch.norm(images,dim=(1,2)),4)
+    images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
+    projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2))
     
-    def toVol(self):
-        
-        return Volume(self.vectors.detach().numpy())
-        
-    def cost(self,image_ind,images,reg = 0):
-        
-        return CovarCost.apply(self.vectors,self.src,image_ind,images,reg)
-        
-        
-    def train(self,batch_size,epoch_num,lr = 5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1 ,gamma_reg = 1, orthogonal_projection = False):
-        
-        if(optim_type == 'SGD'):
-            optimizer = torch.optim.SGD([self.vectors],lr = lr,momentum = momentum)
-        elif(optim_type == 'Adam'):
-            optimizer = torch.optim.Adam([self.vectors],lr = lr)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size = 1, gamma = gamma_lr)
-        
-        for i in range(1,epoch_num+1):
-            self.train_epoch(batch_size,optimizer,reg,orthogonal_projection)
-            
-            reg *= gamma_reg
-            scheduler.step()
+    cost_val = (norm_images_term - 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
+                + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
     
-    def train_epoch(self,batch_size,optimizer ,reg = 0 , orthogonal_projection = False):
-        
-        #self.train() #Todo check if needed
-        #projections = projections.to(self.device)
-        #rotations = rotations.to(self.device)
-        
-        dataset_len = self.src.n
-        pbar = tqdm(total=int(np.ceil(dataset_len/batch_size)), desc="SGD Progress",position=0,leave=True)
-        
-        
-        for batch_idx in range(int(np.ceil(dataset_len/batch_size))):
-            
-            batch_image_ind = (batch_idx)*batch_size
-            images = Image(self.src.images[batch_image_ind + np.arange(0,batch_size)])
-            
-            optimizer.zero_grad()
-            cost = self.cost(batch_image_ind,images,reg)
-            cost.backward()
-                    
-            optimizer.step()
-            
-            if(orthogonal_projection):
-                with torch.no_grad():
-                    self.vectors.data = nonNormalizedGS(self.vectors)             
-                    #vectors_svd = torch.linalg.svd(self.vectors.reshape((self.rank,-1)), full_matrices = False)
-                    #orthogonal_vecs = vectors_svd[1].reshape((self.rank,-1)) * vectors_svd[2]
-                    #self.vectors.data = orthogonal_vecs.reshape((self.rank,self.resolution,self.resolution,self.resolution))
-                    
+    cost_val = torch.mean(cost_val,dim=0)
+    if(reg != 0):
+        vols = vols.reshape((rank,-1))
+        vols_prod = torch.matmul(vols,vols.transpose(0,1))
+        reg_cost = torch.sum(torch.pow(vols_prod,2))
+        cost_val += reg * reg_cost
 
-                    
-            
-            pbar.update(1)
-            
-            
-            
-            if(batch_idx % self.log_freq == 0):
-                self.log_training(cost.detach().numpy(), batch_size*self.log_freq / dataset_len)
-                if(torch.isnan(cost)):
-                    raise Exception('Cost value is nan')
-            
-            if(batch_idx % self.verbose_freq == 0):
-                if(self.vectorsGD is not None):
-                    cosine_sim_val = np.mean(np.sqrt(np.sum(self.cosine_sim_log[-1] ** 2,axis = 0)))
-                    pbar_description  = "cost value : {:.2e}".format(cost) +   ",  cosine sim : {:.2f}".format(cosine_sim_val)
-                else:
-                    pbar_description  = f'cost value : {cost}'
-                pbar.set_description(pbar_description)
-                
-            
+    return cost_val
 
-    def log_training(self,cost_val,epoch_ratio):
-        if(len(self.epoch_ind_log) != 0):
-            self.epoch_ind_log.append(self.epoch_ind_log[-1] + epoch_ratio)
-        else:
-            self.epoch_ind_log.append(epoch_ratio)
-        self.cost_log.append(cost_val)
-        
-        if(self.vectorsGD is not None):
-            self.cosine_sim_log.append(cosineSimilarity(self.vectors.detach().numpy(),self.vectorsGD))
-            self.principal_angles_log.append(principalAngles(self.vectors.detach().numpy(),self.vectorsGD))
-        
-
-    def save(self,filename):        
-        with open(filename,'wb') as file:
-            pickle.dump(self,file)
-        
-
-    @staticmethod
-    def load(filename):
-        with open(filename,'rb') as file:
-            return pickle.load(file)
-'''

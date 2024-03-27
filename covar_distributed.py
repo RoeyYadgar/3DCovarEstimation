@@ -5,6 +5,7 @@ import torch.multiprocessing as mp
 from torch import distributed as dist
 import os
 from covar_sgd import CovarTrainer
+import math
 
 def ddp_setup(rank,world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -13,10 +14,12 @@ def ddp_setup(rank,world_size):
     torch.cuda.set_device(rank)
 
 
-def ddp_train(rank,world_size,covar_model,dataset,batch_size = 1,vectorsGD = None,kwargs = {}):
+def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,vectorsGD = None,kwargs = {}):
     ddp_setup(rank,world_size)
     device = torch.device(f'cuda:{rank}')
-    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = False,sampler = DistributedSampler(dataset))
+    
+    
+    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset))
     covar_model = covar_model.to(device)
     covar_model = DDP(covar_model,device_ids=[rank])
     trainer = CovarTrainer(covar_model,dataloader,device,vectorsGD = vectorsGD)
@@ -25,9 +28,15 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size = 1,vectorsGD = Non
     dist.destroy_process_group()
 
 
-def trainParallel(covar_model,dataset,num_gpus = 'max',batch_size = 1,vectorsGD = None,**kwargs):
+def trainParallel(covar_model,dataset,num_gpus = 'max',batch_size=1,vectorsGD = None,**kwargs):
     if(num_gpus == 'max'):
         num_gpus = torch.cuda.device_count()
-    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size,vectorsGD,kwargs),nprocs = num_gpus)
+
+    if(batch_size % num_gpus != 0):
+        batch_size = (math.ceil(batch_size/num_gpus) * num_gpus)
+        print(f'Batch size is not a multiple of number of GPUs used, increasing batch size to {batch_size}')
+    batch_size_per_gpu = int(batch_size / num_gpus)
+
+    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,vectorsGD,kwargs),nprocs = num_gpus)
 
 
