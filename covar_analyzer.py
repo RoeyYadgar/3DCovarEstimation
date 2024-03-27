@@ -50,7 +50,7 @@ class CovarAnalyzer():
             
         covars = []
         for filename in filenames:
-            covars.append(Covar.load(filename))
+            covars.append(torch.load(filename))
     
         return CovarAnalyzer(covars,dataframe)
     
@@ -75,10 +75,10 @@ class CovarAnalyzer():
         
         for i,covar in enumerate(self.covars):
             if(add_legend):
-                ax.plot(covar.epoch_ind_log,metric(covar),plot_style[i])
+                ax.plot(covar["log_epoch_ind"],metric(covar),plot_style[i])
             else:
                 label = ','.join(f'{column}_{self.dataframe.iloc[i][column]}' for column in self.dataframe.columns if (column != 'filename' and len(pd.unique(self.dataframe[column])) > 1))
-                ax.plot(covar.epoch_ind_log,metric(covar),label=label)
+                ax.plot(covar["log_epoch_ind"],metric(covar),label=label)
                 mplcursors.cursor().connect(
                         "add",
                         lambda sel: sel.annotation.set_text(sel.artist.get_label()))
@@ -98,19 +98,21 @@ class CovarAnalyzer():
         return ax
         
     def plotCosineSim(self, title = None):
-        cosine_sim_metric = lambda covar : [np.mean(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0))) for i in range(len(covar.cosine_sim_log))]
+        cosine_sim_metric = lambda covar : [np.mean(np.sqrt(np.sum(covar['log_cosine_sim'][i] ** 2,axis = 0))) for i in range(len(covar['log_cosine_sim']))]
         return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Mean Cosine Simlarity', title = title)
 
     def plotWeightedCosineSim(self, title = None):
-        singular_vals = lambda covar : np.linalg.norm(covar.vectorsGD.asnumpy().reshape((covar.rank,-1)),axis=0)
-        cosine_sim_metric = lambda covar : [np.sum(np.sqrt(np.sum(covar.cosine_sim_log[i] ** 2,axis = 0)) * singular_vals(covar))/np.sum(singular_vals(covar)) for i in range(len(covar.cosine_sim_log))]
+        singular_vals = lambda covar : np.linalg.norm(covar['vectorsGD'].cpu().numpy().reshape((covar['vectorsGD'].shape[0],-1)),axis=1)
+        cosine_sim_metric = lambda covar : [np.sum(np.sqrt(np.sum(covar['log_cosine_sim'][i] ** 2,axis = 0)) * singular_vals(covar))/np.sum(singular_vals(covar)) for i in range(len(covar['log_cosine_sim']))]
         return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Weighted Cosine Simlarity', title = title)
-
-        
+    
+    def plotFroErr(self,title = None):
+        return self.plotMetric(lambda covar : covar['log_fro_err'],xlabel = 'Epochs',ylabel = 'Frobenium norm error',title = title)
+    '''
     def plotCostval(self, title = None):
         cosine_sim_metric = lambda covar: np.log10(covar.cost_log)
         return self.plotMetric(cosine_sim_metric,xlabel = 'Epochs',ylabel = 'Cost Value', title = title)
-    
+     
     
     def innprod(self):
         innprod_mat = []
@@ -131,7 +133,7 @@ class CovarAnalyzer():
             cost_ground_truth.append(CovarCost.apply(torch.tensor(cov.vectorsGD.asnumpy()),cov.src,0,images,reg).item())
 
         return cost_estimted_vec,cost_ground_truth
-    
+    '''  
     def updateResultFilesName(self,pattern):
         
         

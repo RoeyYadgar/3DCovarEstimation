@@ -49,7 +49,7 @@ def volsCovarEigenvec(vols,eigenval_threshold = 1e-3,randomized_alg = False,max_
         fitvols = pca.fit(vols0mean)
         volsSpan = fitvols.components_ * np.sqrt(fitvols.explained_variance_.reshape((-1,1)))
 
-    return Volume.from_vec(volsSpan) 
+    return volsSpan
 
 
 def sim2imgsrc(sim):

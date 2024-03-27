@@ -1,6 +1,6 @@
 from covar_estimation import *
 from utils import principalAngles , cosineSimilarity , sim2imgsrc , nonNormalizedGS
-
+import os
 import torch.nn as nn
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -25,15 +25,18 @@ def ptsrot2nufftplan(pts_rot,img_size,**kwargs):
     return plans
 
 class CovarDataset(Dataset):
-    def __init__(self,src,rank):
+    def __init__(self,src,vectorsGD = None):
         images = src.images[:]
-        self.rank = rank
         self.resolution = src.L
         self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution 
         self.images = torch.tensor(images.asnumpy()/self.im_norm_factor)
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         self.pts_rot = self.pts_rot.transpose(0,1) 
         
+        if(type(vectorsGD) == torch.Tensor or type(vectorsGD) == np.ndarray):
+            if(type(vectorsGD) != torch.Tensor):
+                vectorsGD = torch.tensor(vectorsGD)
+        self.vectorsGD = vectorsGD / self.im_norm_factor
         
     def __len__(self):
         return len(self.images)
@@ -46,16 +49,12 @@ def dataset_collate(batch):
     return torch.stack(images),plans
 
 class CovarTrainer():
-    def __init__(self,covar,train_data,device,training_log_freq = 50,vectorsGD = None):
+    def __init__(self,covar,train_data,device,training_log_freq = 50):
         self.device = device
         self.train_data = train_data
         self.covar = covar.to(device)
-        self.training_log_freq = training_log_freq
-        self.vectorsGD = vectorsGD
-
-        self.log_epoch_ind = []
-        if(vectorsGD != None):
-            self.log_cosine_sim = []
+        
+        
 
 
         batch_size = train_data.batch_size
@@ -66,6 +65,16 @@ class CovarTrainer():
         vol_shape = vectors.shape[1:] 
         #TODO : check gpu_sort effect
         self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
+
+        self.logTraining = self.device.index == 0 #Only log training on the first gpu
+        self.training_log_freq = training_log_freq
+        if(self.logTraining):
+            self.vectorsGD = train_data.dataset.vectorsGD
+            self.log_epoch_ind = []
+            if(self.vectorsGD != None):
+                self.vectorsGD = self.vectorsGD.to(self.device)
+                self.log_cosine_sim = []
+                self.log_fro_err = []
 
     def covar_vectors(self):
         return self.covar.module.vectors if self.isDDP else self.covar.vectors
@@ -80,8 +89,11 @@ class CovarTrainer():
         return cost_val,vectors
 
     def run_epoch(self,epoch):
-        #self.train_data.sampler.set_epoch(epoch)
-        pbar = tqdm(total=len(self.train_data), desc=f'Epoch {epoch} , ',position=0,leave=True)
+        if(self.isDDP):
+            self.train_data.sampler.set_epoch(epoch)
+        if(self.logTraining):
+            pbar = tqdm(total=len(self.train_data), desc=f'Epoch {epoch} , ',position=0,leave=True)
+
         for batch_ind,data in enumerate(self.train_data):
             images,pts_rot = data
             num_ims = images.shape[0]
@@ -92,17 +104,21 @@ class CovarTrainer():
             
             cost_val,vectors = self.run_batch(images,self.nufft_plans[:num_ims])
 
-            if(batch_ind % self.training_log_freq == 0):
-                self.log_training(vectors)
-                cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
-                pbar_description =  "cost value : {:.2e}".format(cost_val) +",  cosine sim : {:.2f}".format(cosine_sim_val)
-                pbar_description = f'gpu : {self.device.index} ,' + pbar_description
-                pbar.set_description(pbar_description)
+            if(self.logTraining):
+                if((batch_ind % self.training_log_freq == 0)):
+                    self.log_training(vectors)
+                    cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
+                    fro_err_val = self.log_fro_err[-1]
+                    pbar_description = f"Epoch {epoch} , "
+                    pbar_description =  pbar_description + "cost value : {:.2e}".format(cost_val) +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
+                    pbar.set_description(pbar_description)
 
-            pbar.update(1)
+                pbar.update(1)
 
-    def train(self,max_epochs,lr = 5e-5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1,gamma_reg = 1):
+    def train(self,max_epochs,lr = 5e-5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False):
         #TODO : add orthogonal projection option
+        if(orthogonal_projection):
+            raise Exception("Not implemented yet")
         lr *= self.train_data.batch_size
 
         if(optim_type == 'SGD'):
@@ -127,10 +143,31 @@ class CovarTrainer():
         
 
         if(self.vectorsGD != None):
-            self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.numpy()))
+            with torch.no_grad():
+                self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.cpu().numpy())) #TODO : implement cosine sim on torch
+                vectorsGD = self.vectorsGD.reshape((self.vectorsGD.shape[0],-1))
+                vectors = self.covar_vectors().reshape((vectorsGD.shape))
+                self.log_fro_err.append((frobeniusNormDiff(vectorsGD,vectors)/frobeniusNorm(vectorsGD)).cpu().numpy())
 
+
+    def results_dict(self):
+        covar = self.covar.module if self.isDDP else self.covar
+        ckp = covar.state_dict()
+        ckp['vectorsGD'] = self.vectorsGD
+        ckp['log_epoch_ind'] = self.log_epoch_ind
+        ckp['log_cosine_sim'] = self.log_cosine_sim
+        ckp['log_fro_err'] = self.log_fro_err
+
+        return ckp
+
+    def save_result(self,savepath):
+        savedir = os.path.split(savepath)[0]
+        os.makedirs(savedir,exist_ok=True)
+        ckp = self.results_dict()
+        torch.save(ckp,savepath)
+                
 class Covar(torch.nn.Module):
-    def __init__(self,resolution,rank,dtype = torch.float32,norm_factor = 1,vectors = None):
+    def __init__(self,resolution,rank,dtype = torch.float32,vectors = None):
         super(Covar,self).__init__()
         self.resolution = resolution
         self.rank = rank
@@ -139,7 +176,6 @@ class Covar(torch.nn.Module):
             self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype))/(self.resolution ** 2) 
         else:
             self.vectors = torch.clone(vectors)
-        self.vectors /= norm_factor
         self.vectors.requires_grad = True 
         self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
 
@@ -177,3 +213,26 @@ def cost(vols,images,nufft_plans,reg = 0):
 
     return cost_val
 
+def frobeniusNorm(vecs):
+    #Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
+    vecs_inn_prod = torch.matmul(vecs,vecs.transpose(0,1))
+    return torch.sqrt(torch.sum(torch.pow(vecs_inn_prod,2)))
+
+def frobeniusNormDiff(vec1,vec2):
+    #returns the frobenius norm of the diffrence of two symmetric matrices given by their eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
+    
+    normdiff_squared = torch.pow(frobeniusNorm(vec1),2) + torch.pow(frobeniusNorm(vec2),2)  - 2*torch.sum(torch.pow(torch.matmul(vec1,vec2.transpose(0,1)),2))
+    
+    return torch.sqrt(normdiff_squared)
+
+
+def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
+    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size)
+    device = torch.device('cuda:0')
+    covar_model = covar_model.to(device)
+    trainer = CovarTrainer(covar_model,dataloader,device)
+    trainer.train(**kwargs) 
+    if(savepath != None):
+        trainer.save_result(savepath)
+
+    return

@@ -1,7 +1,7 @@
 from utils import *
 from covar_estimation import *
-from covar_sgd import Covar
-
+from covar_sgd import Covar,CovarDataset
+from covar_distributed import trainParallel
 from aspire.volume import Volume,LegacyVolume
 from aspire.utils import Rotation
 from aspire.source import Simulation
@@ -29,9 +29,8 @@ def update_hyperparam_filenames(folder_name,default_params,filename_prefix = '')
         #df.at[i,'filename'] = 
 '''
 
-def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefix = ''):
-    
-    default_params = {'lr' : 5e-5,'momentum' : 0.9,'optimType' : 'SGD','reg' : 1e-5,'gammaLr' : 1,'gammaReg' : 1, 'batchSize' : 1, 'epochNum' : 10, 'orthogonalProjection' : False}
+def run_all_hyperparams(init_covar,dataset,vectorsGD,folder_name,param_names,params,filename_prefix = ''):
+    default_params = {'lr' : 5e-5,'momentum' : 0.9,'optimType' : 'SGD','reg' : 1e-5,'gammaLr' : 1,'gammaReg' : 1, 'batchSize' : 1, 'epochNum' : 10,'orthogonalProjection' : False}
     for default_param_name,default_param_val in default_params.items(): #add default parameters if they aren't in param_names
         if(default_param_name not in param_names):
             param_names.append(default_param_name)
@@ -49,33 +48,28 @@ def run_all_hyperparams(init_covar,folder_name,param_names,params,filename_prefi
         
         if(not os.path.isfile(filepath)):
             print(f'Running SGD on : {filepath}')
-            open(filepath,'wb') #Create the 'decoy' file so other threads will not run the same training with the same parameters
             c = init_covar()
-            try:
-                c.train(batch_size = param_vals[param_dict['batchSize']],
-                        epoch_num = param_vals[param_dict['epochNum']],
-                        lr = param_vals[param_dict['lr']],
-                        momentum = param_vals[param_dict['momentum']],
-                        optim_type = param_vals[param_dict['optimType']],
-                        reg = param_vals[param_dict['reg']],
-                        gamma_lr = param_vals[param_dict['gammaLr']],
-                        gamma_reg = param_vals[param_dict['gammaReg']],
-                        orthogonal_projection= param_vals[param_dict['orthogonalProjection']]
+            trainParallel(c,dataset,savepath = filepath,
+                            batch_size = param_vals[param_dict['batchSize']],
+                            max_epochs = param_vals[param_dict['epochNum']],
+                            lr = param_vals[param_dict['lr']],
+                            momentum = param_vals[param_dict['momentum']],
+                            optim_type = param_vals[param_dict['optimType']],
+                            reg = param_vals[param_dict['reg']],
+                            gamma_lr = param_vals[param_dict['gammaLr']],
+                            gamma_reg = param_vals[param_dict['gammaReg']],
+                            orthogonal_projection= param_vals[param_dict['orthogonalProjection']]
                         )
-                pickle.dump(c,open(filepath,'wb'))
-
-                if(filename_prefix == ''):
-                    df_row = pd.DataFrame([[filepath] + (list(param_vals))],
-                                      columns = ['filename'] + (param_names))   
-                else:
-                    df_row = pd.DataFrame([[filepath] + (list(param_vals)) + [filename_prefix]],
-                                      columns = ['filename'] + (param_names) + ['prefix'])
-                appendCSV(df_row,
-                          os.path.join(folder_name,'results.csv'))
-            except Exception:
-                print('Covar training got nan cost value, skipping training')
-                os.remove(filepath) #Remove the 'decoy' file
-    
+        
+            if(filename_prefix == ''):
+                df_row = pd.DataFrame([[filepath] + (list(param_vals))],
+                                    columns = ['filename'] + (param_names))   
+            else:
+                df_row = pd.DataFrame([[filepath] + (list(param_vals)) + [filename_prefix]],
+                                    columns = ['filename'] + (param_names) + ['prefix'])
+            appendCSV(df_row,
+                        os.path.join(folder_name,'results.csv'))
+ 
     
 def run_classic_alg(filepath,src,rank,basis = None):
     if(not os.path.isfile(filepath)):
@@ -371,8 +365,11 @@ def rank4_imsize_test(folder_name = None):
     
     for i,n in enumerate(imnum): 
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
-        covar_init = lambda : Covar(L,r,mean_voxel,sim,vectors= None,vectorsGD = volsCovarEigenvec(voxels))
-        run_all_hyperparams(covar_init,folder_name,
+        covar_init = lambda : Covar(L,r)
+        vectorsGD = volsCovarEigenvec(voxels)
+        dataset = CovarDataset(sim,vectorsGD)
+        
+        run_all_hyperparams(covar_init,dataset,vectorsGD,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg','epochNum'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,epochNum],filename_prefix[i])
     
 def rank2_cont_ctf_highresolution_test(folder_name = None):
@@ -476,5 +473,4 @@ if __name__ == "__main__":
     rank2_cont_ctf_resolution_test()
     rank4_imsize_test()
     '''
-    rank2_cont_ctf_highresolution_test()
-    #rank4_alg_cmp_test('data/tmp')
+    rank4_imsize_test('data/tmp2')
