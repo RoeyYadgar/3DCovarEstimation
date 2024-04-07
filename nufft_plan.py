@@ -26,6 +26,7 @@ class NufftPlan():
         points = (torch.remainder(points + torch.pi , 2 * torch.pi) - torch.pi).contiguous()
         self.forward_plan.setpts(*points)
         self.adjoint_plan.setpts(*points)
+        self.pts = points
 
     def execute_forward(self,signal):
         signal = signal.type(self.complex_dtype).contiguous()
@@ -56,6 +57,10 @@ class TorchNufftForward(torch.autograd.Function):
         signal_grad = nufft_plan.execute_adjoint(grad_output).reshape(ctx.signal_shape)
         if(not ctx.complex_input): #If input to forward method is real the gradient should also be real
             signal_grad = signal_grad.real
+        if(torch.any(torch.isnan(grad_output)) or torch.any(torch.isnan(signal_grad))):
+            #print(grad_output,signal_grad)
+            print(grad_output.device,signal_grad.device)
+        #print(torch.norm(signal_grad),torch.norm(grad_output))
         return signal_grad , None
     
 

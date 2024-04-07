@@ -28,7 +28,7 @@ class CovarDataset(Dataset):
     def __init__(self,src,vectorsGD = None):
         images = src.images[:]
         self.resolution = src.L
-        self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution 
+        self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution #Normalize so the norm is 1 with respect to the inner prod vec1^T * vec2 / L**2 
         self.images = torch.tensor(images.asnumpy()/self.im_norm_factor)
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         self.pts_rot = self.pts_rot.transpose(0,1) 
@@ -54,9 +54,6 @@ class CovarTrainer():
         self.train_data = train_data
         self.covar = covar.to(device)
         
-        
-
-
         batch_size = train_data.batch_size
         self.isDDP = type(self.covar) == torch.nn.parallel.distributed.DistributedDataParallel
         vectors = self.covar_vectors()
@@ -75,15 +72,19 @@ class CovarTrainer():
                 self.vectorsGD = self.vectorsGD.to(self.device)
                 self.log_cosine_sim = []
                 self.log_fro_err = []
-
+        self.counter = 0
     def covar_vectors(self):
         return self.covar.module.vectors if self.isDDP else self.covar.vectors
 
     def run_batch(self,images,nufft_plans):
         self.optimizer.zero_grad()
-        cost_val,vectors = self.covar.forward(images,nufft_plans,self.reg)
+        cost_val,vectors = self.covar.forward(images,nufft_plans,self.reg,self.counter)
+        with torch.no_grad():
+            #print((self.counter,cost_val,torch.norm(images)))
+            self.counter+=1
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1000) #TODO : check for effect of gradient clipping
+        #print(vectors,vectors.grad)
         self.optimizer.step()
 
         return cost_val,vectors
@@ -114,18 +115,18 @@ class CovarTrainer():
                     pbar.set_description(pbar_description)
 
                 pbar.update(1)
-
+    
     def train(self,max_epochs,lr = 5e-5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False):
         #TODO : add orthogonal projection option
         if(orthogonal_projection):
             raise Exception("Not implemented yet")
         lr *= self.train_data.batch_size
+        lr *= (self.train_data.dataset.resolution**4)
 
         if(optim_type == 'SGD'):
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
-        
         scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,step_size = 1, gamma = gamma_lr)
         self.reg = reg
         for epoch in range(max_epochs):
@@ -173,29 +174,30 @@ class Covar(torch.nn.Module):
         self.rank = rank
         self.dtype = dtype
         if(vectors == None):
-            self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype))/(self.resolution ** 2) 
+            self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype))/(self.resolution ** 1) 
         else:
             self.vectors = torch.clone(vectors)
         self.vectors.requires_grad = True 
         self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
 
 
-    def cost(self,images,nufft_plans,reg = 0):
-        return cost(self.vectors,images,nufft_plans,reg)
+    def cost(self,images,nufft_plans,reg = 0,ind = None):
+        return cost(self.vectors,images,nufft_plans,reg,ind)
 
 
-    def forward(self,images,nufft_plans,reg):
-        return self.cost(images,nufft_plans,reg),self.vectors
+    def forward(self,images,nufft_plans,reg,ind):
+        return self.cost(images,nufft_plans,reg,ind),self.vectors
     
 
 
-def cost(vols,images,nufft_plans,reg = 0):
+def cost(vols,images,nufft_plans,reg = 0,ind=None):
     batch_size = images.shape[0]
     rank = vols.shape[0]
+    L = vols.shape[-1]
     projected_vols = vol_forward(vols,nufft_plans)
 
-    images = images.reshape((batch_size,1,-1))
-    projected_vols = projected_vols.reshape((batch_size,rank,-1))
+    images = images.reshape((batch_size,1,-1))/L
+    projected_vols = projected_vols.reshape((batch_size,rank,-1))/L
 
     norm_images_term = torch.pow(torch.norm(images,dim=(1,2)),4)
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
@@ -205,8 +207,17 @@ def cost(vols,images,nufft_plans,reg = 0):
                 + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
     
     cost_val = torch.mean(cost_val,dim=0)
+    with torch.no_grad():
+        print((ind,cost_val,torch.norm(images),torch.norm(vols),torch.norm(projected_vols),torch.norm(vol_forward(vols,nufft_plans)/L),torch.norm(vol_forward(vols,nufft_plans)/L)))
+        import scipy 
+        if(torch.abs(torch.norm(projected_vols)/ torch.norm(vol_forward(vols,nufft_plans)/L) - 1) > 1e-2):
+            print(nufft_plans[0].pts)
+            scipy.io.savemat('data/pts.mat',{'pts' : nufft_plans[0].pts.cpu().numpy()})
+        else:
+            scipy.io.savemat('data/pts2.mat',{'pts' : nufft_plans[0].pts.cpu().numpy()})
+            
     if(reg != 0):
-        vols = vols.reshape((rank,-1))
+        vols = vols.reshape((rank,-1))/(L ** 1.5)
         vols_prod = torch.matmul(vols,vols.transpose(0,1))
         reg_cost = torch.sum(torch.pow(vols_prod,2))
         cost_val += reg * reg_cost
