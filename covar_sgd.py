@@ -72,19 +72,14 @@ class CovarTrainer():
                 self.vectorsGD = self.vectorsGD.to(self.device)
                 self.log_cosine_sim = []
                 self.log_fro_err = []
-        self.counter = 0
     def covar_vectors(self):
         return self.covar.module.vectors if self.isDDP else self.covar.vectors
 
     def run_batch(self,images,nufft_plans):
         self.optimizer.zero_grad()
-        cost_val,vectors = self.covar.forward(images,nufft_plans,self.reg,self.counter)
-        with torch.no_grad():
-            #print((self.counter,cost_val,torch.norm(images)))
-            self.counter+=1
+        cost_val,vectors = self.covar.forward(images,nufft_plans,self.reg)
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
-        #print(vectors,vectors.grad)
         self.optimizer.step()
 
         return cost_val,vectors
@@ -100,10 +95,6 @@ class CovarTrainer():
             num_ims = images.shape[0]
             pts_rot = pts_rot.to(self.device)
             images = images.to(self.device)
-            #nufft_plans = [NufftPlan((101,101,101),batch_size=4,dtype = torch.float32,gpu_device_id = self.device.index) for i in range(num_ims)]
-            #for i in range(num_ims):
-            #    nufft_plans[i].setpts(pts_rot[i])
-            #cost_val,vectors = self.run_batch(images,nufft_plans[:num_ims])
             for i in range(num_ims):
                 self.nufft_plans[i].setpts(pts_rot[i])
             cost_val,vectors = self.run_batch(images,self.nufft_plans[:num_ims])
@@ -184,16 +175,16 @@ class Covar(torch.nn.Module):
         self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
 
 
-    def cost(self,images,nufft_plans,reg = 0,ind = None):
-        return cost(self.vectors,images,nufft_plans,reg,ind)
+    def cost(self,images,nufft_plans,reg = 0):
+        return cost(self.vectors,images,nufft_plans,reg)
 
 
-    def forward(self,images,nufft_plans,reg,ind):
-        return self.cost(images,nufft_plans,reg,ind),self.vectors
+    def forward(self,images,nufft_plans,reg):
+        return self.cost(images,nufft_plans,reg),self.vectors
     
 
 
-def cost(vols,images,nufft_plans,reg = 0,ind=None):
+def cost(vols,images,nufft_plans,reg = 0):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = vols.shape[-1]
@@ -210,22 +201,6 @@ def cost(vols,images,nufft_plans,reg = 0,ind=None):
                 + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
     
     cost_val = torch.mean(cost_val,dim=0)
-    with torch.no_grad():
-        import scipy 
-        import pickle
-        from nufft_plan import nufft_forward
-        #if(torch.abs(torch.norm(projected_vols)/ torch.norm(vol_forward(vols,nufft_plans)/L) - 1) > 1e-2 and cost_val > 1e3):
-        if(cost_val > 1e3):
-            print((ind,cost_val,torch.norm(images),torch.norm(vols),torch.norm(projected_vols),torch.norm(vol_forward(vols,nufft_plans)/L),torch.norm(nufft_forward(vols,nufft_plans[0])/(L**3))))
-            data = {'pts' : nufft_plans[0].pts.cpu().numpy() , 'vols' : vols.cpu().numpy(), 'projs' : projected_vols.cpu().numpy()}
-            print(nufft_plans[0].pts)
-            scipy.io.savemat('data/pts.mat',data)
-            pickle.dump(data,open('data/pts.bin','wb'))
-            ghgh
-        else:
-            #scipy.io.savemat('data/pts2.mat',{'pts' : nufft_plans[0].pts.cpu().numpy() , 'vols' : vols.cpu().numpy(), 'projs' : projected_vols.cpu().numpy()})
-            #pickle.dump(data,open('data/pts2.bin','wb'))
-            pass
             
     if(reg != 0):
         vols = vols.reshape((rank,-1))/(L ** 1.5)
