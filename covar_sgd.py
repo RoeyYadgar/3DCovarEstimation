@@ -37,12 +37,18 @@ class CovarDataset(Dataset):
             if(type(vectorsGD) != torch.Tensor):
                 vectorsGD = torch.tensor(vectorsGD)
         self.vectorsGD = vectorsGD / self.im_norm_factor
-        
+
+        self.filter_indices = torch.tensor(src.filter_indices)
+        num_filters = len(src.unique_filters)
+        self.unique_filters = torch.zeros((num_filters,src.L,src.L))
+        for i in range(num_filters):
+            self.unique_filters[i] = torch.tensor(src.unique_filters[i].evaluate_grid(src.L))
+   
     def __len__(self):
         return len(self.images)
     
     def __getitem__(self,idx):
-        return self.images[idx] , self.pts_rot[idx]
+        return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx]
 
 def dataset_collate(batch):
     images,plans = zip(*batch)
@@ -62,6 +68,7 @@ class CovarTrainer():
         vol_shape = vectors.shape[1:] 
         #TODO : check gpu_sort effect
         self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
+        self.filters = train_data.dataset.unique_filters.to(self.device)
 
         self.logTraining = self.device.index == 0 #Only log training on the first gpu
         self.training_log_freq = training_log_freq
@@ -75,9 +82,10 @@ class CovarTrainer():
     def covar_vectors(self):
         return self.covar.module.vectors if self.isDDP else self.covar.vectors
 
-    def run_batch(self,images,nufft_plans):
+    def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
-        cost_val,vectors = self.covar.forward(images,nufft_plans,self.reg)
+        cost_val,vectors = self.covar.forward(images,nufft_plans,filters,self.reg)
+        #print(torch.norm(vectors))
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
@@ -91,13 +99,14 @@ class CovarTrainer():
             pbar = tqdm(total=len(self.train_data), desc=f'Epoch {epoch} , ',position=0,leave=True)
 
         for batch_ind,data in enumerate(self.train_data):
-            images,pts_rot = data
+            images,pts_rot,filter_indices = data
             num_ims = images.shape[0]
             pts_rot = pts_rot.to(self.device)
             images = images.to(self.device)
+            filters = self.filters[filter_indices] if len(self.filters) > 0 else None
             for i in range(num_ims):
                 self.nufft_plans[i].setpts(pts_rot[i])
-            cost_val,vectors = self.run_batch(images,self.nufft_plans[:num_ims])
+            cost_val,vectors = self.run_batch(images,self.nufft_plans[:num_ims],filters)
 
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
@@ -175,20 +184,20 @@ class Covar(torch.nn.Module):
         self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
 
 
-    def cost(self,images,nufft_plans,reg = 0):
-        return cost(self.vectors,images,nufft_plans,reg)
+    def cost(self,images,nufft_plans,filters,reg = 0):
+        return cost(self.vectors,images,nufft_plans,filters,reg)
 
 
-    def forward(self,images,nufft_plans,reg):
-        return self.cost(images,nufft_plans,reg),self.vectors
+    def forward(self,images,nufft_plans,filters,reg):
+        return self.cost(images,nufft_plans,filters,reg),self.vectors
     
 
 
-def cost(vols,images,nufft_plans,reg = 0):
+def cost(vols,images,nufft_plans,filters,reg = 0):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = vols.shape[-1]
-    projected_vols = vol_forward(vols,nufft_plans)
+    projected_vols = vol_forward(vols,nufft_plans,filters)
 
     images = images.reshape((batch_size,1,-1))/L
     projected_vols = projected_vols.reshape((batch_size,rank,-1))/L

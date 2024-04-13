@@ -141,6 +141,33 @@ class TestTorchWraps(unittest.TestCase):
 
         np.testing.assert_allclose(im_backproject_torch,im_backproject_aspire,rtol = 1e-3,atol=1e-3)        
 
+
+    def test_vol_project_ctf(self):
+        sim = Simulation(
+            n=1,
+            vols=self.vols,
+            dtype=np.float32,
+            amplitudes=1,
+            offsets = 0,
+            unique_filters=[RadialCTFFilter(defocus=1.5e4)]
+        )
+        rots = sim.rotations[:]
+        pts_rot = rotated_grids(self.img_size,rots)
+        pts_rot = pts_rot.reshape((3,-1))
+        pts_rot = pts_rot[:,:self.img_size ** 2]
+        filter = torch.tensor(sim.unique_filters[0].evaluate_grid(self.img_size)).to(self.device)
+        vol_forward_aspire = sim.vol_forward(self.vols[0],0,1)
+
+        vol_torch = torch.tensor(self.vols[0].asnumpy()).to(self.device)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,1)
+        plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
+        vol_forward_torch = projection_funcs.vol_forward(vol_torch,plan,filter)
+        vol_forward_torch = vol_forward_torch.cpu().numpy()
+
+        np.testing.assert_allclose(vol_forward_torch,vol_forward_aspire,rtol = 1e-3,atol=1e-3)
+
+
+
 if __name__ == "__main__":
     
     unittest.main()

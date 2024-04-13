@@ -8,12 +8,12 @@ def centered_fft2(image,im_dim = [-1,-2]):
 def centered_ifft2(image,im_dim = [-1,-2]):
     return torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(image,dim=im_dim),dim=im_dim),dim=im_dim)
 
-def vol_forward(volume,plan):
+def vol_forward(volume,plan,filters = None):
     L = volume.shape[-1]
     if(type(plan) == list or type(plan) == tuple): #When mupltiple plans are given loop through them
         volume_forward = torch.zeros((len(plan),volume.shape[0],L,L),dtype = volume.dtype,device = volume.device)
         for i in range(len(plan)):
-            volume_forward[i] = vol_forward(volume,plan[i])
+            volume_forward[i] = vol_forward(volume,plan[i],filters[i]) if filters is not None else vol_forward(volume,plan[i])
         return volume_forward
     else:
         vol_nufft = nufft_forward(volume,plan)
@@ -26,7 +26,9 @@ def vol_forward(volume,plan):
         else:
             vol_nufft_clone = vol_nufft
 
-        
+        if(filters is not None):
+            vol_nufft_clone = vol_nufft_clone * filters
+
         volume_forward = centered_ifft2(vol_nufft_clone)
 
         return torch.real(volume_forward)/L
