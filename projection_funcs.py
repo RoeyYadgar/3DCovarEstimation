@@ -20,11 +20,14 @@ def vol_forward(volume,plan):
         vol_nufft = vol_nufft.reshape((*volume.shape[:-3],L,L))
         
         if(L % 2 == 0):
-            vol_nufft[:,0,:] = 0
-            vol_nufft[:,:,0] = 0
+            vol_nufft_clone = vol_nufft.clone()
+            vol_nufft_clone[:,0,:] = 0
+            vol_nufft_clone[:,:,0] = 0
+        else:
+            vol_nufft_clone = vol_nufft
 
         
-        volume_forward = centered_ifft2(vol_nufft)
+        volume_forward = centered_ifft2(vol_nufft_clone)
 
         return torch.real(volume_forward)/L
 
