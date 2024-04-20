@@ -106,7 +106,7 @@ def rank2_lr_params_test(folder_name = None):
     mean_voxel = Volume.from_vec(np.zeros((1,L**3),dtype=np.single))
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
-    learning_rate = [5e-4 ,1e-4 ,5e-5 ,1e-5 ,5e-6]
+    learning_rate = [1e-2,1e-3,5e-4 ,1e-4 ,5e-5 ,1e-5 ,5e-6]
     momentum = [0.9]
     regularization = [1e-6,1e-5,1e-4]
     gamma_lr = [1]
@@ -155,7 +155,7 @@ def rank2_ctf_test(folder_name = None):
 
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
 
-    learning_rate = [1e-4,1e-5]
+    learning_rate = [1e-2,1e-3,1e-4,1e-5]
     momentum = [0.9]
     regularization = [1e-4,1e-5,1e-3]
     gamma_lr = [1,0.8,0.5]
@@ -180,9 +180,9 @@ def rank2_resolution_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
    
-    learning_rate = [5e-5,1e-5,1e-6]
+    learning_rate = [1e-3,1e-4,5e-5,1e-5,1e-6]
     momentum = [0.9]
-    regularization = [1e-5,1e-4]
+    regularization = [1e-6,1e-5,1e-4]
     gamma_lr = [1]
     gamma_reg = [1,0.8,0.5]
 
@@ -205,9 +205,9 @@ def rank4_resolution_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
    
-    learning_rate = [1e-4,5e-5,1e-5,1e-6,5e-6]
+    learning_rate = [1e-2,1e-3,1e-4,5e-5,1e-5,1e-6,5e-6]
     momentum = [0.9]
-    regularization = [1e-5,1e-4]
+    regularization = [1e-6,1e-5,1e-4]
     gamma_lr = [1]
     gamma_reg = [1,0.8,0.5]
 
@@ -261,7 +261,7 @@ def rank4_lr_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
    
-    learning_rate = [5e-4,1e-4,5e-5]
+    learning_rate = [1e-2,1e-3,5e-4,1e-4,5e-5]
     momentum = [0.9]
     regularization = [1e-5,1e-6]
     gamma_lr = [1,0.8,0.5,0.3]
@@ -286,7 +286,7 @@ def rank4_optim_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
    
-    learning_rate = [1e-1,1e-2,1e-3,1e-4]
+    learning_rate = [10 ** (-i) for i in range(1,10)]
     momentum = [0.9]
     regularization = [1e-5,1e-6]
     gamma_lr = [1,0.8,0.5,0.3]
@@ -312,7 +312,7 @@ def rank2_cont_resolution_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
 
    
-    learning_rate = [1e-4,5e-5,1e-5]
+    learning_rate = [1e-3,1e-4,5e-5,1e-5]
     momentum = [0.9]
     regularization = [1e-5,1e-6]
     gamma_lr = [1]
@@ -337,7 +337,7 @@ def rank2_cont_ctf_resolution_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
 
    
-    learning_rate = [1e-4,5e-5]
+    learning_rate = [1e-2,1e-3,1e-4,5e-5]
     momentum = [0.9]
     regularization = [1e-5]
     gamma_lr = [1 , 0.5 , 0.2]

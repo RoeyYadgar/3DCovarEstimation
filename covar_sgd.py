@@ -29,14 +29,14 @@ class CovarDataset(Dataset):
         images = src.images[:]
         self.resolution = src.L
         self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution #Normalize so the norm is 1 with respect to the inner prod vec1^T * vec2 / L**2 
-        self.images = torch.tensor(images.asnumpy()/self.im_norm_factor)
+        self.images = torch.tensor(images.asnumpy())
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         self.pts_rot = self.pts_rot.transpose(0,1) 
         
         if(type(vectorsGD) == torch.Tensor or type(vectorsGD) == np.ndarray):
             if(type(vectorsGD) != torch.Tensor):
                 vectorsGD = torch.tensor(vectorsGD)
-        self.vectorsGD = vectorsGD / self.im_norm_factor
+        self.vectorsGD = vectorsGD
 
         self.filter_indices = torch.tensor(src.filter_indices)
         num_filters = len(src.unique_filters)
@@ -123,8 +123,9 @@ class CovarTrainer():
         #TODO : add orthogonal projection option
         if(orthogonal_projection):
             raise Exception("Not implemented yet")
-        lr *= self.train_data.batch_size
-        lr *= (self.train_data.dataset.resolution**4)
+        lr *= self.train_data.batch_size #Scale learning rate with batch size
+        lr *= (self.train_data.dataset.resolution**4) # Cost function scales with L^(-4)
+        lr /= self.train_data.dataset.im_norm_factor ** 2 # Cost function scales with amplitude^2 #TODO : figure out why amplitude^2
 
         if(optim_type == 'SGD'):
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
