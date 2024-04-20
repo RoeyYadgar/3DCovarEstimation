@@ -1,4 +1,3 @@
-from covar_estimation import *
 from utils import principalAngles , cosineSimilarity , sim2imgsrc , nonNormalizedGS
 import os
 import torch.nn as nn

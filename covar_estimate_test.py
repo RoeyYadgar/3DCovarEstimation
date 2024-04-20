@@ -1,5 +1,4 @@
 from utils import *
-from covar_estimation import *
 from covar_sgd import Covar,CovarDataset
 from covar_distributed import trainParallel
 from aspire.volume import Volume,LegacyVolume
