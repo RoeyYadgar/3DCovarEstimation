@@ -1,6 +1,4 @@
 
-from covar_sgd import Covar
-from covar_estimation import CovarCost
 import numpy as np
 import pandas as pd
 import torch
@@ -11,7 +9,6 @@ from matplotlib.lines import Line2D
 from matplotlib.colors import cnames
 import mplcursors
 
-from aspire.image import Image
 
 
 class CovarAnalyzer():

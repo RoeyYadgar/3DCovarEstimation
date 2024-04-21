@@ -9,6 +9,7 @@ from aspire.basis import FBBasis3D
 from aspire.covariance import CovarianceEstimator
 from aspire.noise import WhiteNoiseEstimator
 from aspire.reconstruction import MeanEstimator
+from aspire.noise import WhiteNoiseAdder
 import scipy
 import torch
 import pickle
@@ -113,7 +114,7 @@ def rank2_lr_params_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                     ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
 
@@ -138,7 +139,7 @@ def rank2_gamma_params_test(folder_name = None):
                 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
 
@@ -162,7 +163,7 @@ def rank2_ctf_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
     
@@ -187,7 +188,7 @@ def rank2_resolution_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
     
@@ -212,7 +213,7 @@ def rank4_resolution_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
 
@@ -243,7 +244,7 @@ def rank4_eigngap_test(folder_name = None):
 
         covar_init = lambda : Covar(L,r)
         vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-        dataset = CovarDataset(sim,vectorsGD)
+        dataset = CovarDataset(sim,vectorsGD=vectorsGD)
         run_all_hyperparams(covar_init,dataset,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg','orthogonalProjection'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,orthogonal_projection],filename_prefix[i])
 
@@ -268,7 +269,7 @@ def rank4_lr_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
     
@@ -294,7 +295,7 @@ def rank4_optim_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg','optimType'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,optim])
 
@@ -319,7 +320,7 @@ def rank2_cont_resolution_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
 
@@ -344,7 +345,7 @@ def rank2_cont_ctf_resolution_test(folder_name = None):
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels,randomized_alg = True,max_eigennum = 2)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg])
     
@@ -371,7 +372,7 @@ def rank4_imsize_test(folder_name = None):
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
         covar_init = lambda : Covar(L,r)
         vectorsGD = volsCovarEigenvec(voxels)
-        dataset = CovarDataset(sim,vectorsGD)
+        dataset = CovarDataset(sim,vectorsGD=vectorsGD)
         
         run_all_hyperparams(covar_init,dataset,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg','epochNum'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,epochNum],filename_prefix[i])
@@ -420,7 +421,7 @@ def rank2_cont_ctf_highresolution_test(folder_name = None):
     
         covar_init = lambda : Covar(L,r)
         vectorsGD = volsCovarEigenvec(voxels)
-        dataset = CovarDataset(sim,vectorsGD)
+        dataset = CovarDataset(sim,vectorsGD=vectorsGD)
         run_all_hyperparams(covar_init,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],filename_prefix = f'L={L}_')
         
@@ -446,7 +447,7 @@ def rank4_alg_cmp_test(folder_name = None):
     
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],'SGD_')
     
@@ -461,15 +462,49 @@ def rank4_alg_cmp_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0,angles = rotations,states = states)#,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)]
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels)
-    dataset = CovarDataset(sim,vectorsGD)
+    dataset = CovarDataset(sim,vectorsGD=vectorsGD)
     
     run_all_hyperparams(covar_init,dataset,folder_name,
                         ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],'Balanced_SGD_')
     
     run_classic_alg(os.path.join(folder_name,'Balanced_classical_covar.bin'),sim,r)
 
-if __name__ == "__main__":
+
+def rank4_noise_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank4_L128_noise_test'
+
+    L = 15
+    n = 32000
+    r = 4
+    voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
+    voxels -= np.mean(voxels,axis=0)
+
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+    var = np.var(sim.images[:].asnumpy())
+   
+    learning_rate = [1e-3,5e-4,1e-4]
+    momentum = [0.9]
+    regularization = [1e-5,1e-6]
+    gamma_lr = [0.8]
+    gamma_reg = [0.8]
+
+    covar_init = lambda : Covar(L,r)
+    vectorsGD = volsCovarEigenvec(voxels)
+
+    snr_vals = [10, 1 , 0.1 , 0.01]
+    for snr in snr_vals:
+        noise_var = var / snr
+        white_noise_adder = WhiteNoiseAdder(noise_var)
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0, noise_adder=white_noise_adder)
+        dataset = CovarDataset(sim,noise_var*0,vectorsGD=vectorsGD)
+        run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],f'SNR={snr}_')
+
     
+
+if __name__ == "__main__":
+    '''
     rank2_lr_params_test()
     rank2_gamma_params_test()
     rank2_ctf_test()
@@ -481,4 +516,6 @@ if __name__ == "__main__":
     rank2_cont_resolution_test()
     #rank2_cont_ctf_resolution_test()
     rank4_imsize_test()
+    '''
+    rank4_noise_test('data/tmp')
     

@@ -24,14 +24,15 @@ def ptsrot2nufftplan(pts_rot,img_size,**kwargs):
     return plans
 
 class CovarDataset(Dataset):
-    def __init__(self,src,vectorsGD = None):
+    def __init__(self,src,noise_var,vectorsGD = None):
         images = src.images[:]
         self.resolution = src.L
         self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution #Normalize so the norm is 1 with respect to the inner prod vec1^T * vec2 / L**2 
         self.images = torch.tensor(images.asnumpy())
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         self.pts_rot = self.pts_rot.transpose(0,1) 
-        
+        self.noise_var = noise_var
+
         if(type(vectorsGD) == torch.Tensor or type(vectorsGD) == np.ndarray):
             if(type(vectorsGD) != torch.Tensor):
                 vectorsGD = torch.tensor(vectorsGD)
@@ -68,6 +69,7 @@ class CovarTrainer():
         #TODO : check gpu_sort effect
         self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
         self.filters = train_data.dataset.unique_filters.to(self.device)
+        self.noise_var = train_data.dataset.noise_var
 
         self.logTraining = self.device.index == 0 #Only log training on the first gpu
         self.training_log_freq = training_log_freq
@@ -83,8 +85,7 @@ class CovarTrainer():
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
-        cost_val,vectors = self.covar.forward(images,nufft_plans,filters,self.reg)
-        #print(torch.norm(vectors))
+        cost_val,vectors = self.covar.forward(images,nufft_plans,filters,self.noise_var,self.reg)
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
@@ -184,16 +185,16 @@ class Covar(torch.nn.Module):
         self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
 
 
-    def cost(self,images,nufft_plans,filters,reg = 0):
-        return cost(self.vectors,images,nufft_plans,filters,reg)
+    def cost(self,images,nufft_plans,filters,noise_var,reg = 0):
+        return cost(self.vectors,images,nufft_plans,filters,noise_var,reg)
 
 
-    def forward(self,images,nufft_plans,filters,reg):
-        return self.cost(images,nufft_plans,filters,reg),self.vectors
+    def forward(self,images,nufft_plans,filters,noise_var,reg):
+        return self.cost(images,nufft_plans,filters,noise_var,reg),self.vectors
     
 
 
-def cost(vols,images,nufft_plans,filters,reg = 0):
+def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = vols.shape[-1]
@@ -202,12 +203,16 @@ def cost(vols,images,nufft_plans,filters,reg = 0):
     images = images.reshape((batch_size,1,-1))/L
     projected_vols = projected_vols.reshape((batch_size,rank,-1))/L
 
-    norm_images_term = torch.pow(torch.norm(images,dim=(1,2)),4)
+    norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2))
     
-    cost_val = (norm_images_term - 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
+    cost_val = (torch.pow(norm_squared_images,2) - 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
                 + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
+    
+    #Add noise cost terms
+    norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2)
+    cost_val += 2 * (noise_var**2) * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) #+ (noise_var) ** 2
     
     cost_val = torch.mean(cost_val,dim=0)
             
@@ -216,6 +221,8 @@ def cost(vols,images,nufft_plans,filters,reg = 0):
         vols_prod = torch.matmul(vols,vols.transpose(0,1))
         reg_cost = torch.sum(torch.pow(vols_prod,2))
         cost_val += reg * reg_cost
+
+    cost_val *= 4
 
     return cost_val
 
