@@ -47,28 +47,31 @@ def run_all_hyperparams(init_covar,dataset,folder_name,param_names,params,filena
         filepath = os.path.join(folder_name,filename)
         
         if(not os.path.isfile(filepath)):
-            print(f'Running SGD on : {filepath}')
-            c = init_covar()
-            trainParallel(c,dataset,savepath = filepath,
-                            batch_size = param_vals[param_dict['batchSize']],
-                            max_epochs = param_vals[param_dict['epochNum']],
-                            lr = param_vals[param_dict['lr']],
-                            momentum = param_vals[param_dict['momentum']],
-                            optim_type = param_vals[param_dict['optimType']],
-                            reg = param_vals[param_dict['reg']],
-                            gamma_lr = param_vals[param_dict['gammaLr']],
-                            gamma_reg = param_vals[param_dict['gammaReg']],
-                            orthogonal_projection= param_vals[param_dict['orthogonalProjection']]
-                        )
-        
-            if(filename_prefix == ''):
-                df_row = pd.DataFrame([[filepath] + (list(param_vals))],
-                                    columns = ['filename'] + (param_names))   
-            else:
-                df_row = pd.DataFrame([[filepath] + (list(param_vals)) + [filename_prefix]],
-                                    columns = ['filename'] + (param_names) + ['prefix'])
-            appendCSV(df_row,
-                        os.path.join(folder_name,'results.csv'))
+            try:
+                print(f'Running SGD on : {filepath}')
+                c = init_covar()
+                trainParallel(c,dataset,savepath = filepath,
+                                batch_size = param_vals[param_dict['batchSize']],
+                                max_epochs = param_vals[param_dict['epochNum']],
+                                lr = param_vals[param_dict['lr']],
+                                momentum = param_vals[param_dict['momentum']],
+                                optim_type = param_vals[param_dict['optimType']],
+                                reg = param_vals[param_dict['reg']],
+                                gamma_lr = param_vals[param_dict['gammaLr']],
+                                gamma_reg = param_vals[param_dict['gammaReg']],
+                                orthogonal_projection= param_vals[param_dict['orthogonalProjection']]
+                            )
+            
+                if(filename_prefix == ''):
+                    df_row = pd.DataFrame([[filepath] + (list(param_vals))],
+                                        columns = ['filename'] + (param_names))   
+                else:
+                    df_row = pd.DataFrame([[filepath] + (list(param_vals)) + [filename_prefix]],
+                                        columns = ['filename'] + (param_names) + ['prefix'])
+                appendCSV(df_row,
+                            os.path.join(folder_name,'results.csv'))
+            except Exception as e:
+                print(e)
  
     
 def run_classic_alg(filepath,src,rank,basis = None):
@@ -474,7 +477,7 @@ def rank4_noise_test(folder_name = None):
     if(folder_name == None):
         folder_name = 'data/rank4_L128_noise_test'
 
-    L = 15
+    L = 128
     n = 32000
     r = 4
     voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
@@ -483,7 +486,7 @@ def rank4_noise_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
     var = np.var(sim.images[:].asnumpy())
    
-    learning_rate = [1e-3,5e-4,1e-4]
+    learning_rate = [1e-2,1e-3,5e-4,1e-4]
     momentum = [0.9]
     regularization = [1e-5,1e-6]
     gamma_lr = [0.8]
@@ -517,5 +520,5 @@ if __name__ == "__main__":
     #rank2_cont_ctf_resolution_test()
     rank4_imsize_test()
     '''
-    rank4_noise_test('data/tmp')
+    rank4_noise_test()
     

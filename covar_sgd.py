@@ -55,7 +55,7 @@ def dataset_collate(batch):
     return torch.stack(images),plans
 
 class CovarTrainer():
-    def __init__(self,covar,train_data,device,training_log_freq = 50):
+    def __init__(self,covar,train_data,device,save_path = None,training_log_freq = 50):
         self.device = device
         self.train_data = train_data
         self.covar = covar.to(device)
@@ -80,6 +80,8 @@ class CovarTrainer():
                 self.vectorsGD = self.vectorsGD.to(self.device)
                 self.log_cosine_sim = []
                 self.log_fro_err = []
+
+        self.save_path = save_path
     def covar_vectors(self):
         return self.covar.module.vectors if self.isDDP else self.covar.vectors
 
@@ -139,6 +141,9 @@ class CovarTrainer():
             self.reg *= gamma_reg
             scheduler.step()
 
+            if(self.logTraining and self.save_path is not None):
+                self.save_result()
+
 
     def log_training(self,vectors):
         if(len(self.log_epoch_ind) != 0):
@@ -165,11 +170,11 @@ class CovarTrainer():
 
         return ckp
 
-    def save_result(self,savepath):
-        savedir = os.path.split(savepath)[0]
+    def save_result(self):
+        savedir = os.path.split(self.save_path)[0]
         os.makedirs(savedir,exist_ok=True)
         ckp = self.results_dict()
-        torch.save(ckp,savepath)
+        torch.save(ckp,self.save_path)
                 
 class Covar(torch.nn.Module):
     def __init__(self,resolution,rank,dtype = torch.float32,vectors = None):
@@ -222,8 +227,6 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
         reg_cost = torch.sum(torch.pow(vols_prod,2))
         cost_val += reg * reg_cost
 
-    cost_val *= 4
-
     return cost_val
 
 def frobeniusNorm(vecs):
@@ -243,9 +246,6 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size)
     device = torch.device('cuda:0')
     covar_model = covar_model.to(device)
-    trainer = CovarTrainer(covar_model,dataloader,device)
+    trainer = CovarTrainer(covar_model,dataloader,device,savepath)
     trainer.train(**kwargs) 
-    if(savepath != None):
-        trainer.save_result(savepath)
-
     return

@@ -22,12 +22,10 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset))
     covar_model = covar_model.to(device)
     covar_model = DDP(covar_model,device_ids=[rank])
-    trainer = CovarTrainer(covar_model,dataloader,device)
+    trainer = CovarTrainer(covar_model,dataloader,device,savepath)
 
     trainer.train(**kwargs)
 
-    if(trainer.logTraining and savepath != None):
-        trainer.save_result(savepath)
     dist.destroy_process_group()
 
 
