@@ -23,10 +23,12 @@ class NufftPlan():
 
 
     def setpts(self,points):
+        #Clean references to past points (preventing a memory leak)
+        self.forward_plan._references = []
+        self.adjoint_plan._references = []
         points = (torch.remainder(points + torch.pi , 2 * torch.pi) - torch.pi).contiguous()        
         self.forward_plan.setpts(*points)
         self.adjoint_plan.setpts(*points)
-        self.pts = points
 
     def execute_forward(self,signal):
         signal = signal.type(self.complex_dtype).contiguous()

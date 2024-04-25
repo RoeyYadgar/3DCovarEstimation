@@ -207,6 +207,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
 
     images = images.reshape((batch_size,1,-1))/L
     projected_vols = projected_vols.reshape((batch_size,rank,-1))/L
+    noise_var /= L**2
 
     norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
@@ -217,7 +218,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
     
     #Add noise cost terms
     norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2)
-    cost_val += 2 * (noise_var**2) * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) #+ (noise_var) ** 2
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) + (noise_var * L) ** 2
     
     cost_val = torch.mean(cost_val,dim=0)
             
