@@ -7,9 +7,11 @@ from aspire.source import Simulation
 from aspire.operators import RadialCTFFilter
 from aspire.basis import FBBasis3D
 from aspire.covariance import CovarianceEstimator
-from aspire.noise import WhiteNoiseEstimator
+from aspire.noise import WhiteNoiseEstimator,AnisotropicNoiseEstimator
 from aspire.reconstruction import MeanEstimator
-from aspire.noise import WhiteNoiseAdder
+from aspire.noise import WhiteNoiseAdder,PinkNoiseAdder
+from aspire.source.relion import RelionSource
+
 import scipy
 import torch
 import pickle
@@ -77,14 +79,13 @@ def run_all_hyperparams(init_covar,dataset,folder_name,param_names,params,filena
 def run_classic_alg(filepath,src,rank,basis = None):
     if(not os.path.isfile(filepath)):
         print(f'Running Classical Algo on : {filepath}')
-        open(filepath,'wb') #Create the 'decoy' file so other threads will not run the same training with the same parameters
 
         if(basis == None):
             basis = FBBasis3D((src.L, src.L, src.L))
 
         noise_estimator = WhiteNoiseEstimator(src, batchSize=500)
         noise_variance = noise_estimator.estimate()
-        mean_estimator = MeanEstimator(src)
+        mean_estimator = MeanEstimator(src,basis)
         mean_est = mean_estimator.estimate()
         covar_estimator = CovarianceEstimator(src, basis, mean_kernel=mean_estimator.kernel)
         covar_est = covar_estimator.estimate(mean_est, noise_variance)
@@ -486,25 +487,162 @@ def rank4_noise_test(folder_name = None):
     sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
     var = np.var(sim.images[:].asnumpy())
    
-    learning_rate = [1e-2,1e-3,5e-4,1e-4]
+    learning_rate = [1e-3,5e-4,1e-4,1e-5]
     momentum = [0.9]
-    regularization = [1e-5,1e-6]
-    gamma_lr = [0.8]
-    gamma_reg = [0.8]
+    regularization = [1e-6]
+    gamma_lr = [0.8,0.5]
+    gamma_reg = [0.8,0.5]
 
     covar_init = lambda : Covar(L,r)
     vectorsGD = volsCovarEigenvec(voxels)
 
+    dataset = CovarDataset(sim,0,vectorsGD=vectorsGD)
+    run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],f'SNR=inf_')
     snr_vals = [10, 1 , 0.1 , 0.01]
     for snr in snr_vals:
         noise_var = var / snr
         white_noise_adder = WhiteNoiseAdder(noise_var)
         sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0, noise_adder=white_noise_adder)
-        dataset = CovarDataset(sim,noise_var*0,vectorsGD=vectorsGD)
+        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD)
+        run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],f'SNR={snr}_')
+    
+        #sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0, noise_adder=white_noise_adder,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(1.5e4, 2.5e4, 7)])
+        #run_classic_alg(os.path.join(folder_name,f'classical_covar_SNR={snr}.bin'),sim,r)
+
+def KV_dataset_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/KV_dataset/L100'
+
+    L = 100
+    n = 16000
+    r = 10
+
+    kv_vols = scipy.io.loadmat('data/KV_dataset/KV_data_L100.mat')
+    voxels = Volume(kv_vols['vols'])
+
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0)
+    hetro_power = np.var(sim.images[:].asnumpy() - sim.vol_forward(Volume(kv_vols['mean_vol']),0,n))
+   
+    learning_rate = [1e-3,1e-5]
+    momentum = [0.9]
+    regularization = [1e-6]
+    gamma_lr = [0.8]
+    gamma_reg = [0.8]
+
+    covar_init = lambda : Covar(L,r)
+    vectorsGD = np.sqrt(kv_vols['eigenVals']).reshape(r,1,1,1) * kv_vols['eigenVols']
+    mean_volume = Volume(kv_vols['mean_vol'])
+
+    dataset = CovarDataset(sim,0,vectorsGD=vectorsGD,mean_volume = mean_volume)
+    run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],f'SNR=inf_')
+    snr_vals = [10, 1 , 0.1 , 0.01]
+    for snr in snr_vals:
+        noise_var = hetro_power / snr
+        white_noise_adder = WhiteNoiseAdder(noise_var)
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1,offsets = 0, noise_adder=white_noise_adder)
+        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD ,mean_volume = mean_volume)
         run_all_hyperparams(covar_init,dataset,folder_name,
                             ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],f'SNR={snr}_')
 
+def realistic_data_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank1_L64_realistic'
+
+    L = 64
+    r = 1
+    '''
+    n = 10000
+    voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
+    mean_voxel = Volume(np.mean(voxels,axis=0))
+
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(2.1e4, 2.5e4, 7)])
+    var = np.var((sim.images[:] - sim.vol_forward(mean_voxel,0,sim.n)).asnumpy())
+    '''
+    starpath = 'data/rank1_L64_realistic/source.star'
+    sim = RelionSource(starpath)
+    voxels = Volume.load('data/rank1_L64_realistic/voxels.mrc')
+    mean_voxel = Volume.load('data/rank1_L64_realistic/mean_voxel.mrc')
+
+    learning_rate = [5e-4,1e-4,1e-5,1e-6]
+    momentum = [0.9]
+    regularization = [1e-6,1e-5,1e-4]
+    gamma_lr = [0.8]
+    gamma_reg = [0.8]
+
+    covar_init = lambda : Covar(L,r)
+    vectorsGD = volsCovarEigenvec(voxels-mean_voxel)
+
+    aiso_noise_estimator = AnisotropicNoiseEstimator(sim)
+    sim = sim.whiten(aiso_noise_estimator)
+
+    noise_estimator = WhiteNoiseEstimator(sim, batchSize=500)
+    noise_variance = noise_estimator.estimate()
+
+    dataset = CovarDataset(sim,noise_variance,vectorsGD=vectorsGD,mean_volume=mean_voxel)
+    run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg','batchSize'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,[32]])
+    '''
+    dataset = CovarDataset(sim,0,vectorsGD=vectorsGD,mean_volume=mean_voxel)
+    run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],f'SNR=inf_')
     
+    snr_vals = [0.1 , 0.01]
+    for snr in snr_vals:
+        noise_var = var / snr
+        #noise_adder = PinkNoiseAdder(noise_var)
+        noise_adder = WhiteNoiseAdder(noise_var)
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1, noise_adder=noise_adder,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(2.1e4, 2.5e4, 7)])
+        aiso_noise_estimator = AnisotropicNoiseEstimator(sim)
+        sim = sim.whiten(aiso_noise_estimator)
+        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=mean_voxel)
+        run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg],f'SNR={snr}_')
+    '''
+
+def realistic_data2_test(folder_name = None):
+    if(folder_name == None):
+        folder_name = 'data/rank1_L64_realistic2'
+
+    L = 64
+    r = 1
+    
+    n = 10000
+    voxels = LegacyVolume(L=L,C=r+1,dtype=np.float32,).generate() 
+    mean_voxel = Volume(np.mean(voxels,axis=0))
+
+    sim = Simulation(n = n , vols = voxels,amplitudes= 1,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(2.1e4, 2.5e4, 7)])
+    var = np.var((sim.images[:] - sim.vol_forward(mean_voxel,0,sim.n)).asnumpy())
+
+    learning_rate = [5e-4,1e-4,1e-5,1e-6]
+    momentum = [0.9]
+    regularization = [1e-6,1e-5,1e-4]
+    gamma_lr = [0.8]
+    gamma_reg = [0.8]
+    batchSize = [32]
+
+    covar_init = lambda : Covar(L,r)
+    vectorsGD = volsCovarEigenvec(voxels-mean_voxel)
+
+
+    dataset = CovarDataset(sim,0,vectorsGD=vectorsGD,mean_volume=mean_voxel)
+    run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg','batchSize'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,batchSize],f'SNR=inf_')
+    
+    snr_vals = [0.1 , 0.01]
+    for snr in snr_vals:
+        noise_var = var / snr
+        #noise_adder = PinkNoiseAdder(noise_var)
+        noise_adder = WhiteNoiseAdder(noise_var)
+        sim = Simulation(n = n , vols = voxels,amplitudes= 1, noise_adder=noise_adder,unique_filters=[RadialCTFFilter(defocus=d) for d in np.linspace(2.1e4, 2.5e4, 7)])
+        aiso_noise_estimator = AnisotropicNoiseEstimator(sim)
+        sim = sim.whiten(aiso_noise_estimator)
+        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=mean_voxel)
+        run_all_hyperparams(covar_init,dataset,folder_name,
+                            ['lr','momentum','reg','gammaLr','gammaReg','batchSize'],[learning_rate,momentum,regularization,gamma_lr,gamma_reg,batchSize],f'SNR={snr}_')
+
 
 if __name__ == "__main__":
     '''
@@ -520,5 +658,8 @@ if __name__ == "__main__":
     #rank2_cont_ctf_resolution_test()
     rank4_imsize_test()
     '''
-    rank4_noise_test()
+    #rank4_noise_test()
+    #KV_dataset_test()
+    realistic_data_test()
+    realistic_data2_test()
     
