@@ -1,11 +1,10 @@
 from utils import principalAngles , cosineSimilarity , sim2imgsrc , nonNormalizedGS
 import os
-import torch.nn as nn
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import numpy as np
 from tqdm import tqdm
-import pickle
+import copy
 from aspire.volume import Volume
 from aspire.utils import Rotation
 from aspire.volume import rotated_grids
@@ -24,8 +23,13 @@ def ptsrot2nufftplan(pts_rot,img_size,**kwargs):
     return plans
 
 class CovarDataset(Dataset):
-    def __init__(self,src,noise_var,vectorsGD = None):
+    def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None):
         images = src.images[:]
+        if(mean_volume is not None): #Substracted projected mean from images
+            projected_mean = src.vol_forward(mean_volume,0,src.n)
+            projected_mean = projected_mean.asnumpy().astype(images.dtype)
+            images -= projected_mean 
+        images = images.shift(-src.offsets)
         self.resolution = src.L
         self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution #Normalize so the norm is 1 with respect to the inner prod vec1^T * vec2 / L**2 
         self.images = torch.tensor(images.asnumpy())
@@ -49,6 +53,15 @@ class CovarDataset(Dataset):
     
     def __getitem__(self,idx):
         return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx]
+    
+
+    def get_subset(self,idx):
+        subset = copy.copy(self)
+        subset.images = subset.images[idx]
+        subset.pts_rot = subset.pts_rot[idx]
+        subset.filter_indices = subset.filter_indices[idx]
+
+        return subset
 
 def dataset_collate(batch):
     images,plans = zip(*batch)
@@ -113,10 +126,11 @@ class CovarTrainer():
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
                     self.log_training(vectors)
-                    cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
-                    fro_err_val = self.log_fro_err[-1]
-                    pbar_description = f"Epoch {epoch} , "
-                    pbar_description =  pbar_description + "cost value : {:.2e}".format(cost_val) +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
+                    pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
+                    if(self.vectorsGD is not None):
+                        cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
+                        fro_err_val = self.log_fro_err[-1]
+                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
                     pbar.set_description(pbar_description)
 
                 pbar.update(1)
@@ -126,7 +140,7 @@ class CovarTrainer():
         if(orthogonal_projection):
             raise Exception("Not implemented yet")
         lr *= self.train_data.batch_size #Scale learning rate with batch size
-        lr *= (self.train_data.dataset.resolution**4) # Cost function scales with L^(-4)
+        #lr *= (self.train_data.dataset.resolution**4) # Cost function scales with L^(-4)
         lr /= self.train_data.dataset.im_norm_factor ** 2 # Cost function scales with amplitude^2 #TODO : figure out why amplitude^2
 
         if(optim_type == 'SGD'):
@@ -154,9 +168,10 @@ class CovarTrainer():
 
         if(self.vectorsGD != None):
             with torch.no_grad():
-                self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.cpu().numpy())) #TODO : implement cosine sim on torch
+                #self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.cpu().numpy()))
+                self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),self.vectorsGD))
                 vectorsGD = self.vectorsGD.reshape((self.vectorsGD.shape[0],-1))
-                vectors = self.covar_vectors().reshape((vectorsGD.shape))
+                vectors = self.covar_vectors().reshape((vectors.shape[0],-1))
                 self.log_fro_err.append((frobeniusNormDiff(vectorsGD,vectors)/frobeniusNorm(vectorsGD)).cpu().numpy())
 
 
@@ -182,7 +197,7 @@ class Covar(torch.nn.Module):
         self.resolution = resolution
         self.rank = rank
         self.dtype = dtype
-        if(vectors == None):
+        if(vectors is None):
             self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype))/(self.resolution ** 1) 
         else:
             self.vectors = torch.clone(vectors)
@@ -241,8 +256,7 @@ def frobeniusNormDiff(vec1,vec2):
     normdiff_squared = torch.pow(frobeniusNorm(vec1),2) + torch.pow(frobeniusNorm(vec2),2)  - 2*torch.sum(torch.pow(torch.matmul(vec1,vec2.transpose(0,1)),2))
     
     return torch.sqrt(normdiff_squared)
-
-
+    
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size)
     device = torch.device('cuda:0')
