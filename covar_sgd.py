@@ -256,7 +256,30 @@ def frobeniusNormDiff(vec1,vec2):
     normdiff_squared = torch.pow(frobeniusNorm(vec1),2) + torch.pow(frobeniusNorm(vec2),2)  - 2*torch.sum(torch.pow(torch.matmul(vec1,vec2.transpose(0,1)),2))
     
     return torch.sqrt(normdiff_squared)
-    
+
+
+def evalCovarEigs(dataset,eigs,batch_size = 8):
+    device = eigs.device
+    filters = dataset.unique_filters.to(device)
+    num_eigs = eigs.shape[0]
+    L = eigs.shape[1]
+    nufft_plans = [NufftPlan((L,)*3,batch_size=num_eigs,dtype = eigs.dtype,gpu_device_id = device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
+
+    cost_val = 0
+    for i in range(0,len(dataset),batch_size):
+        images,pts_rot,filter_indices = dataset[i:i+batch_size]
+        num_ims = images.shape[0]
+        pts_rot = pts_rot.to(device)
+        images = images.to(device)
+        batch_filters = filters[filter_indices] if len(filters) > 0 else None
+        for j in range(num_ims):
+            nufft_plans[j].setpts(pts_rot[j])
+        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,reg=0) * batch_size
+        cost_val += cost_term
+   
+    return cost_val/len(dataset)
+
+
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size)
     device = torch.device('cuda:0')
