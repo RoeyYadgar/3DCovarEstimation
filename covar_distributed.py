@@ -7,6 +7,8 @@ import os
 from covar_sgd import CovarTrainer
 import math
 
+TMP_STATE_DICT_FILE = 'tmp_state_dict.pt'
+
 def ddp_setup(rank,world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12356'
@@ -26,6 +28,9 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
 
     trainer.train(**kwargs)
 
+    if(rank == 0):
+        torch.save(covar_model.module.state_dict(),TMP_STATE_DICT_FILE)
+
     dist.destroy_process_group()
 
 
@@ -40,4 +45,6 @@ def trainParallel(covar_model,dataset,num_gpus = 'max',batch_size=1,savepath = N
 
     mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,savepath,kwargs),nprocs = num_gpus)
 
+    covar_model.load_state_dict(torch.load(TMP_STATE_DICT_FILE))
+    os.remove(TMP_STATE_DICT_FILE)
 
