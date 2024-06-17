@@ -7,6 +7,9 @@ from numpy import random
 from aspire.utils import coor_trans,Rotation
 from aspire.volume import Volume
 from aspire.source.image import ArrayImageSource
+from aspire.storage.starfile import StarFile
+from aspire.basis import FFBBasis3D
+from aspire.reconstruction import MeanEstimator
 import aspire
 
 
@@ -33,13 +36,20 @@ def replicateVoxelSign(voxels):
     return Volume(np.concatenate((voxels.asnumpy(),-voxels.asnumpy()),axis=0))
     
 
-def volsCovarEigenvec(vols,eigenval_threshold = 1e-3,randomized_alg = False,max_eigennum = None):
+def volsCovarEigenvec(vols,eigenval_threshold = 1e-3,randomized_alg = False,max_eigennum = None,weights = None):
     vols_num = vols.shape[0]
-    vols0mean = asnumpy((vols -  np.mean(vols,axis=0))).reshape((vols_num,-1))
+    if(weights is None): #If 
+        vols_dist = np.ones(vols_num)/vols_num
+    else:
+        vols_dist = weights / np.sum(weights)
+    vols_dist = vols_dist.astype(vols.dtype)
+    vols_mean = np.sum(vols_dist[:, np.newaxis, np.newaxis, np.newaxis] * vols,axis=0)
+    vols0mean = asnumpy((vols -  vols_mean)).reshape((vols_num,-1))
+    vols0mean = np.sqrt(vols_dist[:, np.newaxis]) * vols0mean
 
     if(not randomized_alg):
         _,volsSTD,volsSpan = np.linalg.svd(vols0mean,full_matrices=False)
-        volsSTD /= np.sqrt(vols_num)  #standard devation is volsSTD / sqrt(n)
+        #volsSTD /= np.sqrt(vols_num)  #standard devation is volsSTD / sqrt(n)
         eigenval_num = np.sum(volsSTD > np.sqrt(eigenval_threshold))
         volsSpan = volsSpan[:eigenval_num,:] * volsSTD[:eigenval_num,np.newaxis] 
     else:
@@ -156,3 +166,16 @@ def meanCTFPSD(ctfs,L):
     ctfs_eval_grid = [np.power(ctf.evaluate_grid(L),2) for ctf in ctfs]
     return np.mean(np.array(ctfs_eval_grid),axis=0)
     
+def sub_starfile(star_input,star_output,mrcs_index):
+    star_out = StarFile(star_input)
+    star_out['particles'] = pd.DataFrame(star_out['particles']).iloc[mrcs_index].to_dict(orient='list')
+    star_out.write(star_output)
+
+def estimateMean(source,basis = None):
+    if(basis == None):
+        L = source.L
+        basis = FFBBasis3D((L,L,L))
+    mean_estimator = MeanEstimator(source,basis = basis)
+    mean_est = mean_estimator.estimate()
+
+    return mean_est
