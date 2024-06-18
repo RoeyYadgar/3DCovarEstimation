@@ -6,7 +6,6 @@ import numpy as np
 from tqdm import tqdm
 import copy
 from aspire.volume import Volume
-from aspire.utils import Rotation
 from aspire.volume import rotated_grids
 from nufft_plan import NufftPlan
 from projection_funcs import vol_forward
@@ -89,10 +88,10 @@ class CovarTrainer():
         if(self.logTraining):
             self.vectorsGD = train_data.dataset.vectorsGD
             self.log_epoch_ind = []
+            self.log_cosine_sim = []
+            self.log_fro_err = []
             if(self.vectorsGD != None):
-                self.vectorsGD = self.vectorsGD.to(self.device)
-                self.log_cosine_sim = []
-                self.log_fro_err = []
+                self.vectorsGD = self.vectorsGD.to(self.device)    
 
         self.save_path = save_path
     def covar_vectors(self):
@@ -212,6 +211,14 @@ class Covar(torch.nn.Module):
     def forward(self,images,nufft_plans,filters,noise_var,reg):
         return self.cost(images,nufft_plans,filters,noise_var,reg),self.vectors
     
+    @property
+    def eigenvecs(self):
+        with torch.no_grad():
+            vectors = self.vectors.clone().reshape(self.rank,-1)
+            _,eigenvals,eigenvecs = torch.linalg.svd(vectors,full_matrices = False)
+            eigenvecs = eigenvecs.reshape(self.vectors.shape)
+            eigenvals = eigenvals ** 2
+            return eigenvecs,eigenvals
 
 
 def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
