@@ -22,16 +22,16 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8):
         images,pts_rot,filter_indices = dataset[i:i+batch_size]
         num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
-        images = images.to(device).reshape(batch_size,-1)
+        images = images.to(device).reshape(num_ims,-1)
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
         for j in range(num_ims):
             nufft_plans[j].setpts(pts_rot[j])
         
-        eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters).reshape((batch_size,rank,-1))
+        eigen_forward = vol_forward(eigenvecs,nufft_plans[:num_ims],batch_filters).reshape((num_ims,rank,-1))
 
         for j in range(num_ims):
             eigen_forward_Q , eigen_forward_R = torch.linalg.qr(eigen_forward[j].T)
-            image_coor = (images[j] @ eigen_forward_Q).T
+            image_coor = (images[j] @ eigen_forward_Q)
             image_coor_covar = eigen_forward_R @ eigenvals @ eigen_forward_R.T + covar_noise
             image_coor = eigenvals @ eigen_forward_R.T @ torch.inverse(image_coor_covar) @ image_coor
             coords[i+j,:] = image_coor
