@@ -55,12 +55,37 @@ class CovarDataset(Dataset):
     
 
     def get_subset(self,idx):
-        subset = copy.copy(self)
+        subset = self.copy()
         subset.images = subset.images[idx]
         subset.pts_rot = subset.pts_rot[idx]
         subset.filter_indices = subset.filter_indices[idx]
 
         return subset
+
+    def remove_vol_from_images(self,vol,coeffs = None,copy_dataset = False):
+        device = vol.device
+        num_vols = vol.shape[0]
+        if(coeffs is None):
+            coeffs = torch.ones(num_vols,len(self))
+        dataset = self.copy() if copy_dataset else self
+
+        
+        nufft_plan = NufftPlan((self.resolution,)*3,batch_size=num_vols,dtype=vol.dtype,gpu_device_id = device.index,gpu_method=1,gpu_sort = 0)
+
+        for i in range(len(dataset)):
+            _,pts_rot,filter_ind = dataset[i]
+            pts_rot = pts_rot.to(device)
+            filt = dataset.unique_filters[filter_ind].to(device)
+            nufft_plan.setpts(pts_rot)
+
+            vol_proj = vol_forward(vol,nufft_plan,filt).reshape(num_vols,dataset.resolution,dataset.resolution)
+
+            dataset.images[i] -= torch.sum(vol_proj * coeffs[i].reshape((-1,1,1)),dim=0).cpu()
+
+        return dataset
+
+    def copy(self):
+        return copy.deepcopy(self)
 
 def dataset_collate(batch):
     images,plans = zip(*batch)
@@ -70,16 +95,16 @@ class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,training_log_freq = 50):
         self.device = device
         self.train_data = train_data
-        self.covar = covar.to(device)
+        self._covar = covar.to(device)
         
-        batch_size = train_data.batch_size
-        self.isDDP = type(self.covar) == torch.nn.parallel.distributed.DistributedDataParallel
+        self.batch_size = train_data.batch_size
+        self.isDDP = type(self._covar) == torch.nn.parallel.distributed.DistributedDataParallel
         vectors = self.covar_vectors()
         rank = vectors.shape[0]
         dtype = vectors.dtype
         vol_shape = vectors.shape[1:] 
         #TODO : check gpu_sort effect
-        self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
+        self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for i in range(self.batch_size)]
         self.filters = train_data.dataset.unique_filters.to(self.device)
         self.noise_var = train_data.dataset.noise_var
 
@@ -94,8 +119,13 @@ class CovarTrainer():
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
         self.save_path = save_path
+
+    @property
+    def covar(self):
+        return self._covar.module if self.isDDP else self._covar
+    
     def covar_vectors(self):
-        return self.covar.module.vectors if self.isDDP else self.covar.vectors
+        return self.covar.vectors
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
@@ -103,6 +133,9 @@ class CovarTrainer():
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
+
+        if(self.use_orthogonal_projection):
+            self.covar.orthogonal_projection()
 
         return cost_val,vectors
 
@@ -130,14 +163,14 @@ class CovarTrainer():
                         cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
                         fro_err_val = self.log_fro_err[-1]
                         pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
+                        pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
                     pbar.set_description(pbar_description)
 
                 pbar.update(1)
     
     def train(self,max_epochs,lr = 5e-5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False):
-        #TODO : add orthogonal projection option
-        if(orthogonal_projection):
-            raise Exception("Not implemented yet")
+        self.use_orthogonal_projection = orthogonal_projection
+
         lr *= self.train_data.batch_size #Scale learning rate with batch size
         #lr *= (self.train_data.dataset.resolution**4) # Cost function scales with L^(-4)
         lr /= self.train_data.dataset.im_norm_factor ** 2 # Cost function scales with amplitude^2 #TODO : figure out why amplitude^2
@@ -219,6 +252,15 @@ class Covar(torch.nn.Module):
             eigenvecs = eigenvecs.reshape(self.vectors.shape)
             eigenvals = eigenvals ** 2
             return eigenvecs,eigenvals
+        
+
+    def orthogonal_projection(self):
+        with torch.no_grad():
+            vectors = self.vectors.reshape(self.rank,-1)
+            _,S,V = torch.linalg.svd(vectors,full_matrices = False)
+            orthogonal_vectors  = S.reshape(-1,1) * V
+            self.vectors.data.copy_(orthogonal_vectors.view_as(self.vectors))
+
 
 
 def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
