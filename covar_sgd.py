@@ -208,8 +208,7 @@ class CovarTrainer():
 
 
     def results_dict(self):
-        covar = self.covar.module if self.isDDP else self.covar
-        ckp = covar.state_dict()
+        ckp = self.covar.state_dict()
         ckp['vectorsGD'] = self.vectorsGD
         ckp['log_epoch_ind'] = self.log_epoch_ind
         ckp['log_cosine_sim'] = self.log_cosine_sim
@@ -225,7 +224,7 @@ class CovarTrainer():
                 
 class Covar(torch.nn.Module):
     def __init__(self,resolution,rank,dtype = torch.float32,vectors = None):
-        super(Covar,self).__init__()
+        super().__init__()
         self.resolution = resolution
         self.rank = rank
         self.dtype = dtype
@@ -330,7 +329,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8):
 
 
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
-    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size)
+    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True)
     device = torch.device('cuda:0')
     covar_model = covar_model.to(device)
     trainer = CovarTrainer(covar_model,dataloader,device,savepath)

@@ -4,7 +4,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 from torch import distributed as dist
 import os
-from covar_sgd import CovarTrainer
+from covar_sgd import CovarTrainer,Covar
+from iterative_covar_sgd import IterativeCovarTrainer,IterativeCovar
 import math
 
 TMP_STATE_DICT_FILE = 'tmp_state_dict.pt'
@@ -24,7 +25,10 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset))
     covar_model = covar_model.to(device)
     covar_model = DDP(covar_model,device_ids=[rank])
-    trainer = CovarTrainer(covar_model,dataloader,device,savepath)
+    if(type(covar_model.module) == Covar):
+        trainer = CovarTrainer(covar_model,dataloader,device,savepath)
+    elif(type(covar_model.module) == IterativeCovar):
+        trainer = IterativeCovarTrainer(covar_model,dataloader,device,savepath)
 
     trainer.train(**kwargs)
 
