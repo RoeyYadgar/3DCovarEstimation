@@ -1,4 +1,5 @@
 import torch
+from torch import distributed as dist
 from covar_sgd import Covar,CovarDataset,CovarTrainer
 from wiener_coords import wiener_coords
 
@@ -13,10 +14,29 @@ class IterativeCovarTrainer(CovarTrainer):
 
             self.covar.fix_vector()
             eigenvecs,eigenvals = self.covar.eigenvecs
-            print(f' Device : {self.device} , dataset length : {len(self.train_data.dataset)}')
-            coords = wiener_coords(self.train_data.dataset,eigenvecs,eigenvals)
-            self.train_data = torch.utils.data.DataLoader(self._orig_dataset.remove_vol_from_images(eigenvecs,coords,copy_dataset = True),
-                                                          batch_size = self.batch_size)
+            if(not self.isDDP):
+                coords,eigen_forward = wiener_coords(self._orig_dataset,eigenvecs,eigenvals,return_eigen_forward=True)
+                coords = coords.to('cpu')
+                eigen_span_im = torch.sum(coords[:,:,None,None] * eigen_forward,dim=1)
+                self.train_data.dataset.images = self._orig_dataset.images - complete_eigen_span_im 
+            else:
+                data_len = len(self.train_data.dataset)
+                rank = self.process_ind[0]
+                world_size = self.process_ind[1]
+                samples_per_process = data_len // world_size
+                start_ind = rank * samples_per_process
+                end_ind = start_ind + samples_per_process if rank != world_size - 1 else data_len
+                print(f'Device {self.device} , dataset index : {(start_ind,end_ind)}')
+                coords,eigen_forward = wiener_coords(self._orig_dataset,eigenvecs,eigenvals,start_ind = start_ind,end_ind = end_ind,return_eigen_forward=True)
+                coords = coords.to('cpu')
+                print(f'Device {self.device} , coords_len : {coords.shape} , ims size : {eigen_forward.shape}')
+                eigen_span_im = torch.sum(coords[:,:,None,None] * eigen_forward,dim=1)
+                updated_parts = [torch.zeros_like(eigen_span_im) for _ in range(world_size)]
+                dist.all_gather(updated_parts, eigen_span_im)
+                complete_eigen_span_im = torch.cat(updated_parts)
+                print(f'Device {self.device} , eigen_span_im : {eigen_span_im.shape} , updated_data : {(complete_eigen_span_im.shape,complete_eigen_span_im.device)}')
+                self.train_data.dataset.images = self._orig_dataset.images - complete_eigen_span_im
+            
 
 class IterativeCovar(Covar):
     def __init__(self,resolution,rank,dtype= torch.float32):

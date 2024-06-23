@@ -29,6 +29,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
         trainer = CovarTrainer(covar_model,dataloader,device,savepath)
     elif(type(covar_model.module) == IterativeCovar):
         trainer = IterativeCovarTrainer(covar_model,dataloader,device,savepath)
+    trainer.process_ind = (rank,world_size)
 
     trainer.train(**kwargs)
 

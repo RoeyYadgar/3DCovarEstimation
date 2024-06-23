@@ -4,7 +4,11 @@ from projection_funcs import vol_forward
 
 
 
-def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8):
+def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8,start_ind = None,end_ind = None,return_eigen_forward = False):
+    if(start_ind is None):
+        start_ind = 0
+    if(end_ind is None):
+        end_ind = len(dataset)
     vol_shape = eigenvecs.shape
     L = vol_shape[-1]
     rank = eigenvecs.shape[0]
@@ -17,9 +21,11 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8):
         eigenvals = torch.diag(eigenvals)
 
     nufft_plans = [NufftPlan((L,)*3,batch_size=rank,dtype = dtype,gpu_device_id = device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
-    coords = torch.zeros((len(dataset),rank),device=device)
-    for i in range(0,len(dataset),batch_size):
-        images,pts_rot,filter_indices = dataset[i:i+batch_size]
+    coords = torch.zeros((end_ind-start_ind,rank),device=device)
+    if(return_eigen_forward):
+        eigen_forward_images = torch.zeros((end_ind-start_ind,rank,L,L),dtype=dtype)
+    for i in range(0,coords.shape[0],batch_size):
+        images,pts_rot,filter_indices = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
         num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)
@@ -27,7 +33,10 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8):
         for j in range(num_ims):
             nufft_plans[j].setpts(pts_rot[j])
         
-        eigen_forward = vol_forward(eigenvecs,nufft_plans[:num_ims],batch_filters).reshape((num_ims,rank,-1))
+        eigen_forward = vol_forward(eigenvecs,nufft_plans[:num_ims],batch_filters)
+        if(return_eigen_forward):
+            eigen_forward_images[i:i+num_ims] = eigen_forward.to('cpu')
+        eigen_forward = eigen_forward.reshape((num_ims,rank,-1))
 
         for j in range(num_ims):
             eigen_forward_Q , eigen_forward_R = torch.linalg.qr(eigen_forward[j].T)
@@ -36,7 +45,11 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8):
             image_coor = eigenvals @ eigen_forward_R.T @ torch.inverse(image_coor_covar) @ image_coor
             coords[i+j,:] = image_coor
 
-    return coords
+
+    if(not return_eigen_forward):
+        return coords
+    else:
+        return coords,eigen_forward_images
 
 
 
