@@ -5,7 +5,7 @@ import torch.multiprocessing as mp
 from torch import distributed as dist
 import os
 from covar_sgd import CovarTrainer,Covar
-from iterative_covar_sgd import IterativeCovarTrainer,IterativeCovar
+from iterative_covar_sgd import IterativeCovarTrainer,IterativeCovar,IterativeCovarVer2,IterativeCovarTrainerVer2
 import math
 
 TMP_STATE_DICT_FILE = 'tmp_state_dict.pt'
@@ -29,6 +29,8 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
         trainer = CovarTrainer(covar_model,dataloader,device,savepath)
     elif(type(covar_model.module) == IterativeCovar):
         trainer = IterativeCovarTrainer(covar_model,dataloader,device,savepath)
+    elif(type(covar_model.module) == IterativeCovarVer2):
+        trainer = IterativeCovarTrainerVer2(covar_model,dataloader,device,savepath)
     trainer.process_ind = (rank,world_size)
 
     trainer.train(**kwargs)

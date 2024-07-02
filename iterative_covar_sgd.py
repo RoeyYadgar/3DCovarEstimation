@@ -1,6 +1,7 @@
 import torch
 from torch import distributed as dist
-from covar_sgd import Covar,CovarDataset,CovarTrainer
+from covar_sgd import Covar,CovarDataset,CovarTrainer,cost
+from nufft_plan import NufftPlan
 from wiener_coords import wiener_coords
 
 class IterativeCovarTrainer(CovarTrainer):
@@ -85,4 +86,26 @@ class IterativeCovar(Covar):
         self.current_estimated_rank = state_dict.pop('current_estimated_rank')
         super().load_state_dict(state_dict, *args, **kwargs)
         return
-        
+
+class IterativeCovarTrainerVer2(CovarTrainer):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+
+    def train(self,*args,**kwargs):
+        for i in range(self.covar.rank):
+            if(i != 0):
+                self.nufft_plans = [NufftPlan(self.covar.vectors.shape[1:],batch_size=i+1,dtype = self.covar.vectors.dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for _ in range(self.batch_size)] #Update batch size of nufft plans (which is the number of volumes to project) 
+            super().train(*args,**kwargs)
+            self.covar.fix_vector()
+            
+
+
+class IterativeCovarVer2(IterativeCovar): #TODO : give a better name
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+
+
+    def cost(self,images,nufft_plans,filters,noise_var,reg = 0):
+        vectors = torch.cat((self.fixed_vectors[:self.current_estimated_rank],self.vectors),dim=0)
+        return cost(vectors,images,nufft_plans,filters,noise_var,reg)
+    
