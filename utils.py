@@ -45,14 +45,15 @@ def volsCovarEigenvec(vols,eigenval_threshold = 1e-3,randomized_alg = False,max_
     vols_dist = vols_dist.astype(vols.dtype)
     vols_mean = np.sum(vols_dist[:, np.newaxis, np.newaxis, np.newaxis] * vols,axis=0)
     vols0mean = asnumpy((vols -  vols_mean)).reshape((vols_num,-1))
-    vols0mean = np.sqrt(vols_dist[:, np.newaxis]) * vols0mean
 
     if(not randomized_alg):
+        vols0mean = np.sqrt(vols_dist[:, np.newaxis]) * vols0mean
         _,volsSTD,volsSpan = np.linalg.svd(vols0mean,full_matrices=False)
         #volsSTD /= np.sqrt(vols_num)  #standard devation is volsSTD / sqrt(n)
         eigenval_num = np.sum(volsSTD > np.sqrt(eigenval_threshold))
         volsSpan = volsSpan[:eigenval_num,:] * volsSTD[:eigenval_num,np.newaxis] 
     else:
+        #TODO : add weights to randomized alg
         if(max_eigennum == None):
             max_eigennum = vols_num
         pca = PCA(n_components=max_eigennum,svd_solver='randomized')

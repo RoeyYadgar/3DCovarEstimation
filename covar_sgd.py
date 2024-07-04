@@ -29,9 +29,10 @@ class CovarDataset(Dataset):
             projected_mean = projected_mean.asnumpy().astype(images.dtype)
             images -= projected_mean 
         images = images.shift(-src.offsets)
+        images = images/src.amplitudes[:,np.newaxis,np.newaxis]
         self.resolution = src.L
         self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution #Normalize so the norm is 1 with respect to the inner prod vec1^T * vec2 / L**2 
-        self.images = torch.tensor(images.asnumpy())
+        self.images = torch.tensor(images)
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         self.pts_rot = self.pts_rot.transpose(0,1) 
         self.noise_var = noise_var
