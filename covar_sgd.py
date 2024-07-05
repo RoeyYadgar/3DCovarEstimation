@@ -130,7 +130,7 @@ class CovarTrainer():
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
-        cost_val,vectors = self.covar.forward(images,nufft_plans,filters,self.noise_var,self.reg)
+        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,self.reg)
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
