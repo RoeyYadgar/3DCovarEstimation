@@ -2,6 +2,7 @@ from utils import principalAngles , cosineSimilarity , sim2imgsrc , nonNormalize
 import os
 import torch
 from torch.utils.data import Dataset
+from aspire.utils import support_mask
 import numpy as np
 from tqdm import tqdm
 import copy
@@ -31,7 +32,6 @@ class CovarDataset(Dataset):
         images = images.shift(-src.offsets)
         images = images/src.amplitudes[:,np.newaxis,np.newaxis]
         self.resolution = src.L
-        self.im_norm_factor = np.mean(np.linalg.norm(images[:],axis=(1,2))) / self.resolution #Normalize so the norm is 1 with respect to the inner prod vec1^T * vec2 / L**2 
         self.images = torch.tensor(images)
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
         self.pts_rot = self.pts_rot.transpose(0,1) 
@@ -48,6 +48,8 @@ class CovarDataset(Dataset):
         for i in range(num_filters):
             self.unique_filters[i] = torch.tensor(src.unique_filters[i].evaluate_grid(src.L))
    
+        self.filters_gain = self.estimate_filters_gain()
+        self.signal_var = self.estimate_signal_var()
     def __len__(self):
         return len(self.images)
     
@@ -87,6 +89,40 @@ class CovarDataset(Dataset):
 
     def copy(self):
         return copy.deepcopy(self)
+    
+
+    def estimate_signal_var(self,support_radius = None,batch_size=512):
+        #Estimates the signal variance per pixel
+        #TODO : use different estimation in low SNR?
+        L = self.images.shape[-1]
+        mask = torch.tensor(support_mask(L,support_radius))
+        mask_size = torch.sum(mask)
+        
+        estimated_var = 0
+        for i in range(0,len(self.images),batch_size):
+            images_masked = self.images[i:i+batch_size][:,mask]
+            estimated_var += torch.sum(images_masked**2)/(len(self.images) * mask_size)
+
+        estimated_var -= self.noise_var 
+        estimated_var /= self.filters_gain
+        
+
+        return estimated_var
+    
+    def estimate_filters_gain(self):
+        #TODO : weighted average based on number of usages of each unique_filter
+        #TODO : weighted sum with spectrum of genertic particle
+        L = self.images.shape[-1]
+        num_filters = len(self.unique_filters)
+        if(num_filters == 0): #When there are no filters the gain is 1
+            return 1
+        
+        estimated_filters_gain = 0
+        for i in range(num_filters):
+            estimated_filters_gain += (torch.norm(self.unique_filters[i]) ** 2)/(num_filters * L**2)
+
+        return estimated_filters_gain
+        
 
 def dataset_collate(batch):
     images,plans = zip(*batch)
@@ -174,13 +210,15 @@ class CovarTrainer():
 
         lr *= self.train_data.batch_size #Scale learning rate with batch size
         #lr *= (self.train_data.dataset.resolution**4) # Cost function scales with L^(-4)
-        lr /= self.train_data.dataset.im_norm_factor ** 2 # Cost function scales with amplitude^2 #TODO : figure out why amplitude^2
-
+        
         if(optim_type == 'SGD'):
+            lr /= self.train_data.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
+            lr /= self.train_data.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
         scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,step_size = 1, gamma = gamma_lr)
+        reg /= self.train_data.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
         self.reg = reg
         for epoch in range(max_epochs):
             self.run_epoch(epoch)
@@ -307,7 +345,7 @@ def frobeniusNormDiff(vec1,vec2):
     return torch.sqrt(normdiff_squared)
 
 
-def evalCovarEigs(dataset,eigs,batch_size = 8):
+def evalCovarEigs(dataset,eigs,batch_size = 8,reg=0):
     device = eigs.device
     filters = dataset.unique_filters.to(device)
     num_eigs = eigs.shape[0]
@@ -323,7 +361,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8):
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
         for j in range(num_ims):
             nufft_plans[j].setpts(pts_rot[j])
-        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,reg=0) * batch_size
+        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,reg=reg) * batch_size
         cost_val += cost_term
    
     return cost_val/len(dataset)
