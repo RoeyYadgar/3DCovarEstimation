@@ -30,7 +30,7 @@ class CovarDataset(Dataset):
             projected_mean = projected_mean.asnumpy().astype(images.dtype)
             images -= projected_mean 
         images = images.shift(-src.offsets)
-        images = images/src.amplitudes[:,np.newaxis,np.newaxis]
+        images = images/(src.amplitudes[:,np.newaxis,np.newaxis].astype(images.dtype))
         self.resolution = src.L
         self.images = torch.tensor(images)
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
@@ -205,20 +205,28 @@ class CovarTrainer():
 
                 pbar.update(1)
     
-    def train(self,max_epochs,lr = 5e-5,momentum = 0.9,optim_type = 'SGD',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False):
+    def train(self,max_epochs,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False,scale_params = True):
+
         self.use_orthogonal_projection = orthogonal_projection
 
-        lr *= self.train_data.batch_size #Scale learning rate with batch size
-        #lr *= (self.train_data.dataset.resolution**4) # Cost function scales with L^(-4)
+        if(lr is None):
+            lr = 1e-2 if optim_type == 'Adam' else 1e3 #Default learning rate for Adam/SGD optimizer
+
+        if(scale_params):
+            lr *= self.train_data.batch_size #Scale learning rate with batch size
+            reg *= self.train_data.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
+        
         
         if(optim_type == 'SGD'):
-            lr /= self.train_data.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
-            lr /= self.train_data.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
+            if(scale_params):
+                lr /= self.train_data.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
+                lr /= self.train_data.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
         scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,step_size = 1, gamma = gamma_lr)
-        reg /= self.train_data.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
+
+        
         self.reg = reg
         for epoch in range(max_epochs):
             self.run_epoch(epoch)
@@ -262,13 +270,13 @@ class CovarTrainer():
         torch.save(ckp,self.save_path)
                 
 class Covar(torch.nn.Module):
-    def __init__(self,resolution,rank,dtype = torch.float32,vectors = None):
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,vectors = None):
         super().__init__()
         self.resolution = resolution
         self.rank = rank
         self.dtype = dtype
         if(vectors is None):
-            self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype))/(self.resolution ** 1) 
+            self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype)) * (pixel_var_estimate ** 0.5)
         else:
             self.vectors = torch.clone(vectors)
         self.vectors.requires_grad = True 
