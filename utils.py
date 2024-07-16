@@ -87,21 +87,7 @@ def nonNormalizedGS(vecs):
     return ortho_vecs
 
 def cosineSimilarity(vec1,vec2):
-    '''
-    vec1 = asnumpy(vec1).reshape((vec1.shape[0],-1))
-    vec2 = asnumpy(vec2).reshape((vec2.shape[0],-1))
-    
-    #vec1_norm = np.linalg.norm(vec1,axis=(-1)).reshape((vec1.shape[0],1))
-    #vec2_norm = np.linalg.norm(vec2,axis=(-1)).reshape((vec2.shape[0],1))
-    
-    #vec1 = vec1/vec1_norm
-    #vec2 = vec2/vec2_norm
-    
-    vec1 = np.linalg.svd(vec1,full_matrices=False)[2]
-    vec2 = np.linalg.svd(vec2,full_matrices=False)[2]
-    
-    cosine_sim = np.matmul(vec1,vec2.transpose())
-    '''
+
     vec1 = vec1.reshape((vec1.shape[0],-1))
     vec2 = vec2.reshape((vec2.shape[0],-1))
     vec1 = torch.linalg.svd(vec1,full_matrices = False)[2]
@@ -180,3 +166,17 @@ def estimateMean(source,basis = None):
     mean_est = mean_estimator.estimate()
 
     return mean_est
+
+def vol_fsc(vol1,vol2):
+    if(type(vol1) != type(vol2)):
+        raise Exception(f'Volumes of the same type expected vol1 is of type {type(vol1)} while vol2 is of type {type(vol2)}')
+
+    if(type(vol1) == aspire.volume.Volume):
+        return vol1.fsc(vol2)
+    
+    elif(type(vol1) == torch.Tensor):
+        #TODO : implement faster FSC for torch tensors
+        vol1 = Volume(vol1.cpu().numpy())
+        vol2 = Volume(vol2.cpu().numpy())
+
+        return vol1.fsc(vol2)
