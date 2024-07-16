@@ -38,8 +38,8 @@ class IterativeCovarTrainer(CovarTrainer):
             
 
 class IterativeCovar(Covar):
-    def __init__(self,resolution,rank,dtype= torch.float32):
-        super().__init__(resolution,1,dtype)
+    def __init__(self,resolution,rank,dtype= torch.float32,pixel_var_estimate = 1):
+        super().__init__(resolution,1,dtype,pixel_var_estimate)
         self.rank = rank
         
         self.current_estimated_rank = 0
@@ -74,7 +74,7 @@ class IterativeCovar(Covar):
             
             self.fixed_vectors.data[self.current_estimated_rank] = normalized_vector
             self.fixed_vectors_ampl.data[self.current_estimated_rank] = vector_ampl 
-            self.vectors.data.copy_((torch.randn((1,self.resolution,self.resolution,self.resolution),dtype=self.dtype))/(self.resolution ** 1))
+            self.vectors.data.copy_(self.init_random_vectors(1))
             self.current_estimated_rank += 1
 
     def state_dict(self,*args,**kwargs):

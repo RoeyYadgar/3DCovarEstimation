@@ -275,13 +275,16 @@ class Covar(torch.nn.Module):
         self.resolution = resolution
         self.rank = rank
         self.dtype = dtype
+        self.pixel_var_estimate = pixel_var_estimate
         if(vectors is None):
-            self.vectors = (torch.randn((rank,resolution,resolution,resolution),dtype=self.dtype)) * (pixel_var_estimate ** 0.5)
+            self.vectors = self.init_random_vectors(rank)
         else:
             self.vectors = torch.clone(vectors)
         self.vectors.requires_grad = True 
         self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
 
+    def init_random_vectors(self,num_vectors):
+        return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
 
     def cost(self,images,nufft_plans,filters,noise_var,reg = 0):
         return cost(self.vectors,images,nufft_plans,filters,noise_var,reg)
