@@ -11,17 +11,6 @@ from aspire.volume import rotated_grids
 from nufft_plan import NufftPlan
 from projection_funcs import vol_forward
 
-def ptsrot2nufftplan(pts_rot,img_size,**kwargs):
-    num_plans = pts_rot.shape[0] #pts_rot has a shape [num_images,3,L^2]
-    plans = []
-    for i in range(num_plans):
-        #plan = NufftPlan((img_size,)*3,gpu_method=1,gpu_sort=0,**kwargs)
-        plan = NufftPlan((img_size,)*3,**kwargs)
-        plan.setpts(pts_rot[i]) 
-        plans.append(plan)
-
-    return plans
-
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None):
         images = src.images[:]
@@ -73,7 +62,7 @@ class CovarDataset(Dataset):
         dataset = self.copy() if copy_dataset else self
 
         
-        nufft_plan = NufftPlan((self.resolution,)*3,batch_size=num_vols,dtype=vol.dtype,gpu_device_id = device.index,gpu_method=1,gpu_sort = 0)
+        nufft_plan = NufftPlan((self.resolution,)*3,batch_size=num_vols,dtype=vol.dtype,device = device)
 
         for i in range(len(dataset)):
             _,pts_rot,filter_ind = dataset[i]
@@ -140,12 +129,11 @@ class CovarTrainer():
         rank = vectors.shape[0]
         dtype = vectors.dtype
         vol_shape = vectors.shape[1:] 
-        #TODO : check gpu_sort effect
-        self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for i in range(self.batch_size)]
+        self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,device=device) for i in range(self.batch_size)]
         self.filters = train_data.dataset.unique_filters.to(self.device)
         self.noise_var = train_data.dataset.noise_var
 
-        self.logTraining = self.device.index == 0 #Only log training on the first gpu
+        self.logTraining = self.device.index == 0 or self.device == torch.device('cpu') #Only log training on the first gpu
         self.training_log_freq = training_log_freq
         if(self.logTraining):
             self.vectorsGD = train_data.dataset.vectorsGD
@@ -283,6 +271,10 @@ class Covar(torch.nn.Module):
         self.vectors.requires_grad = True 
         self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
 
+    @property
+    def device(self):
+        return self.vectors.device
+
     def init_random_vectors(self,num_vectors):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
 
@@ -361,7 +353,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg=0):
     filters = dataset.unique_filters.to(device)
     num_eigs = eigs.shape[0]
     L = eigs.shape[1]
-    nufft_plans = [NufftPlan((L,)*3,batch_size=num_eigs,dtype = eigs.dtype,gpu_device_id = device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
+    nufft_plans = [NufftPlan((L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device) for i in range(batch_size)]
 
     cost_val = 0
     for i in range(0,len(dataset),batch_size):
@@ -380,8 +372,6 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg=0):
 
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True)
-    device = torch.device('cuda:0')
-    covar_model = covar_model.to(device)
-    trainer = CovarTrainer(covar_model,dataloader,device,savepath)
+    trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
     trainer.train(**kwargs) 
     return

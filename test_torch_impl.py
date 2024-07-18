@@ -61,7 +61,7 @@ class TestTorchImpl(unittest.TestCase):
         filters = self.dataset.unique_filters[filter_inds].to(self.device)
         plans = []
         for i in range(num_ims):
-            plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,gpu_device_id = self.device.index,gpu_method=1,gpu_sort = 0)
+            plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
             plan.setpts(pts_rot[i]) 
             plans.append(plan)
 
@@ -76,14 +76,14 @@ class TestTorchImpl(unittest.TestCase):
         cost_val.backward()
 
         scaled_vols_grad = scaled_vols.grad.clone()
-        torch.testing.assert_close((scaled_vols_grad/vols_grad).to('cpu'), (scaling_param**3) * torch.ones(vols_grad.shape), rtol=5e-3,atol=5e-3)
+        torch.testing.assert_close((scaled_vols_grad).to('cpu'), (scaling_param**3) * vols_grad.to('cpu'), rtol=5e-3,atol=5e-3)
 
         vols.grad.zero_()
         #When the filters are scaled by alpha (and SNR is preseverd) the cost gradient should scale by alpha ** 4 as well as the regularization parameter.
         cost_val = cost(vols,images*scaling_param,plans,filters*scaling_param,noise_var * (scaling_param ** 2),reg=reg*(scaling_param**4))
         cost_val.backward()
         scaled_filters_grid = vols.grad.clone()
-        torch.testing.assert_close((scaled_filters_grid/vols_grad).to('cpu'), (scaling_param**4) * torch.ones(vols_grad.shape), rtol=5e-3,atol=5e-3)
+        torch.testing.assert_close((scaled_filters_grid).to('cpu'), (scaling_param**4) * vols_grad.to('cpu'), rtol=5e-3,atol=5e-3)
 
     def test_cost_gradient_resolution_scaling(self):
         #TODO : check if When the resolution is scaled by alpha is the gradient scaled by alpha ** 3?
@@ -100,7 +100,7 @@ class TestTorchImpl(unittest.TestCase):
         vols = torch.randn((rank,self.img_size,self.img_size,self.img_size),dtype = torch.float32,requires_grad = True,device=self.device)
         plans = []
         for i in range(num_ims):
-            plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,gpu_device_id = self.device.index,gpu_method=1,gpu_sort = 0)
+            plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
             plan.setpts(pts_rot[i]) 
             plans.append(plan)
 
@@ -121,7 +121,7 @@ class TestTorchImpl(unittest.TestCase):
         
         plans = []
         for i in range(num_ims):
-            plan = nufft_plan.NufftPlan((img_size_ds,)*3,batch_size = rank,dtype = torch.float32,gpu_device_id = self.device.index,gpu_method=1,gpu_sort = 0)
+            plan = nufft_plan.NufftPlan((img_size_ds,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
             plan.setpts(pts_rot[i]) 
             plans.append(plan)
 

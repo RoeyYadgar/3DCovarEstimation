@@ -1,12 +1,14 @@
 import torch
-from cufinufft import Plan 
+from cufinufft import Plan as cuPlan 
+from finufft import Plan
 import numpy as np
 
 
 class NufftPlan():
-    def __init__(self,sz,batch_size = 1,eps = 1e-6,dtype = torch.float32,**kwargs):
+    def __init__(self,sz,batch_size = 1,eps = 1e-6,dtype = torch.float32,device = torch.device('cpu'),**kwargs):
         self.sz = sz
         self.batch_size = batch_size
+        self.device = device
         if(dtype == torch.float32 or dtype == torch.complex64):
             self.dtype = torch.float32
             self.complex_dtype = torch.complex64
@@ -18,28 +20,44 @@ class NufftPlan():
             
         eps = max(eps, np.finfo(np_dtype).eps * 10) #dtype determines determines the eps bottleneck
 
-        self.forward_plan = Plan(nufft_type = 2,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,**kwargs)
-        self.adjoint_plan = Plan(nufft_type = 1,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,**kwargs)
+        if(device == torch.device('cpu')):
+            self.forward_plan = Plan(nufft_type = 2,n_modes_or_dim=self.sz,n_trans=batch_size, eps = eps, dtype = np_dtype,**kwargs)
+            self.adjoint_plan = Plan(nufft_type = 1,n_modes_or_dim=self.sz,n_trans=batch_size, eps = eps, dtype = np_dtype,**kwargs)
+        else: #GPU device
+            #TODO : check gpu_sort effect
+            default_kwargs = {'gpu_method':1,'gpu_sort' : 0}
+            default_kwargs.update(kwargs)
+            self.forward_plan = cuPlan(nufft_type = 2,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,gpu_device_id = device.index,**default_kwargs)
+            self.adjoint_plan = cuPlan(nufft_type = 1,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,gpu_device_id = device.index,**default_kwargs)
 
 
     def setpts(self,points):
+        points = (torch.remainder(points + torch.pi , 2 * torch.pi) - torch.pi).contiguous()
+        if(self.device == torch.device('cpu')):
+            points = points.numpy() #finufft plan does not accept torch tensors
         #Clean references to past points (preventing a memory leak)
         self.forward_plan._references = []
         self.adjoint_plan._references = []
-        points = (torch.remainder(points + torch.pi , 2 * torch.pi) - torch.pi).contiguous()        
+                
         self.forward_plan.setpts(*points)
         self.adjoint_plan.setpts(*points)
 
     def execute_forward(self,signal):
         signal = signal.type(self.complex_dtype).contiguous()
+        if(self.device == torch.device('cpu')):
+            signal = signal.numpy()
         forward_signal = self.forward_plan.execute(signal).reshape((self.batch_size,-1))
-
+        if(self.device == torch.device('cpu')):
+            forward_signal = torch.from_numpy(forward_signal)
         return forward_signal
     
     def execute_adjoint(self,signal):
         signal = signal.type(self.complex_dtype).contiguous()
+        if(self.device == torch.device('cpu')):
+            signal = signal.numpy()
         adjoint_signal = self.adjoint_plan.execute(signal.reshape((self.batch_size,-1)))
-
+        if(self.device == torch.device('cpu')):
+            adjoint_signal = torch.from_numpy(adjoint_signal)
         return adjoint_signal
         
 
@@ -54,7 +72,7 @@ class TorchNufftForward(torch.autograd.Function):
         return nufft_plan.execute_forward(signal)
     
     @staticmethod
-    def backward(ctx,grad_output):
+    def backward(ctx,grad_output): #Since nufft_plan referenced is saved on the context, set_pts cannot be called before using backward (otherwise it will compute the wrong adjoint transformation)
         nufft_plan = ctx.nufft_plan
         signal_grad = nufft_plan.execute_adjoint(grad_output).reshape(ctx.signal_shape)
         if(not ctx.complex_input): #If input to forward method is real the gradient should also be real

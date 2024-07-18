@@ -94,7 +94,7 @@ class IterativeCovarTrainerVer2(CovarTrainer):
     def train(self,*args,**kwargs):
         for i in range(self.covar.rank):
             if(i != 0):
-                self.nufft_plans = [NufftPlan(self.covar.vectors.shape[1:],batch_size=i+1,dtype = self.covar.vectors.dtype,gpu_device_id = self.device.index,gpu_method = 1,gpu_sort = 0) for _ in range(self.batch_size)] #Update batch size of nufft plans (which is the number of volumes to project) 
+                self.nufft_plans = [NufftPlan(self.covar.vectors.shape[1:],batch_size=i+1,dtype = self.covar.vectors.dtype,device=self.device) for _ in range(self.batch_size)] #Update batch size of nufft plans (which is the number of volumes to project) 
             super().train(*args,**kwargs)
             self.covar.fix_vector()
             

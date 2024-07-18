@@ -20,7 +20,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8,start_ind = None,en
     if(len(eigenvals.shape) == 1):
         eigenvals = torch.diag(eigenvals)
 
-    nufft_plans = [NufftPlan((L,)*3,batch_size=rank,dtype = dtype,gpu_device_id = device.index,gpu_method = 1,gpu_sort = 0) for i in range(batch_size)]
+    nufft_plans = [NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device) for i in range(batch_size)]
     coords = torch.zeros((end_ind-start_ind,rank),device=device)
     if(return_eigen_forward):
         eigen_forward_images = torch.zeros((end_ind-start_ind,rank,L,L),dtype=dtype)
