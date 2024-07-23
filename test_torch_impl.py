@@ -86,18 +86,18 @@ class TestTorchImpl(unittest.TestCase):
         torch.testing.assert_close((scaled_filters_grid).to('cpu'), (scaling_param**4) * vols_grad.to('cpu'), rtol=5e-3,atol=5e-3)
 
     def test_cost_gradient_resolution_scaling(self):
-        #TODO : check if When the resolution is scaled by alpha is the gradient scaled by alpha ** 3?
-        num_ims = 20
-        rank = 4
-        reg = 0
-        noise_var = 0
+        num_ims = 1
+        rank = 2
+        reg = 1e-4
+        noise_var = 1
 
         rots = Rotation.generate_random_rotations(num_ims).matrices
 
         pts_rot = torch.tensor(rotated_grids(self.img_size,rots).copy(),device=self.device,dtype=torch.float32).reshape((3,num_ims,self.img_size**2))
         pts_rot = pts_rot.transpose(0,1)
 
-        vols = torch.randn((rank,self.img_size,self.img_size,self.img_size),dtype = torch.float32,requires_grad = True,device=self.device)
+        vols = torch.tensor(LegacyVolume(L=self.img_size,C=rank,dtype=np.float32,).generate().asnumpy().reshape(rank,self.img_size,self.img_size,self.img_size),dtype=torch.float32,requires_grad=True,device=self.device)
+
         plans = []
         for i in range(num_ims):
             plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
@@ -108,7 +108,7 @@ class TestTorchImpl(unittest.TestCase):
         for i in range(num_ims):
             images[i] = vol_forward(vols,plans)[i,i%rank]
 
-        cost_val = cost(vols,images,plans,None,noise_var,reg = reg)
+        cost_val = cost(vols,2*images,plans,None,noise_var,reg = reg)
         cost_val.backward()
         vols_grad = vols.grad.clone()
 
@@ -129,13 +129,13 @@ class TestTorchImpl(unittest.TestCase):
         for i in range(num_ims):
             images_ds[i] = vol_forward(vols_ds,plans)[i,i%rank]
 
-        cost_val = cost(vols_ds,images_ds,plans,None,noise_var,reg = reg)
+        cost_val = cost(vols_ds,2*images_ds,plans,None,noise_var * (2 ** (-2)),reg = reg * (2 ** 2))
         cost_val.backward()
         vols_grad_ds = vols_ds.grad.clone()
-        
-        print(torch.norm(vols_grad))
-        print(torch.norm(vols_grad_ds))
-        print(torch.norm(vols_grad)/torch.norm(vols_grad_ds))
+  
+
+        downsampled_vols_grad = torch.tensor(Volume(vols_grad.cpu().numpy()).downsample(img_size_ds).asnumpy())
+        torch.testing.assert_close(torch.norm(downsampled_vols_grad), torch.norm(vols_grad_ds.cpu() * 2),rtol=3e-2,atol=1e-1)
 
     def test_projection_resolution_scaling(self):
         n = 8
@@ -160,9 +160,9 @@ class TestTorchImpl(unittest.TestCase):
         norm_images2 = np.linalg.norm(sim.images[:],axis=(1,2))
         norm_backproj2 = np.linalg.norm(sim.images[0].backproject(rots[0].reshape((1,3,3))))
         
-        print(norm_vol2/norm_vol1)
-        print(norm_images2/norm_images1)
-        print(norm_backproj2/norm_backproj1)
+        np.testing.assert_allclose(norm_vol2/norm_vol1,(L2/L1) ** 1.5 , rtol=1e-1,atol=1e-1)
+        np.testing.assert_allclose(norm_images2/norm_images1,(L2/L1) ** 1 , rtol=1e-1,atol=1e-1)
+        np.testing.assert_allclose(norm_backproj2/norm_backproj1,(L2/L1) ** 0.5 , rtol=1e-1,atol=1e-1)
 
 if __name__ == "__main__":
     

@@ -198,23 +198,26 @@ class CovarTrainer():
         self.use_orthogonal_projection = orthogonal_projection
 
         if(lr is None):
-            lr = 1e-2 if optim_type == 'Adam' else 1e3 #Default learning rate for Adam/SGD optimizer
+            lr = 1e-2 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
 
         if(scale_params):
             lr *= self.train_data.batch_size #Scale learning rate with batch size
             reg *= self.train_data.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
+            reg /= self.covar.resolution ** 2 #gradient of cost function scales linearly with L while regulriaztion scales with L^3
         
         
         if(optim_type == 'SGD'):
             if(scale_params):
                 lr /= self.train_data.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
                 lr /= self.train_data.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
+                #TODO : expirmantation suggests that normalizng lr by resolution is not needed. why?
+                #lr /= self.covar.resolution #gradient of cost function scales linearly with L
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
         scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,step_size = 1, gamma = gamma_lr)
 
-        
+        print(f'Actual learning rate {lr}')
         self.reg = reg
         for epoch in range(max_epochs):
             self.run_epoch(epoch)
@@ -310,9 +313,8 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
     L = vols.shape[-1]
     projected_vols = vol_forward(vols,nufft_plans,filters)
 
-    images = images.reshape((batch_size,1,-1))/L
-    projected_vols = projected_vols.reshape((batch_size,rank,-1))/L
-    noise_var /= L**2
+    images = images.reshape((batch_size,1,-1))
+    projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
     norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
@@ -328,7 +330,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
     cost_val = torch.mean(cost_val,dim=0)
             
     if(reg != 0):
-        vols = vols.reshape((rank,-1))/(L ** 1.5)
+        vols = vols.reshape((rank,-1))
         vols_prod = torch.matmul(vols,vols.transpose(0,1))
         reg_cost = torch.sum(torch.pow(vols_prod,2))
         cost_val += reg * reg_cost
