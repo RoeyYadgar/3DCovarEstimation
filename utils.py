@@ -180,3 +180,18 @@ def vol_fsc(vol1,vol2):
         vol2 = Volume(vol2.cpu().numpy())
 
         return vol1.fsc(vol2)
+
+def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True):
+    classnum_arg = f' --class {classnum}' if classnum is not None else ''
+    inputfile_path,inputfile_name = os.path.split(inputfile)
+    #outputfile_rel = os.path.relpath(outputfile,inputfile_path)
+    outputfile_abs = os.path.abspath(outputfile)
+    if(overwrite or (not os.path.isfile(outputfile))):
+        os.system(f'cd {inputfile_path} && relion_reconstruct --i {inputfile_name} --o {outputfile_abs} --ctf' + classnum_arg)
+        #compensate for volume sign inversion and normalization by image size in relion
+        vol = (-1 * Volume.load(outputfile))
+        vol*=vol.shape[-1]
+        vol.save(outputfile,overwrite=True)
+    else:
+        vol = Volume.load(outputfile)
+    return vol
