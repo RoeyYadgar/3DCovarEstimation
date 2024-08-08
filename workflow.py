@@ -53,9 +53,12 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
-def covar_workflow(starfile,covar_rank,whiten=True,noise_estimator = 'anisotropic',generate_figs = True,save_data = True):
+def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',generate_figs = True,save_data = True):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
+    result_dir = path.join(data_dir,'result_data')
+    if(not path.isdir(result_dir)):
+        os.mkdir(result_dir)
     pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
     source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
     L = source.L
@@ -72,16 +75,18 @@ def covar_workflow(starfile,covar_rank,whiten=True,noise_estimator = 'anisotropi
     else:
         noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
         noise_var = noise_estimator.estimate()
+    
+    mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = False)
 
-    mean_est = relionReconstruct(starfile,path.join(data_dir,'mean_est.mrc'),overwrite = False)
-    #scale_const = normalizeRelionVolume(mean_est,source)
-
-    #Estimate ground truth states:
-    class_vols = reconstructClass(starfile,path.join(data_dir,'class_vols.mrc'))
-    #Compute ground truth eigenvectors
-    _,counts = np.unique(source.states,return_counts=True)
-    states_dist = counts/np.sum(counts)
-    covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
+    if(covar_eigenvecs is None):
+        #Estimate ground truth states:
+        class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
+        #Compute ground truth eigenvectors
+        _,counts = np.unique(source.states,return_counts=True)
+        states_dist = counts/np.sum(counts)
+        covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
+    else:
+        covar_eigenvecs_gd = covar_eigenvecs.asnumpy().reshape((covar_rank,-1))
 
     #Print useful info TODO: use log files
     print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
@@ -89,9 +94,8 @@ def covar_workflow(starfile,covar_rank,whiten=True,noise_estimator = 'anisotropi
     print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
 
     #Perform optimization for eigenvectors estimation
-    result_dir = path.join(data_dir,'result_data')
-    if(not path.isdir(result_dir)):
-        os.mkdir(result_dir)
+    
+
     dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
     cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var)
     trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
@@ -117,7 +121,7 @@ def covar_workflow(starfile,covar_rank,whiten=True,noise_estimator = 'anisotropi
 
     #Generate plots
     if(generate_figs):
-        fig_dir = path.join(data_dir,'result_figures')
+        fig_dir = path.join(result_dir,'result_figures')
         if(not path.isdir(fig_dir)):
             os.mkdir(fig_dir)
         f = plt.figure()
@@ -137,7 +141,7 @@ def covar_workflow(starfile,covar_rank,whiten=True,noise_estimator = 'anisotropi
 
         f = plt.figure()
         ax = plt.axes()
-        training_data = torch.load(path.join(data_dir,'training_results.bin'))
+        training_data = torch.load(path.join(result_dir,'training_results.bin'))
         ax.plot([np.diag(c) for c in training_data['log_cosine_sim']])
         ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
         ax.figure.savefig(path.join(fig_dir,'training_cosine_sim.jpg'))
@@ -150,4 +154,6 @@ def covar_workflow(starfile,covar_rank,whiten=True,noise_estimator = 'anisotropi
             pickle.dump(data_dict,fid)
 
 if __name__ == "__main__":
-    covar_workflow('/scratch/roaiyadgar/data/cryoDRGN_dataset/uniform/particles.128.ctf_preprocessed_L64.star',covar_rank = 5,whiten=True)
+    #covar_workflow('/scratch/roaiyadgar/data/cryoDRGN_dataset/uniform/particles.128.ctf_preprocessed_L64.star',covar_rank = 5,whiten=True)
+    recovar_eigenvecs = aspire.volume.Volume.load('/scratch/roaiyadgar/data/empiar10076/result_data/recovar_eigenvecs.mrc')
+    covar_workflow('/scratch/roaiyadgar/data/empiar10076/L17Combine_weight_local_preprocessed_L64.star',covar_rank = 5,covar_eigenvecs=recovar_eigenvecs,whiten=True)

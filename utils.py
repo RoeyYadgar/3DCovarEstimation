@@ -195,3 +195,15 @@ def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True):
     else:
         vol = Volume.load(outputfile)
     return vol
+
+
+def readVols(volfiles):
+    numvols = len(volfiles)
+    vol_size = Volume.load(volfiles[0]).shape[-1]
+    volumes = Volume(np.zeros((numvols,vol_size,vol_size,vol_size),dtype=np.float32))
+
+    for i,volfile in enumerate(volfiles):
+        volumes[i] = Volume.load(volfile)
+
+    return volumes
+    
