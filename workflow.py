@@ -18,6 +18,7 @@ def reconstructClass(starfile_path,vol_path,overwrite = False):
     '''
     starfile = aspire.storage.StarFile(starfile_path)
     classes = np.unique(starfile['particles']['_rlnClassNumber'])
+    classes = classes[np.where(classes.astype(np.float32)!=-1)] #unindentified images are labeled with class = -1 
     img_size = int(float(starfile['optics']['_rlnImageSize'][0]))
     
     is_vol_path_dir = path.isdir(vol_path)
@@ -61,6 +62,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         os.mkdir(result_dir)
     pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
     source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
+    source = source.normalize_background()
     L = source.L
 
     
@@ -82,7 +84,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         #Estimate ground truth states:
         class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
         #Compute ground truth eigenvectors
-        _,counts = np.unique(source.states,return_counts=True)
+        _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
         states_dist = counts/np.sum(counts)
         covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
     else:
@@ -101,7 +103,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
                     batch_size = 32,
                     max_epochs = 10,
-                    lr = 1e-2,optim_type = 'Adam',
+                    lr = 1e-2,optim_type = 'Adam', #TODO : refine learning rate and reg values
                     reg = 1e-6,
                     gamma_lr = 0.8,
                     gamma_reg = 0.8,
@@ -118,6 +120,14 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     coords_GD = wiener_coords(dataset,torch.tensor(eigenvectors_GD).to('cuda:0'),torch.tensor(eigenvals_GD).to('cuda:0'),8)
     
     print(f'Eigenvalues of estimated covariance {eigenval_est}')
+
+
+    if(save_data):
+        data_dict = {'eigen_est' : eigen_est, 'eigenval_est' : eigenval_est,
+                     'eigenvals_GD' : eigenvals_GD,'eigenvectors_GD' : eigenvectors_GD,
+                      'coords_est' : coords_est,'coords_GD' : coords_GD}
+        with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
+            pickle.dump(data_dict,fid)
 
     #Generate plots
     if(generate_figs):
@@ -146,14 +156,10 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
         ax.figure.savefig(path.join(fig_dir,'training_cosine_sim.jpg'))
 
-    if(save_data):
-        data_dict = {'eigen_est' : eigen_est, 'eigenval_est' : eigenval_est,
-                     'eigenvals_GD' : eigenvals_GD,'eigenvectors_GD' : eigenvectors_GD,
-                      'coords_est' : coords_est,'coords_GD' : coords_GD}
-        with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
-            pickle.dump(data_dict,fid)
+
 
 if __name__ == "__main__":
     #covar_workflow('/scratch/roaiyadgar/data/cryoDRGN_dataset/uniform/particles.128.ctf_preprocessed_L64.star',covar_rank = 5,whiten=True)
-    recovar_eigenvecs = aspire.volume.Volume.load('/scratch/roaiyadgar/data/empiar10076/result_data/recovar_eigenvecs.mrc')
+    #recovar_eigenvecs = aspire.volume.Volume.load('/scratch/roaiyadgar/data/empiar10076/result_data/recovar_eigenvecs.mrc')
+    recovar_eigenvecs = None
     covar_workflow('/scratch/roaiyadgar/data/empiar10076/L17Combine_weight_local_preprocessed_L64.star',covar_rank = 5,covar_eigenvecs=recovar_eigenvecs,whiten=True)
