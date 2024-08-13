@@ -185,9 +185,11 @@ class CovarTrainer():
                     self.log_training(vectors)
                     pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
                     if(self.vectorsGD is not None):
+                        #TODO : update log metrics, use principal angles
                         cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
                         fro_err_val = self.log_fro_err[-1]
                         pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
+                        pbar_description += f" , vecs norm : {torch.norm(vectors)}"
                         pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
                     pbar.set_description(pbar_description)
 
