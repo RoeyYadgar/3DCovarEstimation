@@ -9,7 +9,8 @@ import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
 from nufft_plan import NufftPlan
-from projection_funcs import vol_forward
+from projection_funcs import vol_forward,centered_fft2
+from fsc_utils import FourierShell,average_fourier_shell,sum_over_shell
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None):
@@ -37,8 +38,8 @@ class CovarDataset(Dataset):
         for i in range(num_filters):
             self.unique_filters[i] = torch.tensor(src.unique_filters[i].evaluate_grid(src.L))
    
-        self.filters_gain = self.estimate_filters_gain()
-        self.signal_var = self.estimate_signal_var()
+        self.estimate_filters_gain()
+        self.estimate_signal_var()
     def __len__(self):
         return len(self.images)
     
@@ -82,35 +83,33 @@ class CovarDataset(Dataset):
 
     def estimate_signal_var(self,support_radius = None,batch_size=512):
         #Estimates the signal variance per pixel
-        #TODO : use different estimation in low SNR?
         L = self.images.shape[-1]
         mask = torch.tensor(support_mask(L,support_radius))
         mask_size = torch.sum(mask)
         
-        estimated_var = 0
+        signal_psd = torch.zeros((L,L))
         for i in range(0,len(self.images),batch_size):
             images_masked = self.images[i:i+batch_size][:,mask]
-            estimated_var += torch.sum(images_masked**2)/(len(self.images) * mask_size)
+            images_masked = self.images[i:i+batch_size] * mask
+            signal_psd += torch.sum(torch.abs(centered_fft2(images_masked))**2,axis=0)
+        signal_psd /= len(self.images) * (L ** 2) * mask_size
+        signal_rpsd = average_fourier_shell(signal_psd)
 
-        estimated_var -= self.noise_var 
-        estimated_var /= self.filters_gain
-        
+        noise_psd = torch.ones((L,L)) * self.noise_var / (L**2) 
+        noise_rpsd = average_fourier_shell(noise_psd)
 
-        return estimated_var
-    
+        self.signal_rpsd = (signal_rpsd - noise_rpsd)/(self.radial_filters_gain * L**2)
+        self.signal_var = sum_over_shell(self.signal_rpsd,L,2).item()
+            
     def estimate_filters_gain(self):
-        #TODO : weighted average based on number of usages of each unique_filter
-        #TODO : weighted sum with spectrum of genertic particle
         L = self.images.shape[-1]
-        num_filters = len(self.unique_filters)
-        if(num_filters == 0): #When there are no filters the gain is 1
-            return 1
-        
-        estimated_filters_gain = 0
-        for i in range(num_filters):
-            estimated_filters_gain += (torch.norm(self.unique_filters[i]) ** 2)/(num_filters * L**2)
+        average_filters_gain_spectrum = torch.mean(self.unique_filters ** 2,axis=0) / (L**2)
+        radial_filters_gain = average_fourier_shell(average_filters_gain_spectrum)
+        estimated_filters_gain = sum_over_shell(radial_filters_gain,L,2).item()
 
-        return estimated_filters_gain
+        self.filters_gain = estimated_filters_gain
+        self.radial_filters_gain = radial_filters_gain
+        
         
 
 def dataset_collate(batch):
