@@ -98,14 +98,14 @@ class CovarDataset(Dataset):
         noise_psd = torch.ones((L,L)) * self.noise_var / (L**2) 
         noise_rpsd = average_fourier_shell(noise_psd)
 
-        self.signal_rpsd = (signal_rpsd - noise_rpsd)/(self.radial_filters_gain * L**2)
+        self.signal_rpsd = (signal_rpsd - noise_rpsd)/(self.radial_filters_gain)
         self.signal_var = sum_over_shell(self.signal_rpsd,L,2).item()
             
     def estimate_filters_gain(self):
         L = self.images.shape[-1]
-        average_filters_gain_spectrum = torch.mean(self.unique_filters ** 2,axis=0) / (L**2)
+        average_filters_gain_spectrum = torch.mean(self.unique_filters ** 2,axis=0) 
         radial_filters_gain = average_fourier_shell(average_filters_gain_spectrum)
-        estimated_filters_gain = sum_over_shell(radial_filters_gain,L,2).item()
+        estimated_filters_gain = sum_over_shell(radial_filters_gain,L,2).item() / (L**2)
 
         self.filters_gain = estimated_filters_gain
         self.radial_filters_gain = radial_filters_gain
