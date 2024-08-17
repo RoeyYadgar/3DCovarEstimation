@@ -9,8 +9,8 @@ import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
 from nufft_plan import NufftPlan
-from projection_funcs import vol_forward,centered_fft2
-from fsc_utils import FourierShell,average_fourier_shell,sum_over_shell
+from projection_funcs import vol_forward,centered_fft2,centered_fft3
+from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None):
@@ -142,6 +142,13 @@ class CovarTrainer():
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
+        L = vol_shape[-1]
+        #vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.view_as(vectors))
+        #self.fourier_reg = self.noise_var*(L ** 2) / torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)
+        #self.fourier_reg[torch.inf == self.fourier_reg] = 1e6 #TODO hotfix - change fsc_utils function to increase fourier rpsd resolution to sqrt(2)*L
+        self.fourier_reg = 1e-6 * torch.ones((L,L,L),dtype=dtype,device=device)/(L**1.5)
+        #self.fourier_reg = None
+
         self.save_path = save_path
 
     @property
@@ -153,7 +160,7 @@ class CovarTrainer():
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
-        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,self.reg)
+        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,self.fourier_reg)
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
@@ -189,7 +196,7 @@ class CovarTrainer():
                         fro_err_val = self.log_fro_err[-1]
                         pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
                         pbar_description += f" , vecs norm : {torch.norm(vectors)}"
-                        pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
+                        #pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
                     pbar.set_description(pbar_description)
 
                 pbar.update(1)
@@ -282,12 +289,12 @@ class Covar(torch.nn.Module):
     def init_random_vectors(self,num_vectors):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
 
-    def cost(self,images,nufft_plans,filters,noise_var,reg = 0):
-        return cost(self.vectors,images,nufft_plans,filters,noise_var,reg)
+    def cost(self,images,nufft_plans,filters,noise_var,fourier_reg = 0):
+        return cost(self.vectors,images,nufft_plans,filters,noise_var,fourier_reg)
 
 
-    def forward(self,images,nufft_plans,filters,noise_var,reg):
-        return self.cost(images,nufft_plans,filters,noise_var,reg),self.vectors
+    def forward(self,images,nufft_plans,filters,noise_var,fourier_reg):
+        return self.cost(images,nufft_plans,filters,noise_var,fourier_reg),self.vectors
     
     @property
     def eigenvecs(self):
@@ -308,7 +315,7 @@ class Covar(torch.nn.Module):
 
 
 
-def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
+def cost(vols,images,nufft_plans,filters,noise_var,fourier_reg = None):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = vols.shape[-1]
@@ -330,10 +337,21 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg = 0):
     
     cost_val = torch.mean(cost_val,dim=0)
             
-    if(reg != 0):
-        vols = vols.reshape((rank,-1))
-        vols_prod = torch.matmul(vols,vols.transpose(0,1))
+    if(fourier_reg is not None):
+        vols_fourier = centered_fft3(vols)
+        vols_fourier*= fourier_reg
+        vols_fourier = vols_fourier.reshape((rank,-1))
+        vols_prod = torch.real(torch.matmul(vols_fourier,vols_fourier.transpose(0,1)))
+        #vols_rpsd = average_fourier_shell(*(torch.abs(vols_fourier)**2))
+        #vols_rpsd_reg = torch.ones(L//2,device=vols.device,dtype=vols.dtype)
+        #e = sum([sum_over_shell((vols_rpsd[i] * torch.sqrt(vols_rpsd_reg)),L,3) for i in range(rank)])
+        #from fsc_utils import FourierShell
+        #r = FourierShell.from_tensor(vols[0]).expand_fourier_shell(vols_rpsd_reg)
+        
+        #vols = vols.reshape((rank,-1))
+        #vols_prod = torch.matmul(vols,vols.transpose(0,1))
         reg_cost = torch.sum(torch.pow(vols_prod,2))
+        reg = 1
         cost_val += reg * reg_cost
 
     return cost_val
@@ -367,7 +385,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg=0):
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
         for j in range(num_ims):
             nufft_plans[j].setpts(pts_rot[j])
-        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,reg=reg) * batch_size
+        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,fourier_reg=reg) * batch_size
         cost_val += cost_term
    
     return cost_val/len(dataset)

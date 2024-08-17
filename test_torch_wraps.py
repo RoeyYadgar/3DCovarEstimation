@@ -1,3 +1,4 @@
+#%%
 import unittest
 import numpy as np
 import torch
@@ -164,6 +165,20 @@ class TestTorchWraps(unittest.TestCase):
         vol_forward_torch = vol_forward_torch.cpu().numpy()
 
         np.testing.assert_allclose(vol_forward_torch,vol_forward_aspire,rtol = 1e-3,atol=1e-3)
+
+    def test_vol_project_fourier_slice(self):
+        vol = torch.tensor(self.vols[0].asnumpy(),device=self.device)
+        rot = np.array([np.eye(3)],self.vols.dtype)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device=self.device)
+        plan.setpts(torch.tensor(rotated_grids(self.img_size,rot).copy(),device=self.device).reshape((3,-1)))
+        
+        vol_forward = projection_funcs.vol_forward(vol,plan)
+        vol_forward_fourier = projection_funcs.centered_fft2(vol_forward)[0]
+
+        vol_fourier = projection_funcs.centered_fft3(vol)
+        vol_fourier_slice = vol_fourier[0][self.img_size//2]
+
+        torch.testing.assert_close(vol_fourier_slice, vol_forward_fourier*self.img_size, rtol=5e-3,atol=5e-3)
 
 
 

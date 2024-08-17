@@ -1,6 +1,6 @@
 import torch
 from aspire.utils import grid_2d, grid_3d
-from projection_funcs import centered_fft3
+from projection_funcs import centered_fft2,centered_fft3
 
 class FourierShell():
     def __init__(self,L,dim,dtype=torch.float32,device=torch.device('cpu')):
@@ -36,6 +36,17 @@ class FourierShell():
             return shell_avg[0]
         
         return shell_avg
+    
+    def rpsd(self,*signals):
+        n = len(signals)
+        signals_psd = torch.zeros((n,)+signals[0].shape,dtype=self.dtype,device=self.device)
+        for i in range(n):
+            if(self.dim == 2):
+                signal_fourier = centered_fft2(signals[i])
+            elif(self.dim == 3):
+                signal_fourier = centered_fft3(signals[i])
+            signals_psd[i] = torch.abs(signal_fourier)**2
+        return self.avergage_fourier_shell(*signals_psd)
 
     def sum_over_shell(self,*shells):
         n = len(shells)
@@ -52,13 +63,32 @@ class FourierShell():
             return shell_sum[0]
         
         return shell_sum
+    
 
+    def expand_fourier_shell(self,*shells):
+        n = len(shells)
+        fourier_signal = torch.zeros((len(shells),)+(self.L,)*self.dim,dtype=self.dtype,device=self.device)
+        for i in range(len(shells[0])):
+            lower_rad_threshold = 0.5 + i
+            upper_rad_threshold = 1.5 + i
+            shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
+            for j in range(n):
+                fourier_signal[j][shell_ind] = shells[j][i]
+
+        if(n == 1):
+            return fourier_signal[0]
+        
+
+        return fourier_signal
 
 def average_fourier_shell(*spectrum_signals):
     return FourierShell.from_tensor(spectrum_signals[0]).avergage_fourier_shell(*spectrum_signals)
 
-def expand_fourier_shell(shell,dim):
-    pass
+def rpsd(*signals):
+    return FourierShell.from_tensor(signals[0]).rpsd(*signals)
+
+def expand_fourier_shell(shells,L,dim):
+    return FourierShell(L,dim,shells.dtype,shells.device).expand_fourier_shell(*shells)
 
 def sum_over_shell(shell,L,dim):
     return FourierShell(L,dim,shell.dtype,shell.device).sum_over_shell(shell)
