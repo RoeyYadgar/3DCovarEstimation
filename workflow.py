@@ -95,15 +95,21 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
     print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
 
-    #Perform optimization for eigenvectors estimation
+    dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
+    dataset.states = source.states #TODO : do this at dataset constructor
+
+    covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data)
+
     
 
-    dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
+def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_data = True):
+    L = dataset.images.shape[-1]
+    #Perform optimization for eigenvectors estimation
     cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var)
     trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
                     batch_size = 32,
                     max_epochs = 10,
-                    lr = 1e-2,optim_type = 'Adam', #TODO : refine learning rate and reg values
+                    lr = 1e-3,optim_type = 'Adam', #TODO : refine learning rate and reg values
                     reg = 1e-6,
                     gamma_lr = 0.8,
                     gamma_reg = 0.8,
@@ -115,9 +121,9 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     eigenval_est = eigenval_est.to('cuda:0')
     coords_est = wiener_coords(dataset,eigen_est,eigenval_est)
 
-    eigenvals_GD = np.linalg.norm(covar_eigenvecs_gd,axis=1) ** 2
-    eigenvectors_GD = (covar_eigenvecs_gd / np.sqrt(eigenvals_GD[:,np.newaxis])).reshape((-1,L,L,L))
-    coords_GD = wiener_coords(dataset,torch.tensor(eigenvectors_GD).to('cuda:0'),torch.tensor(eigenvals_GD).to('cuda:0'),8)
+    eigenvals_GD = torch.norm(dataset.vectorsGD,dim=1) ** 2
+    eigenvectors_GD = (dataset.vectorsGD / torch.sqrt(eigenvals_GD).unsqueeze(1)).reshape((-1,L,L,L))
+    coords_GD = wiener_coords(dataset,eigenvectors_GD.to('cuda:0'),eigenvals_GD.to('cuda:0'))
     
     print(f'Eigenvalues of estimated covariance {eigenval_est}')
 
@@ -135,16 +141,16 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         if(not path.isdir(fig_dir)):
             os.mkdir(fig_dir)
         f = plt.figure()
-        plt.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = source.states)
+        plt.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = dataset.states)
         f.savefig(path.join(fig_dir,'wiener_coords_est.jpg'))
 
         f = plt.figure()
-        plt.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = source.states)
+        plt.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = dataset.states)
         f.savefig(path.join(fig_dir,'wiener_coords_gd.jpg'))
 
         f = plt.figure()
         ax = plt.axes()
-        fsc = vol_fsc(Volume(eigen_est.cpu().numpy()),Volume(eigenvectors_GD))
+        fsc = vol_fsc(Volume(eigen_est.cpu().numpy()),Volume(eigenvectors_GD.cpu().numpy()))
         ax.plot(fsc[1].T)
         ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
         ax.figure.savefig(path.join(fig_dir,'eigenvec_fsc.jpg'))
@@ -155,9 +161,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         ax.plot([np.diag(c) for c in training_data['log_cosine_sim']])
         ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
         ax.figure.savefig(path.join(fig_dir,'training_cosine_sim.jpg'))
-
-
-
+    
 if __name__ == "__main__":
     #covar_workflow('/scratch/roaiyadgar/data/cryoDRGN_dataset/uniform/particles.128.ctf_preprocessed_L64.star',covar_rank = 5,whiten=True)
     #recovar_eigenvecs = aspire.volume.Volume.load('/scratch/roaiyadgar/data/empiar10076/result_data/recovar_eigenvecs.mrc')

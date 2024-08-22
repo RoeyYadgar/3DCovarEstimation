@@ -13,6 +13,7 @@ class FourierShell():
         elif(dim == 3):
             grid_func = grid_3d
         self.grid_radius = torch.tensor(grid_func(L,shifted=True,normalized=False)['r'],dtype=dtype,device=device)
+        self.max_radial_resolution = int(torch.ceil(torch.max(self.grid_radius)).item())
 
 
     @staticmethod
@@ -24,7 +25,7 @@ class FourierShell():
     def avergage_fourier_shell(self,*spectrum_signals):
         n = len(spectrum_signals)
         #TODO : what should be done with zero freqeuncy component in odd image length?
-        shell_avg = torch.zeros(n, self.L//2, dtype=self.dtype ,device=self.device)
+        shell_avg = torch.zeros(n, self.max_radial_resolution, dtype=self.dtype ,device=self.device)
         for i in range(shell_avg.shape[1]):
             lower_rad_threshold = 0.5 + i
             upper_rad_threshold = 1.5 + i

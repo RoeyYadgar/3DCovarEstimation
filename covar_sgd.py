@@ -99,6 +99,7 @@ class CovarDataset(Dataset):
         noise_rpsd = average_fourier_shell(noise_psd)
 
         self.signal_rpsd = (signal_rpsd - noise_rpsd)/(self.radial_filters_gain)
+        self.signal_rpsd[self.signal_rpsd < 0] = 0 #in low snr setting the estimatoin for high radial resolution might not be accurate enough
         self.signal_var = sum_over_shell(self.signal_rpsd,L,2).item()
             
     def estimate_filters_gain(self):
@@ -143,11 +144,17 @@ class CovarTrainer():
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
         L = vol_shape[-1]
-        #vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.view_as(vectors))
-        #self.fourier_reg = self.noise_var*(L ** 2) / torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)
-        #self.fourier_reg[torch.inf == self.fourier_reg] = 1e6 #TODO hotfix - change fsc_utils function to increase fourier rpsd resolution to sqrt(2)*L
-        self.fourier_reg = 1e-6 * torch.ones((L,L,L),dtype=dtype,device=device)/(L**1.5)
+        vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.view_as(vectors))
+        self.fourier_reg = self.noise_var*(L ** 2) / torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)
+        #f = self.noise_var*(L ** 2) / torch.mean((vectorsGD_rpsd),dim=0)
+        #self.fourier_reg /= (L**2)*(L**4) #is it not supposed to be have L^2 factor?
+        self.fourier_reg /= (L**2) * (len(self.train_data.dataset) ** 0.5) 
+        self.fourier_reg /= L
+        #self.fourier_reg = (1e-4**(1/4)) * torch.ones((L,L,L),dtype=dtype,device=device)/(L**1.5)
         #self.fourier_reg = None
+
+        self.fourier_reg2 = self.fourier_reg
+        self.fourier_reg = None
 
         self.save_path = save_path
 
@@ -228,6 +235,8 @@ class CovarTrainer():
         print(f'Actual learning rate {lr}')
         self.reg = reg
         for epoch in range(max_epochs):
+            if(epoch == 0):
+                self.fourier_reg = self.fourier_reg2
             self.run_epoch(epoch)
 
             self.reg *= gamma_reg
@@ -339,9 +348,9 @@ def cost(vols,images,nufft_plans,filters,noise_var,fourier_reg = None):
             
     if(fourier_reg is not None):
         vols_fourier = centered_fft3(vols)
-        vols_fourier*= fourier_reg
+        vols_fourier*= torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
-        vols_prod = torch.real(torch.matmul(vols_fourier,vols_fourier.transpose(0,1)))
+        vols_prod = torch.real(torch.matmul(vols_fourier,torch.conj(vols_fourier).transpose(0,1)))
         #vols_rpsd = average_fourier_shell(*(torch.abs(vols_fourier)**2))
         #vols_rpsd_reg = torch.ones(L//2,device=vols.device,dtype=vols.dtype)
         #e = sum([sum_over_shell((vols_rpsd[i] * torch.sqrt(vols_rpsd_reg)),L,3) for i in range(rank)])
