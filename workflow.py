@@ -4,6 +4,7 @@ from os import path
 import pickle
 from matplotlib import pyplot as plt
 import aspire
+from umap import UMAP
 from utils import *
 from covar_sgd import CovarDataset,Covar
 from covar_distributed import trainParallel
@@ -127,11 +128,16 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
     
     print(f'Eigenvalues of estimated covariance {eigenval_est}')
 
+    
+    reducer = UMAP(n_components=2)
+    umap_est = reducer.fit_transform(coords_est.cpu())
+    umap_gd = reducer.fit_transform(coords_GD.cpu())
 
     if(save_data):
         data_dict = {'eigen_est' : eigen_est, 'eigenval_est' : eigenval_est,
                      'eigenvals_GD' : eigenvals_GD,'eigenvectors_GD' : eigenvectors_GD,
-                      'coords_est' : coords_est,'coords_GD' : coords_GD}
+                      'coords_est' : coords_est,'coords_GD' : coords_GD,
+                      'umap_est' : umap_est, 'umap_gd' : umap_gd}
         with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
             pickle.dump(data_dict,fid)
 
@@ -141,12 +147,21 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         if(not path.isdir(fig_dir)):
             os.mkdir(fig_dir)
         f = plt.figure()
-        plt.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = dataset.states)
+        plt.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = dataset.states,s=0.1)
         f.savefig(path.join(fig_dir,'wiener_coords_est.jpg'))
 
         f = plt.figure()
-        plt.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = dataset.states)
+        plt.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = dataset.states,s=0.1)
         f.savefig(path.join(fig_dir,'wiener_coords_gd.jpg'))
+
+        f = plt.figure()
+        plt.scatter(umap_est[:,0],umap_est[:,1],c=dataset.states,s=0.1)
+        f.savefig(path.join(fig_dir,'umap_coords_est.jpg'))
+
+        f = plt.figure()
+        plt.scatter(umap_gd[:,0],umap_gd[:,1],c=dataset.states,s=0.1)
+        f.savefig(path.join(fig_dir,'umap_coords_gd.jpg'))
+
 
         f = plt.figure()
         ax = plt.axes()
