@@ -144,12 +144,12 @@ class CovarTrainer():
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
         L = vol_shape[-1]
-        vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.view_as(vectors))
-        self.fourier_reg = self.noise_var*(L ** 2) / torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)
+        vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.reshape((-1,L,L,L)))
+        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0) * (rank) ** 0.5)
         #f = self.noise_var*(L ** 2) / torch.mean((vectorsGD_rpsd),dim=0)
-        #self.fourier_reg /= (L**2)*(L**4) #is it not supposed to be have L^2 factor?
-        self.fourier_reg /= (L**2) * (len(self.train_data.dataset) ** 0.5) 
-        self.fourier_reg /= L
+        self.reg_scale = 1/(len(self.train_data.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
+        
+        #self.fourier_reg /= L**2
         #self.fourier_reg = (1e-4**(1/4)) * torch.ones((L,L,L),dtype=dtype,device=device)/(L**1.5)
         #self.fourier_reg = None
 
@@ -157,6 +157,9 @@ class CovarTrainer():
         self.fourier_reg = None
 
         self.save_path = save_path
+
+        #from fsc_utils import FourierShell
+        #x = FourierShell.from_tensor(vectors[0]).covar_average_fourier_shell(*train_data.dataset.vectorsGD.view_as(vectors))
 
     @property
     def covar(self):
@@ -167,7 +170,7 @@ class CovarTrainer():
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
-        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,self.fourier_reg)
+        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg)
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
@@ -203,7 +206,7 @@ class CovarTrainer():
                         fro_err_val = self.log_fro_err[-1]
                         pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
                         pbar_description += f" , vecs norm : {torch.norm(vectors)}"
-                        #pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
+                        pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
                     pbar.set_description(pbar_description)
 
                 pbar.update(1)
@@ -235,7 +238,7 @@ class CovarTrainer():
         print(f'Actual learning rate {lr}')
         self.reg = reg
         for epoch in range(max_epochs):
-            if(epoch == 0):
+            if(epoch == 2):
                 self.fourier_reg = self.fourier_reg2
             self.run_epoch(epoch)
 
@@ -298,12 +301,12 @@ class Covar(torch.nn.Module):
     def init_random_vectors(self,num_vectors):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
 
-    def cost(self,images,nufft_plans,filters,noise_var,fourier_reg = 0):
-        return cost(self.vectors,images,nufft_plans,filters,noise_var,fourier_reg)
+    def cost(self,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
+        return cost(self.vectors,images,nufft_plans,filters,noise_var,reg_scale,fourier_reg)
 
 
-    def forward(self,images,nufft_plans,filters,noise_var,fourier_reg):
-        return self.cost(images,nufft_plans,filters,noise_var,fourier_reg),self.vectors
+    def forward(self,images,nufft_plans,filters,noise_var,reg_scale,fourier_reg):
+        return self.cost(images,nufft_plans,filters,noise_var,reg_scale,fourier_reg),self.vectors
     
     @property
     def eigenvecs(self):
@@ -324,7 +327,7 @@ class Covar(torch.nn.Module):
 
 
 
-def cost(vols,images,nufft_plans,filters,noise_var,fourier_reg = None):
+def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = vols.shape[-1]
@@ -346,7 +349,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,fourier_reg = None):
     
     cost_val = torch.mean(cost_val,dim=0)
             
-    if(fourier_reg is not None):
+    if(fourier_reg is not None and reg_scale != 0):
         vols_fourier = centered_fft3(vols)
         vols_fourier*= torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
@@ -360,8 +363,11 @@ def cost(vols,images,nufft_plans,filters,noise_var,fourier_reg = None):
         #vols = vols.reshape((rank,-1))
         #vols_prod = torch.matmul(vols,vols.transpose(0,1))
         reg_cost = torch.sum(torch.pow(vols_prod,2))
-        reg = 1
-        cost_val += reg * reg_cost
+        vols_psd_sum = torch.sum(torch.abs(vols_fourier) ** 2,dim=0)
+        correction_term = torch.norm(vols_psd_sum)**2 - 0.5 * torch.norm(vols_psd_sum - noise_var * rank ** 0.5)**2
+        #print(f"reg cost : {reg_cost} with correction : {correction_term}")
+        reg_cost -= correction_term
+        cost_val += reg_scale * reg_cost
 
     return cost_val
 
