@@ -63,21 +63,8 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         os.mkdir(result_dir)
     pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
     source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
-    source = source.normalize_background()
+    #source = source.normalize_background() #TODO: figure out why normalize background fucks things up
     L = source.L
-
-    
-    if(whiten):
-        #TODO : use normalize background as well
-        if(noise_estimator == 'anisotropic'):
-            noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source)
-        elif(noise_estimator == 'white'):
-            noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
-        source = source.whiten(noise_estimator)
-        noise_var = 1
-    else:
-        noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
-        noise_var = noise_estimator.estimate()
     
     mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = False)
 
@@ -96,10 +83,27 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
     print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
 
-    dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
-    dataset.states = source.states #TODO : do this at dataset constructor
+    dataset_path = path.join(result_dir,'dataset.pkl')
+    if(not path.isfile(dataset_path)):
+        if(whiten):
+            #TODO : use normalize background as well
+            if(noise_estimator == 'anisotropic'):
+                noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source)
+            elif(noise_estimator == 'white'):
+                noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
+            source = source.whiten(noise_estimator)
+            noise_var = 1
+        else:
+            noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
+            noise_var = noise_estimator.estimate()
+        
+        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
+        dataset.states = source.states #TODO : do this at dataset constructor
+        pickle.dump(dataset,open(dataset_path,'wb'))
+    else:
+        dataset = pickle.load(open(dataset_path,'rb'))
 
-    covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data)
+    return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data)
 
     
 
@@ -111,9 +115,9 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
                     batch_size = 32,
                     max_epochs = 10,
                     lr = 1e-3,optim_type = 'Adam', #TODO : refine learning rate and reg values
-                    reg = 1e-6,
+                    reg = 1,
                     gamma_lr = 0.8,
-                    gamma_reg = 0.8,
+                    gamma_reg = 1,
                     orthogonal_projection= True)
     
     #Compute wiener coordinates using estimated and ground truth eigenvectors
@@ -133,52 +137,64 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
     umap_est = reducer.fit_transform(coords_est.cpu())
     umap_gd = reducer.fit_transform(coords_GD.cpu())
 
+    data_dict = {}
     if(save_data):
-        data_dict = {'eigen_est' : eigen_est, 'eigenval_est' : eigenval_est,
-                     'eigenvals_GD' : eigenvals_GD,'eigenvectors_GD' : eigenvectors_GD,
-                      'coords_est' : coords_est,'coords_GD' : coords_GD,
+        data_dict = {'eigen_est' : eigen_est.cpu(), 'eigenval_est' : eigenval_est.cpu(),
+                     'eigenvals_GD' : eigenvals_GD.cpu(),'eigenvectors_GD' : eigenvectors_GD.cpu(),
+                      'coords_est' : coords_est.cpu(),'coords_GD' : coords_GD.cpu(),
                       'umap_est' : umap_est, 'umap_gd' : umap_gd}
         with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
             pickle.dump(data_dict,fid)
+    
+    training_data = torch.load(path.join(result_dir,'training_results.bin'))
 
     #Generate plots
+    figure_dict = {}
     if(generate_figs):
         fig_dir = path.join(result_dir,'result_figures')
         if(not path.isdir(fig_dir)):
             os.mkdir(fig_dir)
-        f = plt.figure()
-        plt.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = dataset.states,s=0.1)
-        f.savefig(path.join(fig_dir,'wiener_coords_est.jpg'))
+        
+        fig,ax = plt.subplots()
+        ax.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = dataset.states,s=0.1)
+        figure_dict['wiener_coords_est'] = fig
+        #fig.savefig(path.join(fig_dir,'wiener_coords_est.jpg'))
+        
+        fig,ax = plt.subplots()
+        ax.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = dataset.states,s=0.1)
+        figure_dict['wiener_coords_gd'] = fig
+        
+        fig,ax = plt.subplots()
+        ax.scatter(umap_est[:,0],umap_est[:,1],c=dataset.states,s=0.1)
+        figure_dict['umap_coords_est'] = fig
 
-        f = plt.figure()
-        plt.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = dataset.states,s=0.1)
-        f.savefig(path.join(fig_dir,'wiener_coords_gd.jpg'))
+        fig,ax = plt.subplots()
+        ax.scatter(umap_gd[:,0],umap_gd[:,1],c=dataset.states,s=0.1)
+        figure_dict['umap_coords_gd'] = fig
 
-        f = plt.figure()
-        plt.scatter(umap_est[:,0],umap_est[:,1],c=dataset.states,s=0.1)
-        f.savefig(path.join(fig_dir,'umap_coords_est.jpg'))
-
-        f = plt.figure()
-        plt.scatter(umap_gd[:,0],umap_gd[:,1],c=dataset.states,s=0.1)
-        f.savefig(path.join(fig_dir,'umap_coords_gd.jpg'))
-
-
-        f = plt.figure()
-        ax = plt.axes()
+        fig,ax = plt.subplots()
         fsc = vol_fsc(Volume(eigen_est.cpu().numpy()),Volume(eigenvectors_GD.cpu().numpy()))
         ax.plot(fsc[1].T)
         ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
-        ax.figure.savefig(path.join(fig_dir,'eigenvec_fsc.jpg'))
+        figure_dict['eigenvec_fsc'] = fig
 
-        f = plt.figure()
-        ax = plt.axes()
-        training_data = torch.load(path.join(result_dir,'training_results.bin'))
-        ax.plot([np.diag(c) for c in training_data['log_cosine_sim']])
+
+        fig,ax = plt.subplots()
+        ax.plot(training_data['log_epoch_ind'],[np.diag(c) for c in training_data['log_cosine_sim']])
         ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
-        ax.figure.savefig(path.join(fig_dir,'training_cosine_sim.jpg'))
+        figure_dict['training_cosine_sim'] = fig
+
+        fig,ax = plt.subplots()
+        ax.plot(training_data['log_epoch_ind'],training_data['log_fro_err'])
+        figure_dict['frobenius_norm_err'] = fig
+
+        for f_name,f in figure_dict.items():
+            f.savefig(path.join(fig_dir,f'{f_name}.jpg'))
+
+    return data_dict,figure_dict,training_data
     
 if __name__ == "__main__":
     #covar_workflow('/scratch/roaiyadgar/data/cryoDRGN_dataset/uniform/particles.128.ctf_preprocessed_L64.star',covar_rank = 5,whiten=True)
     #recovar_eigenvecs = aspire.volume.Volume.load('/scratch/roaiyadgar/data/empiar10076/result_data/recovar_eigenvecs.mrc')
     recovar_eigenvecs = None
-    covar_workflow('/scratch/roaiyadgar/data/empiar10076/L17Combine_weight_local_preprocessed_L64.star',covar_rank = 5,covar_eigenvecs=recovar_eigenvecs,whiten=True)
+    covar_workflow('/scratch/roaiyadgar/data/empiar10076/L17Combine_weight_local_preprocessed_L64.star',covar_rank = 5,whiten=True)
