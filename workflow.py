@@ -55,7 +55,7 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
-def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',generate_figs = True,save_data = True):
+def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',generate_figs = True,save_data = True,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
@@ -103,22 +103,21 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     else:
         dataset = pickle.load(open(dataset_path,'rb'))
 
-    return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data)
+    return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data,**training_kwargs)
 
     
 
-def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_data = True):
+def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_data = True,**training_kwargs):
     L = dataset.images.shape[-1]
     #Perform optimization for eigenvectors estimation
     cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var)
+    default_training_kwargs = {'batch_size' : 32, 'max_epochs' : 10,
+                               'lr' : 1e-3,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+                               'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
+                               'orthogonal_projection' : True}
+    default_training_kwargs.update(training_kwargs)
     trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
-                    batch_size = 32,
-                    max_epochs = 10,
-                    lr = 1e-3,optim_type = 'Adam', #TODO : refine learning rate and reg values
-                    reg = 1,
-                    gamma_lr = 0.8,
-                    gamma_reg = 1,
-                    orthogonal_projection= True)
+                    **default_training_kwargs)
     
     #Compute wiener coordinates using estimated and ground truth eigenvectors
     eigen_est,eigenval_est= cov.eigenvecs
@@ -191,10 +190,5 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         for f_name,f in figure_dict.items():
             f.savefig(path.join(fig_dir,f'{f_name}.jpg'))
 
-    return data_dict,figure_dict,training_data
+    return data_dict,figure_dict,training_data,default_training_kwargs
     
-if __name__ == "__main__":
-    #covar_workflow('/scratch/roaiyadgar/data/cryoDRGN_dataset/uniform/particles.128.ctf_preprocessed_L64.star',covar_rank = 5,whiten=True)
-    #recovar_eigenvecs = aspire.volume.Volume.load('/scratch/roaiyadgar/data/empiar10076/result_data/recovar_eigenvecs.mrc')
-    recovar_eigenvecs = None
-    covar_workflow('/scratch/roaiyadgar/data/empiar10076/L17Combine_weight_local_preprocessed_L64.star',covar_rank = 5,whiten=True)
