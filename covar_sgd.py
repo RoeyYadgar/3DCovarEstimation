@@ -27,10 +27,7 @@ class CovarDataset(Dataset):
         self.pts_rot = self.pts_rot.transpose(0,1) 
         self.noise_var = noise_var
 
-        if(type(vectorsGD) == torch.Tensor or type(vectorsGD) == np.ndarray):
-            if(type(vectorsGD) != torch.Tensor):
-                vectorsGD = torch.tensor(vectorsGD)
-        self.vectorsGD = vectorsGD
+        self.set_vectorsGD(vectorsGD)
 
         self.filter_indices = torch.tensor(src.filter_indices)
         num_filters = len(src.unique_filters)
@@ -46,6 +43,12 @@ class CovarDataset(Dataset):
     def __getitem__(self,idx):
         return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx]
     
+
+    def set_vectorsGD(self,vectorsGD):
+        if(type(vectorsGD) == torch.Tensor or type(vectorsGD) == np.ndarray):
+            if(type(vectorsGD) != torch.Tensor):
+                vectorsGD = torch.tensor(vectorsGD)
+        self.vectorsGD = vectorsGD
 
     def get_subset(self,idx):
         subset = self.copy()
@@ -132,7 +135,7 @@ class CovarTrainer():
         self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,device=device) for i in range(self.batch_size)]
         self.filters = train_data.dataset.unique_filters.to(self.device)
         self.noise_var = train_data.dataset.noise_var
-
+        self.save_path = save_path
         self.logTraining = self.device.index == 0 or self.device == torch.device('cpu') #Only log training on the first gpu
         self.training_log_freq = training_log_freq
         if(self.logTraining):
@@ -148,18 +151,6 @@ class CovarTrainer():
         self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0) * (rank) ** 0.5)
         #f = self.noise_var*(L ** 2) / torch.mean((vectorsGD_rpsd),dim=0)
         self.reg_scale = 1/(len(self.train_data.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
-        
-        #self.fourier_reg /= L**2
-        #self.fourier_reg = (1e-4**(1/4)) * torch.ones((L,L,L),dtype=dtype,device=device)/(L**1.5)
-        #self.fourier_reg = None
-
-        self.fourier_reg2 = self.fourier_reg
-        self.fourier_reg = None
-
-        self.save_path = save_path
-
-        #from fsc_utils import FourierShell
-        #x = FourierShell.from_tensor(vectors[0]).covar_average_fourier_shell(*train_data.dataset.vectorsGD.view_as(vectors))
 
     @property
     def covar(self):
@@ -220,8 +211,8 @@ class CovarTrainer():
 
         if(scale_params):
             lr *= self.train_data.batch_size #Scale learning rate with batch size
-            reg *= self.train_data.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
-            reg /= self.covar.resolution ** 2 #gradient of cost function scales linearly with L while regulriaztion scales with L^3
+            #reg *= self.train_data.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
+            #reg /= self.covar.resolution ** 2 #gradient of cost function scales linearly with L while regulriaztion scales with L^3
         
         
         if(optim_type == 'SGD'):
@@ -236,13 +227,11 @@ class CovarTrainer():
         scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,step_size = 1, gamma = gamma_lr)
 
         print(f'Actual learning rate {lr}')
-        self.reg = reg
+        self.reg_scale*=reg
         for epoch in range(max_epochs):
-            if(epoch == 2):
-                self.fourier_reg = self.fourier_reg2
             self.run_epoch(epoch)
 
-            self.reg *= gamma_reg
+            self.reg_scale *= gamma_reg
             scheduler.step()
 
             if(self.logTraining and self.save_path is not None):
@@ -353,20 +342,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
         vols_fourier = centered_fft3(vols)
         vols_fourier*= torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
-        vols_prod = torch.real(torch.matmul(vols_fourier,torch.conj(vols_fourier).transpose(0,1)))
-        #vols_rpsd = average_fourier_shell(*(torch.abs(vols_fourier)**2))
-        #vols_rpsd_reg = torch.ones(L//2,device=vols.device,dtype=vols.dtype)
-        #e = sum([sum_over_shell((vols_rpsd[i] * torch.sqrt(vols_rpsd_reg)),L,3) for i in range(rank)])
-        #from fsc_utils import FourierShell
-        #r = FourierShell.from_tensor(vols[0]).expand_fourier_shell(vols_rpsd_reg)
-        
-        #vols = vols.reshape((rank,-1))
-        #vols_prod = torch.matmul(vols,vols.transpose(0,1))
-        reg_cost = torch.sum(torch.pow(vols_prod,2))
-        vols_psd_sum = torch.sum(torch.abs(vols_fourier) ** 2,dim=0)
-        correction_term = torch.norm(vols_psd_sum)**2 - 0.5 * torch.norm(vols_psd_sum - noise_var * rank ** 0.5)**2
-        #print(f"reg cost : {reg_cost} with correction : {correction_term}")
-        reg_cost -= correction_term
+        reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)
         cost_val += reg_scale * reg_cost
 
     return cost_val

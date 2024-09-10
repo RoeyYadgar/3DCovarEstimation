@@ -102,6 +102,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         pickle.dump(dataset,open(dataset_path,'wb'))
     else:
         dataset = pickle.load(open(dataset_path,'rb'))
+        dataset.set_vectorsGD(covar_eigenvecs_gd) #Overwrite vectorsGD attribute since cached dataset might contain different vectors
 
     return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data,**training_kwargs)
 

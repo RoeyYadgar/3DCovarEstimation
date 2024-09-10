@@ -15,6 +15,7 @@ import os
 @click.option('--max-epochs',type=int,help = 'number of epochs to train')
 @click.option('--lr',type=float,help= 'training learning rate')
 @click.option('--reg',type=float,help='regularization scaling')
+@click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
 def run_pipeline(name,starfile,rank,whiten,noise_estimator,disable_comet,**training_kwargs):
     if(not disable_comet):
         run_config  = {'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
@@ -26,18 +27,20 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,disable_comet,**train
     data_dict, figure_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,**training_kwargs)
 
     if(not disable_comet):
+        result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
         exp.log_parameters(training_kwargs)
         for fig_name,fig in figure_dict.items():
-            exp.log_figure(figure = fig,figure_name=fig_name)
+            exp.log_image(image_data = os.path.join(result_dir,'result_figures',f'{fig_name}.jpg'),name=fig_name)
             
         metrics = {"frobenius_norm_error" : training_data['log_fro_err'][-1],
                    "eigen_vector_cosine_sim" : training_data['log_cosine_sim'][-1],
                    "eigenvals_GD" : data_dict["eigenvals_GD"],"eigenval_est" : data_dict["eigenval_est"]}
         exp.log_metrics(metrics)
 
-        fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=training_data['log_epoch_ind'][i]) for i,v in enumerate(training_data['log_fro_err'])]
+        fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['log_fro_err'])]
+        epoch_ind_log = [exp.log_metric(name='log_epoch_ind',value=v,step=i) for i,v in enumerate(training_data['log_epoch_ind'])]
 
-        result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
+        
         data_artifact = comet_ml.Artifact("produced_data","data")
         data_artifact.add(os.path.join(result_dir,'recorded_data.pkl'))
         exp.log_artifact(data_artifact)
