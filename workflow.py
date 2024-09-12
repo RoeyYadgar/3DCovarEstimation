@@ -64,7 +64,6 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         os.mkdir(result_dir)
     pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
     source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
-    #source = source.normalize_background() #TODO: figure out why normalize background fucks things up
     L = source.L
     
     mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = False)
@@ -86,8 +85,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
 
     dataset_path = path.join(result_dir,'dataset.pkl')
     if(not path.isfile(dataset_path)):
-        if(whiten):
-            #TODO : use normalize background as well
+        if(whiten): #TODO : speed this up
             if(noise_estimator == 'anisotropic'):
                 noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source)
             elif(noise_estimator == 'white'):
@@ -97,7 +95,9 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         else:
             noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
             noise_var = noise_estimator.estimate()
-        
+        #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
+        source = source.normalize_background(do_ramp=False) #TODO: figure out why normalize background fucks things up
+    
         dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
         dataset.states = source.states #TODO : do this at dataset constructor
         dataset.starfile = starfile
