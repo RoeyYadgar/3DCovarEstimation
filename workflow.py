@@ -9,7 +9,7 @@ import click
 from utils import *
 from covar_sgd import CovarDataset,Covar
 from covar_distributed import trainParallel
-from wiener_coords import latentMAP
+from wiener_coords import latentMAP,mahalanobis_threshold
 
 
 def reconstructClass(starfile_path,vol_path,overwrite = False):
@@ -100,6 +100,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         
         dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
         dataset.states = source.states #TODO : do this at dataset constructor
+        dataset.starfile = starfile
         pickle.dump(dataset,open(dataset_path,'wb'))
     else:
         dataset = pickle.load(open(dataset_path,'rb'))
@@ -135,9 +136,38 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         
         print(f'Eigenvalues of estimated covariance {eigenval_est}')
 
+        num_states = torch.sum(torch.unique(dataset.states) != -1)
+        cluster_centers = torch.zeros((num_states,covar_rank))
+        cluster_ind = torch.full((coords_est.shape[0],),-1)
+        state_ind = 0
+        for state in torch.unique(dataset.states):
+            if(state != -1):
+                mean_state_coord = torch.mean(coords_est[dataset.states == state],dim=0) #This uses the actual labels to compute the cluster center, used as a metric for covar reconstruction and not for the actual clustering.
+                cluster_centers[state_ind] = mean_state_coord.cpu()
+                state_coord_covar = torch.mean(coords_covar_est[dataset.states == state],dim=0) #TODO : is this the right way to compute this?
+                index_under_threshold = mahalanobis_threshold(coords_est,mean_state_coord,state_coord_covar.to('cuda:0'))
+                cluster_ind[index_under_threshold.to('cpu')] = state
         
+
+                state_ind += 1
+
+        s = aspire.storage.StarFile(dataset.starfile)
+        s['particles']['_rlnClassNumber'] = cluster_ind.tolist()
+        s.write(dataset.starfile + '.tmp')
+        reconstructClass(dataset.starfile+'.tmp',path.join(result_dir,'reconstructed_class_vols.mrc'),overwrite=True)
+        os.remove(dataset.starfile+'.tmp')
+
+        class_vols_est = aspire.volume.Volume.load(path.join(result_dir,'reconstructed_class_vols.mrc'))
+        class_vols_GD = aspire.volume.Volume.load(path.join(result_dir,'class_vols.mrc'))
+
+        v1 = class_vols_est.asnumpy().reshape(num_states,-1)
+        v2 = class_vols_GD.asnumpy().reshape(num_states,-1)
+        print(f'L2 norm error of class volumes {np.linalg.norm((v1-v2),axis=1)/np.linalg.norm(v2,axis=1)}')
+
+
         reducer = UMAP(n_components=2)
         umap_est = reducer.fit_transform(coords_est.cpu())
+        cluster_centers_umap = reducer.transform(cluster_centers.cpu())
         umap_gd = reducer.fit_transform(coords_GD.cpu())
 
         data_dict = {}
@@ -145,6 +175,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
             data_dict = {'eigen_est' : eigen_est.cpu(), 'eigenval_est' : eigenval_est.cpu(),
                         'eigenvals_GD' : eigenvals_GD.cpu(),'eigenvectors_GD' : eigenvectors_GD.cpu(),
                         'coords_est' : coords_est.cpu(),'coords_GD' : coords_GD.cpu(),
+                        'coords_covar_est' : coords_covar_est, 'coords_covar_GD' : coords_covar_GD,
                         'umap_est' : umap_est, 'umap_gd' : umap_gd}
             with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
                 pickle.dump(data_dict,fid)
@@ -166,8 +197,9 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         
         fig,ax = plt.subplots()
         ax.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = dataset.states,s=0.1)
+        for i in range(num_states):
+            ax.annotate(f'{i}',(cluster_centers[i,0],cluster_centers[i,1]),fontweight='bold')
         figure_dict['wiener_coords_est'] = fig
-        #fig.savefig(path.join(fig_dir,'wiener_coords_est.jpg'))
         
         fig,ax = plt.subplots()
         ax.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = dataset.states,s=0.1)
@@ -175,11 +207,20 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         
         fig,ax = plt.subplots()
         ax.scatter(umap_est[:,0],umap_est[:,1],c=dataset.states,s=0.1)
+        for i in range(num_states):
+            ax.annotate(f'{i}',(cluster_centers_umap[i,0],cluster_centers_umap[i,1]),fontweight='bold')
         figure_dict['umap_coords_est'] = fig
 
         fig,ax = plt.subplots()
         ax.scatter(umap_gd[:,0],umap_gd[:,1],c=dataset.states,s=0.1)
         figure_dict['umap_coords_gd'] = fig
+
+        fig,ax = plt.subplots()
+        fsc = vol_fsc(class_vols_est,class_vols_GD)
+        ax.plot(fsc[1].T)
+        ax.legend([f'Class {i}' for i in range(num_states)])
+        figure_dict['reconstructed_class_vol_fsc'] = fig
+
 
         fig,ax = plt.subplots()
         fsc = vol_fsc(Volume(eigen_est.cpu().numpy()),Volume(eigenvectors_GD.cpu().numpy()))

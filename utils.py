@@ -181,7 +181,11 @@ def vol_fsc(vol1,vol2):
 
         return vol1.fsc(vol2)
 
-def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True):
+def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs_index = None):
+    if(mrcs_index is not None):
+        subfile = f'{inputfile}.sub.tmp'
+        sub_starfile(inputfile,subfile,mrcs_index)
+        inputfile = subfile
     classnum_arg = f' --class {classnum}' if classnum is not None else ''
     inputfile_path,inputfile_name = os.path.split(inputfile)
     #outputfile_rel = os.path.relpath(outputfile,inputfile_path)

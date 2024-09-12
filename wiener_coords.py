@@ -1,4 +1,5 @@
 import torch
+from scipy.stats import chi2
 from nufft_plan import NufftPlan
 from projection_funcs import vol_forward
 
@@ -98,3 +99,14 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=8,start_ind = None,end_ind 
         return coords
     else:
         return coords,coords_covar
+    
+
+def mahalanobis_distance(coords,coords_mean,coords_covar):
+    mean_centered_coords = coords - coords_mean
+    dist = torch.sum((mean_centered_coords @ torch.inverse(coords_covar)) * mean_centered_coords,dim=1)
+
+    return dist
+
+def mahalanobis_threshold(coords,coords_mean,coords_covar,q=0.95):
+    dist = mahalanobis_distance(coords,coords_mean,coords_covar)
+    return dist < chi2.ppf(q,df=coords.shape[1])
