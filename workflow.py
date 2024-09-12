@@ -5,10 +5,11 @@ import pickle
 from matplotlib import pyplot as plt
 import aspire
 from umap import UMAP
+import click
 from utils import *
 from covar_sgd import CovarDataset,Covar
 from covar_distributed import trainParallel
-from wiener_coords import wiener_coords
+from wiener_coords import latentMAP
 
 
 def reconstructClass(starfile_path,vol_path,overwrite = False):
@@ -55,7 +56,7 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
-def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',generate_figs = True,save_data = True,**training_kwargs):
+def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',generate_figs = True,save_data = True,skip_processing=False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
@@ -104,49 +105,57 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         dataset = pickle.load(open(dataset_path,'rb'))
         dataset.set_vectorsGD(covar_eigenvecs_gd) #Overwrite vectorsGD attribute since cached dataset might contain different vectors
 
-    return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data,**training_kwargs)
+    return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data,skip_processing,**training_kwargs)
 
     
 
-def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_data = True,**training_kwargs):
+def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_data = True,skip_processing = False,**training_kwargs):
     L = dataset.images.shape[-1]
-    #Perform optimization for eigenvectors estimation
-    cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var)
-    default_training_kwargs = {'batch_size' : 32, 'max_epochs' : 10,
-                               'lr' : 1e-3,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
-                               'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
-                               'orthogonal_projection' : True}
-    default_training_kwargs.update(training_kwargs)
-    trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
-                    **default_training_kwargs)
-    
-    #Compute wiener coordinates using estimated and ground truth eigenvectors
-    eigen_est,eigenval_est= cov.eigenvecs
-    eigen_est = eigen_est.to('cuda:0')
-    eigenval_est = eigenval_est.to('cuda:0')
-    coords_est = wiener_coords(dataset,eigen_est,eigenval_est)
 
-    eigenvals_GD = torch.norm(dataset.vectorsGD,dim=1) ** 2
-    eigenvectors_GD = (dataset.vectorsGD / torch.sqrt(eigenvals_GD).unsqueeze(1)).reshape((-1,L,L,L))
-    coords_GD = wiener_coords(dataset,eigenvectors_GD.to('cuda:0'),eigenvals_GD.to('cuda:0'))
-    
-    print(f'Eigenvalues of estimated covariance {eigenval_est}')
+    if(not skip_processing):
+        #Perform optimization for eigenvectors estimation
+        cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var)
+        default_training_kwargs = {'batch_size' : 32, 'max_epochs' : 10,
+                                'lr' : 1e-3,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+                                'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
+                                'orthogonal_projection' : True}
+        default_training_kwargs.update(training_kwargs)
+        trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+                        **default_training_kwargs)
+        
+        #Compute wiener coordinates using estimated and ground truth eigenvectors
+        eigen_est,eigenval_est= cov.eigenvecs
+        eigen_est = eigen_est.to('cuda:0')
+        eigenval_est = eigenval_est.to('cuda:0')
+        coords_est,coords_covar_est = latentMAP(dataset,eigen_est,eigenval_est,return_coords_covar=True)
 
-    
-    reducer = UMAP(n_components=2)
-    umap_est = reducer.fit_transform(coords_est.cpu())
-    umap_gd = reducer.fit_transform(coords_GD.cpu())
+        eigenvals_GD = torch.norm(dataset.vectorsGD,dim=1) ** 2
+        eigenvectors_GD = (dataset.vectorsGD / torch.sqrt(eigenvals_GD).unsqueeze(1)).reshape((-1,L,L,L))
+        coords_GD,coords_covar_GD = latentMAP(dataset,eigenvectors_GD.to('cuda:0'),eigenvals_GD.to('cuda:0'),return_coords_covar=True)
+        
+        print(f'Eigenvalues of estimated covariance {eigenval_est}')
 
-    data_dict = {}
-    if(save_data):
-        data_dict = {'eigen_est' : eigen_est.cpu(), 'eigenval_est' : eigenval_est.cpu(),
-                     'eigenvals_GD' : eigenvals_GD.cpu(),'eigenvectors_GD' : eigenvectors_GD.cpu(),
-                      'coords_est' : coords_est.cpu(),'coords_GD' : coords_GD.cpu(),
-                      'umap_est' : umap_est, 'umap_gd' : umap_gd}
-        with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
-            pickle.dump(data_dict,fid)
-    
+        
+        reducer = UMAP(n_components=2)
+        umap_est = reducer.fit_transform(coords_est.cpu())
+        umap_gd = reducer.fit_transform(coords_GD.cpu())
+
+        data_dict = {}
+        if(save_data):
+            data_dict = {'eigen_est' : eigen_est.cpu(), 'eigenval_est' : eigenval_est.cpu(),
+                        'eigenvals_GD' : eigenvals_GD.cpu(),'eigenvectors_GD' : eigenvectors_GD.cpu(),
+                        'coords_est' : coords_est.cpu(),'coords_GD' : coords_GD.cpu(),
+                        'umap_est' : umap_est, 'umap_gd' : umap_gd}
+            with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
+                pickle.dump(data_dict,fid)
+    else:
+        with open(path.join(result_dir,'recorded_data.pkl'),'rb') as fid:
+            data_dict = pickle.load(fid)
+            for key in data_dict.keys(): #Load each variable contained in data_dict
+                exec(f"{key} = data_dict['{key}']") #TODO : load each key dynmaically 
+
     training_data = torch.load(path.join(result_dir,'training_results.bin'))
+
 
     #Generate plots
     figure_dict = {}
@@ -192,4 +201,20 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
             f.savefig(path.join(fig_dir,f'{f_name}.jpg'))
 
     return data_dict,figure_dict,training_data,default_training_kwargs
-    
+
+@click.command()    
+@click.option('-s','--starfile',type=str, help='path to star file.')
+@click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
+@click.option('-w','--whiten',is_flag = True,default=True,help='wether to whiten the images before processing')
+@click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
+@click.option('--skip-processing',is_flag = True,default = False,help='wether to disable logging of run to comet')
+@click.option('--batch-size',type=int,help = 'training batch size')
+@click.option('--max-epochs',type=int,help = 'number of epochs to train')
+@click.option('--lr',type=float,help= 'training learning rate')
+@click.option('--reg',type=float,help='regularization scaling')
+@click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
+def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',skip_processing = False,**training_kwargs):
+    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,skip_processing = skip_processing,**training_kwargs)
+
+if __name__ == "__main__":
+    covar_workflow_cli()
