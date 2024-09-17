@@ -34,6 +34,7 @@ def reconstructClass(starfile_path,vol_path,overwrite = False):
         else:
             return Volume.load(vol_path)
         vol.save(vol_path,overwrite=True)
+        os.remove('vol_tmp.mrc')
         return vol
     else:
         for i,c in enumerate(classes):

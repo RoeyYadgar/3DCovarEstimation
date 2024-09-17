@@ -148,8 +148,7 @@ class CovarTrainer():
 
         L = vol_shape[-1]
         vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.reshape((-1,L,L,L)))
-        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0) * (rank) ** 0.5)
-        #f = self.noise_var*(L ** 2) / torch.mean((vectorsGD_rpsd),dim=0)
+        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)) #TODO : validate this regularization term
         self.reg_scale = 1/(len(self.train_data.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
 
     @property
