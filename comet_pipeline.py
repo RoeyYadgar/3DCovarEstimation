@@ -1,8 +1,9 @@
-import click
-import plotly.tools as tls
-import comet_ml
-from workflow import covar_workflow,covar_processing
 import os
+import click
+import comet_ml
+from aspire.storage import StarFile
+from workflow import covar_workflow,covar_processing
+
 
 @click.command()
 @click.option('-n','--name',type=str,help = 'name of wandb run')
@@ -18,7 +19,8 @@ import os
 @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
 def run_pipeline(name,starfile,rank,whiten,noise_estimator,disable_comet,**training_kwargs):
     if(not disable_comet):
-        run_config  = {'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
+        image_size = int(StarFile(starfile)['optics']['_rlnImageSize'][0])
+        run_config  = {'image_size' : image_size, 'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
         exp = comet_ml.Experiment(project_name="3d_cov",parse_args=False)
         exp.set_name(name)
         exp.log_parameters(run_config)
