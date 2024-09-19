@@ -19,7 +19,7 @@ from workflow import covar_workflow,covar_processing
 @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
 def run_pipeline(name,starfile,rank,whiten,noise_estimator,disable_comet,**training_kwargs):
     if(not disable_comet):
-        image_size = int(StarFile(starfile)['optics']['_rlnImageSize'][0])
+        image_size = int(float(StarFile(starfile)['optics']['_rlnImageSize'][0]))
         run_config  = {'image_size' : image_size, 'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
         exp = comet_ml.Experiment(project_name="3d_cov",parse_args=False)
         exp.set_name(name)
