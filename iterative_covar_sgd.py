@@ -1,7 +1,7 @@
 import torch
 from torch import distributed as dist
 from covar_sgd import Covar,CovarDataset,CovarTrainer,cost
-from nufft_plan import NufftPlan
+from nufft_plan import BatchNufftPlan
 from wiener_coords import wiener_coords
 
 class IterativeCovarTrainer(CovarTrainer):
@@ -94,7 +94,7 @@ class IterativeCovarTrainerVer2(CovarTrainer):
     def train(self,*args,**kwargs):
         for i in range(self.covar.rank):
             if(i != 0):
-                self.nufft_plans = [NufftPlan(self.covar.vectors.shape[1:],batch_size=i+1,dtype = self.covar.vectors.dtype,device=self.device) for _ in range(self.batch_size)] #Update batch size of nufft plans (which is the number of volumes to project) 
+                self.nufft_plans = BatchNufftPlan(self.batch_size,self.covar.vectors.shape[1:],batch_size=i+1,dtype = self.covar.vectors.dtype,device=self.device)
             super().train(*args,**kwargs)
             self.covar.fix_vector()
             

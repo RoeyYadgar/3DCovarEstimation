@@ -8,7 +8,7 @@ from tqdm import tqdm
 import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
-from nufft_plan import NufftPlan
+from nufft_plan import BatchNufftPlan,NufftPlan
 from projection_funcs import vol_forward,centered_fft2,centered_fft3
 from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell
 
@@ -132,8 +132,10 @@ class CovarTrainer():
         rank = vectors.shape[0]
         dtype = vectors.dtype
         vol_shape = vectors.shape[1:] 
-        self.nufft_plans = [NufftPlan(vol_shape,batch_size=rank,dtype = dtype,device=device) for i in range(self.batch_size)]
-        self.filters = train_data.dataset.unique_filters.to(self.device)
+        self.nufft_plans = BatchNufftPlan(self.batch_size,vol_shape,batch_size = rank, dtype=dtype,device=device)
+        self.filters = train_data.dataset.unique_filters
+        if(len(self.filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
+            self.filters = self.filters.to(self.device)
         self.noise_var = train_data.dataset.noise_var
         self.save_path = save_path
         self.logTraining = self.device.index == 0 or self.device == torch.device('cpu') #Only log training on the first gpu
@@ -181,10 +183,9 @@ class CovarTrainer():
             num_ims = images.shape[0]
             pts_rot = pts_rot.to(self.device)
             images = images.to(self.device)
-            filters = self.filters[filter_indices] if len(self.filters) > 0 else None
-            for i in range(num_ims):
-                self.nufft_plans[i].setpts(pts_rot[i])
-            cost_val,vectors = self.run_batch(images,self.nufft_plans[:num_ims],filters)
+            filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
+            self.nufft_plans.setpts(pts_rot)
+            cost_val,vectors = self.run_batch(images,self.nufft_plans,filters)
 
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
@@ -364,17 +365,14 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg=0):
     filters = dataset.unique_filters.to(device)
     num_eigs = eigs.shape[0]
     L = eigs.shape[1]
-    nufft_plans = [NufftPlan((L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device) for i in range(batch_size)]
-
+    nufft_plans = BatchNufftPlan(batch_size,(L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device)
     cost_val = 0
     for i in range(0,len(dataset),batch_size):
         images,pts_rot,filter_indices = dataset[i:i+batch_size]
-        num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
         images = images.to(device)
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
-        for j in range(num_ims):
-            nufft_plans[j].setpts(pts_rot[j])
+        nufft_plans.setpts(pts_rot)
         cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,fourier_reg=reg) * batch_size
         cost_val += cost_term
    

@@ -61,7 +61,21 @@ class NufftPlan():
         return adjoint_signal
         
 
+class BatchNufftPlan():
+    def __init__(self,batch_plan,sz,batch_size = 1,eps = 1e-6,dtype = torch.float32,device = torch.device('cpu'),**kwargs):
+        self.batch_size = batch_plan
+        self.nufft_plan = NufftPlan(sz,batch_size,eps,dtype,device,**kwargs)
+        self.points = None
+        
+    def setpts(self,points):
+        self.points = points
 
+    def __getitem__(self,index):
+        self.nufft_plan.setpts(self.points[index])
+        return self.nufft_plan
+    
+    def __len__(self):
+        return self.points.shape[0] if self.points is not None else 0
 
 class TorchNufftForward(torch.autograd.Function):
     @staticmethod
