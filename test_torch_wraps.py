@@ -18,7 +18,7 @@ class TestTorchWraps(unittest.TestCase):
     
     def setUp(self):
         self.img_size = 15
-        self.num_imgs = 100
+        self.num_imgs = 2048
         c = 5
         self.vols = LegacyVolume(
             L=self.img_size,
@@ -155,7 +155,7 @@ class TestTorchWraps(unittest.TestCase):
         pts_rot = rotated_grids(self.img_size,rots)
         pts_rot = pts_rot.reshape((3,-1))
         pts_rot = pts_rot[:,:self.img_size ** 2]
-        filter = torch.tensor(sim.unique_filters[0].evaluate_grid(self.img_size)).to(self.device)
+        filter = torch.tensor(sim.unique_filters[0].evaluate_grid(self.img_size)).unsqueeze(0).to(self.device)
         vol_forward_aspire = sim.vol_forward(self.vols[0],0,1)
 
         vol_torch = torch.tensor(self.vols[0].asnumpy()).to(self.device)
@@ -179,6 +179,37 @@ class TestTorchWraps(unittest.TestCase):
         vol_fourier_slice = vol_fourier[0][self.img_size//2]
 
         torch.testing.assert_close(vol_fourier_slice, vol_forward_fourier*self.img_size, rtol=5e-3,atol=5e-3)
+
+
+    def test_batch_nufft_grad(self):
+        batch_size = 8
+        pts_rot = self.pts_rot[:,:batch_size * self.img_size ** 2].reshape((3,batch_size,-1))
+        pts_rot = torch.tensor(pts_rot.copy(),device=self.device).transpose(0,1)
+        vol_torch = torch.tensor(self.vols.asnumpy(),device=self.device,requires_grad=True)
+        num_vols = vol_torch.shape[0]
+        plans = [nufft_plan.NufftPlan((self.img_size,)*3,num_vols,device = self.device) for i in range(batch_size)]
+        for i in range(batch_size):
+            plans[i].setpts(pts_rot[i])
+        vol_forward = torch.zeros((batch_size,num_vols,self.img_size,self.img_size),dtype=vol_torch.dtype,device=self.device)
+        for i in range(batch_size):
+            vol_forward[i] = projection_funcs.vol_forward(vol_torch,plans[i])
+
+        v1 = torch.norm(vol_forward)
+        v1.backward()
+        vol_forward_grad = vol_torch.grad
+
+        vol_torch = torch.tensor(self.vols.asnumpy(),device=self.device,requires_grad=True)
+        batch_plans = nufft_plan.NufftPlan((self.img_size,)*3,num_vols,device = self.device)
+        batch_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        batch_vol_forward = projection_funcs.vol_forward(vol_torch,batch_plans)
+
+        v2 = torch.norm(batch_vol_forward)
+        v2.backward()
+        batch_vol_forward_grad = vol_torch.grad
+
+
+        torch.testing.assert_close(vol_forward,batch_vol_forward,rtol=5e-3,atol=5e-3)
+        torch.testing.assert_close(vol_forward_grad,batch_vol_forward_grad,rtol=5e-3,atol=5e-3)
 
 
 

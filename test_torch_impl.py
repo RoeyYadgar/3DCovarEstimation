@@ -60,20 +60,17 @@ class TestTorchImpl(unittest.TestCase):
         pts_rot = pts_rot.to(self.device)
         images = images.to(self.device)
         filters = self.dataset.unique_filters[filter_inds].to(self.device)
-        plans = []
-        for i in range(num_ims):
-            plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
-            plan.setpts(pts_rot[i]) 
-            plans.append(plan)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
+        plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
 
-        cost_val = cost(vols,images,plans,filters,noise_var,reg_scale = reg)
+        cost_val = cost(vols,images,plan,filters,noise_var,reg_scale = reg)
         cost_val.backward()
 
         vols_grad = vols.grad.clone()
 
         scaled_vols = torch.tensor(vols.data * scaling_param,requires_grad = True,device = self.device)
         #When the volumes are scaled by alpha (and SNR is preserved) the cost gradient should scale by alpha ** 3
-        cost_val = cost(scaled_vols,images*scaling_param,plans,filters,noise_var * (scaling_param ** 2),reg_scale=reg)
+        cost_val = cost(scaled_vols,images*scaling_param,plan,filters,noise_var * (scaling_param ** 2),reg_scale=reg)
         cost_val.backward()
 
         scaled_vols_grad = scaled_vols.grad.clone()
@@ -81,7 +78,7 @@ class TestTorchImpl(unittest.TestCase):
 
         vols.grad.zero_()
         #When the filters are scaled by alpha (and SNR is preseverd) the cost gradient should scale by alpha ** 4 as well as the regularization parameter.
-        cost_val = cost(vols,images*scaling_param,plans,filters*scaling_param,noise_var * (scaling_param ** 2),reg_scale=reg*(scaling_param**4))
+        cost_val = cost(vols,images*scaling_param,plan,filters*scaling_param,noise_var * (scaling_param ** 2),reg_scale=reg*(scaling_param**4))
         cost_val.backward()
         scaled_filters_grid = vols.grad.clone()
         torch.testing.assert_close((scaled_filters_grid).to('cpu'), (scaling_param**4) * vols_grad.to('cpu'), rtol=5e-3,atol=5e-3)
@@ -99,17 +96,14 @@ class TestTorchImpl(unittest.TestCase):
 
         vols = torch.tensor(LegacyVolume(L=self.img_size,C=rank,dtype=np.float32,).generate().asnumpy().reshape(rank,self.img_size,self.img_size,self.img_size),dtype=torch.float32,requires_grad=True,device=self.device)
 
-        plans = []
-        for i in range(num_ims):
-            plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
-            plan.setpts(pts_rot[i]) 
-            plans.append(plan)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
+        plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
 
         images = torch.zeros(num_ims,self.img_size,self.img_size,device = self.device,dtype=torch.float32)
         for i in range(num_ims):
-            images[i] = vol_forward(vols,plans)[i,i%rank]
+            images[i] = vol_forward(vols,plan)[i,i%rank]
 
-        cost_val = cost(vols,2*images,plans,None,noise_var,reg_scale = reg)
+        cost_val = cost(vols,2*images,plan,None,noise_var,reg_scale = reg)
         cost_val.backward()
         vols_grad = vols.grad.clone()
 
@@ -120,17 +114,16 @@ class TestTorchImpl(unittest.TestCase):
         pts_rot = torch.tensor(rotated_grids(img_size_ds,rots).copy(),device=self.device,dtype=torch.float32).reshape((3,num_ims,img_size_ds**2))
         pts_rot = pts_rot.transpose(0,1)
         
-        plans = []
-        for i in range(num_ims):
-            plan = nufft_plan.NufftPlan((img_size_ds,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
-            plan.setpts(pts_rot[i]) 
-            plans.append(plan)
+
+        plan = nufft_plan.NufftPlan((img_size_ds,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
+        plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+
 
         images_ds = torch.zeros(num_ims,img_size_ds,img_size_ds,device = self.device,dtype=torch.float32)
         for i in range(num_ims):
-            images_ds[i] = vol_forward(vols_ds,plans)[i,i%rank]
+            images_ds[i] = vol_forward(vols_ds,plan)[i,i%rank]
 
-        cost_val = cost(vols_ds,2*images_ds,plans,None,noise_var * (2 ** (-2)),reg_scale = reg * (2 ** 2))
+        cost_val = cost(vols_ds,2*images_ds,plan,None,noise_var * (2 ** (-2)),reg_scale = reg * (2 ** 2))
         cost_val.backward()
         vols_grad_ds = vols_ds.grad.clone()
   

@@ -1,11 +1,11 @@
 import torch
 from scipy.stats import chi2
-from nufft_plan import BatchNufftPlan
+from nufft_plan import NufftPlan
 from projection_funcs import vol_forward
 
 
 
-def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8,start_ind = None,end_ind = None,return_eigen_forward = False):
+def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 64,start_ind = None,end_ind = None,return_eigen_forward = False):
     if(start_ind is None):
         start_ind = 0
     if(end_ind is None):
@@ -21,7 +21,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8,start_ind = None,en
     if(len(eigenvals.shape) == 1):
         eigenvals = torch.diag(eigenvals)
 
-    nufft_plans = BatchNufftPlan(batch_size,(L,)*3,batch_size=rank,dtype = dtype,device=device)
+    nufft_plans = NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device)
     coords = torch.zeros((end_ind-start_ind,rank),device=device)
     if(return_eigen_forward):
         eigen_forward_images = torch.zeros((end_ind-start_ind,rank,L,L),dtype=dtype)
@@ -31,7 +31,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8,start_ind = None,en
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
-        nufft_plans.setpts(pts_rot)
+        nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
         
         eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters)
         if(return_eigen_forward):
@@ -54,7 +54,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 8,start_ind = None,en
 
 
     
-def latentMAP(dataset,eigenvecs,eigenvals,batch_size=8,start_ind = None,end_ind = None,return_coords_covar = False):
+def latentMAP(dataset,eigenvecs,eigenvals,batch_size=64,start_ind = None,end_ind = None,return_coords_covar = False):
     if(start_ind is None):
         start_ind = 0
     if(end_ind is None):
@@ -69,7 +69,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=8,start_ind = None,end_ind 
     if(len(eigenvals.shape) == 1):
         eigenvals = torch.diag(eigenvals)
 
-    nufft_plans = BatchNufftPlan(batch_size,(L,)*3,batch_size=rank,dtype = dtype,device=device)
+    nufft_plans = NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device)
     coords = torch.zeros((end_ind-start_ind,rank),device=device)
     if(return_coords_covar):
         coords_covar = torch.zeros((end_ind-start_ind,rank,rank),dtype=dtype)
@@ -79,7 +79,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=8,start_ind = None,end_ind 
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
-        nufft_plans.setpts(pts_rot)
+        nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
         
         eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters)
 

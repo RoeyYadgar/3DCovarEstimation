@@ -22,7 +22,7 @@ class TestWienerImpl(unittest.TestCase):
                 ).generate()
 
         source = Simulation(
-            n=100,
+            n=256,
             vols=vols,
             dtype=np.float32,
             amplitudes=1,
