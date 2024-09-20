@@ -16,7 +16,9 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 64,start_ind = None,e
     dtype = eigenvecs.dtype
     device = eigenvecs.device
     
-    filters = dataset.unique_filters.to(device)
+    filters = dataset.unique_filters
+    if(len(filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
+        filters = filters.to(device)
     covar_noise = dataset.noise_var * torch.eye(rank,device = device)
     if(len(eigenvals.shape) == 1):
         eigenvals = torch.diag(eigenvals)
@@ -30,7 +32,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 64,start_ind = None,e
         num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)
-        batch_filters = filters[filter_indices] if len(filters) > 0 else None
+        batch_filters = filters[filter_indices].to(device) if len(filters) > 0 else None
         nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
         
         eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters)
@@ -65,7 +67,9 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=64,start_ind = None,end_ind
     dtype = eigenvecs.dtype
     device = eigenvecs.device
     
-    filters = dataset.unique_filters.to(device)
+    filters = dataset.unique_filters
+    if(len(filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
+        filters = filters.to(device)
     if(len(eigenvals.shape) == 1):
         eigenvals = torch.diag(eigenvals)
 
@@ -78,7 +82,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=64,start_ind = None,end_ind
         num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)
-        batch_filters = filters[filter_indices] if len(filters) > 0 else None
+        batch_filters = filters[filter_indices].to(device) if len(filters) > 0 else None
         nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
         
         eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters)
