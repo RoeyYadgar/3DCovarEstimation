@@ -178,6 +178,7 @@ class CovarTrainer():
         if(self.logTraining):
             pbar = tqdm(total=len(self.train_data), desc=f'Epoch {epoch} , ',position=0,leave=True)
 
+        self.cost_in_epoch = torch.tensor(0,device=self.device,dtype=torch.float32)
         for batch_ind,data in enumerate(self.train_data):
             images,pts_rot,filter_indices = data
             num_ims = images.shape[0]
@@ -186,6 +187,8 @@ class CovarTrainer():
             filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
             self.nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
             cost_val,vectors = self.run_batch(images,self.nufft_plans,filters)
+            with torch.no_grad():
+                self.cost_in_epoch += cost_val * self.batch_size
 
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
@@ -197,10 +200,17 @@ class CovarTrainer():
                         fro_err_val = self.log_fro_err[-1]
                         pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
                         pbar_description += f" , vecs norm : {torch.norm(vectors)}"
-                        pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
+                        #pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
                     pbar.set_description(pbar_description)
 
                 pbar.update(1)
+
+        if(self.isDDP):
+            torch.distributed.all_reduce(self.cost_in_epoch,op=torch.distributed.ReduceOp.SUM)
+
+        if(self.logTraining):
+            print("Total cost value in epoch : {:.2e}".format(self.cost_in_epoch.item()))
+            
     
     def train(self,max_epochs,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False,scale_params = True):
 
@@ -224,7 +234,7 @@ class CovarTrainer():
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
-        scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,step_size = 1, gamma = gamma_lr)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
 
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
@@ -232,7 +242,8 @@ class CovarTrainer():
             self.run_epoch(epoch)
 
             self.reg_scale *= gamma_reg
-            scheduler.step()
+            scheduler.step(self.cost_in_epoch)
+            print(f'New learning rate set to {scheduler.get_last_lr()}')
 
             if(self.logTraining and self.save_path is not None):
                 self.save_result()
@@ -360,7 +371,7 @@ def frobeniusNormDiff(vec1,vec2):
     return torch.sqrt(normdiff_squared)
 
 
-def evalCovarEigs(dataset,eigs,batch_size = 8,reg=0):
+def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
     device = eigs.device
     filters = dataset.unique_filters.to(device)
     num_eigs = eigs.shape[0]
@@ -373,7 +384,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg=0):
         images = images.to(device)
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
         nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,fourier_reg=reg) * batch_size
+        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,reg_scale=reg_scale,fourier_reg=fourier_reg) * batch_size
         cost_val += cost_term
    
     return cost_val/len(dataset)
