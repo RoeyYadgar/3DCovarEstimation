@@ -100,7 +100,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         source = source.normalize_background(do_ramp=False) #TODO: figure out why normalize background fucks things up
     
         dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
-        dataset.states = source.states #TODO : do this at dataset constructor
+        dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
         dataset.starfile = starfile
         pickle.dump(dataset,open(dataset_path,'wb'))
     else:
@@ -256,6 +256,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 @click.option('--reg',type=float,help='regularization scaling')
 @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
 def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',skip_processing = False,**training_kwargs):
+    training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
     covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,skip_processing = skip_processing,**training_kwargs)
 
 if __name__ == "__main__":
