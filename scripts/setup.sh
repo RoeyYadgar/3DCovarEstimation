@@ -46,6 +46,24 @@ then
 	cd ~
 fi
 
+if ! conda info --envs | grep -q "cryodrgn";
+then
+    conda create -n cryodrgn -y
+    conda activate cryodrgn
+    pip install cryodrgn
+    conda deactivate
+fi
+
+if ! conda info --envs | grep -q "recovar";
+then
+    conda create --name recovar python=3.11 -y
+    conda activate recovar
+    pip install -U "jax[cuda12_pip]"==0.4.23 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    git clone https://github.com/ma-gilles/recovar.git
+    pip install --no-deps -r  recovar/recovar_install_requirements.txt
+    python -m ipykernel install --user --name=recovar 
+    conda deactivate
+fi
 
 if [ ! -e "aspire" ]; #Matlab aspire installation
 then
