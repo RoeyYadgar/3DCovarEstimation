@@ -2,7 +2,7 @@ from utils import principalAngles , cosineSimilarity , sim2imgsrc , nonNormalize
 import os
 import torch
 from torch.utils.data import Dataset
-from aspire.utils import support_mask
+from aspire.utils import support_mask,fuzzy_mask
 import numpy as np
 from tqdm import tqdm
 import copy
@@ -37,6 +37,8 @@ class CovarDataset(Dataset):
    
         self.estimate_filters_gain()
         self.estimate_signal_var()
+        self.mask_images()
+        
     def __len__(self):
         return len(self.images)
     
@@ -86,33 +88,36 @@ class CovarDataset(Dataset):
 
     def estimate_signal_var(self,support_radius = None,batch_size=512):
         #Estimates the signal variance per pixel
-        L = self.images.shape[-1]
-        mask = torch.tensor(support_mask(L,support_radius))
+        mask = torch.tensor(support_mask(self.resolution,support_radius))
         mask_size = torch.sum(mask)
         
-        signal_psd = torch.zeros((L,L))
+        signal_psd = torch.zeros((self.resolution,self.resolution))
         for i in range(0,len(self.images),batch_size):
             images_masked = self.images[i:i+batch_size][:,mask]
             images_masked = self.images[i:i+batch_size] * mask
             signal_psd += torch.sum(torch.abs(centered_fft2(images_masked))**2,axis=0)
-        signal_psd /= len(self.images) * (L ** 2) * mask_size
+        signal_psd /= len(self.images) * (self.resolution ** 2) * mask_size
         signal_rpsd = average_fourier_shell(signal_psd)
 
-        noise_psd = torch.ones((L,L)) * self.noise_var / (L**2) 
+        noise_psd = torch.ones((self.resolution,self.resolution)) * self.noise_var / (self.resolution**2) 
         noise_rpsd = average_fourier_shell(noise_psd)
 
         self.signal_rpsd = (signal_rpsd - noise_rpsd)/(self.radial_filters_gain)
         self.signal_rpsd[self.signal_rpsd < 0] = 0 #in low snr setting the estimatoin for high radial resolution might not be accurate enough
-        self.signal_var = sum_over_shell(self.signal_rpsd,L,2).item()
+        self.signal_var = sum_over_shell(self.signal_rpsd,self.resolution,2).item()
             
     def estimate_filters_gain(self):
-        L = self.images.shape[-1]
         average_filters_gain_spectrum = torch.mean(self.unique_filters ** 2,axis=0) 
         radial_filters_gain = average_fourier_shell(average_filters_gain_spectrum)
-        estimated_filters_gain = sum_over_shell(radial_filters_gain,L,2).item() / (L**2)
+        estimated_filters_gain = sum_over_shell(radial_filters_gain,self.resolution,2).item() / (self.resolution**2)
 
         self.filters_gain = estimated_filters_gain
         self.radial_filters_gain = radial_filters_gain
+
+
+    def mask_images(self):
+        mask = torch.tensor(fuzzy_mask((self.resolution,)*2,dtype=np.float32),dtype=self.images.dtype)
+        self.images *= mask
         
         
 
