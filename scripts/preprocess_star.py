@@ -1,31 +1,57 @@
 import starfile
 import sys
 import os
+import click
+import numpy as np
+from aspire.source import RelionSource
 '''
-Script to generate a star file for preprocessed data:
-    creates a copy of a star file,with updated image and pixel size, and removed offsets.
-The actual preprocessing of .mrcs file is being done in the matlab script preprocess.m
+This script generates a pre-processed star and mrcs file.Pre processing includes centring and downsampling images.
 '''
 
 def replaceMRCSName(img_name,new_filename):
     img_num,_ = img_name.split('@')
     return f'{img_num}@{new_filename}'
 
-new_imageSize = float(sys.argv[2])
+def preprocess_statfile(input_star,output_star,mrcs_file,new_imageSize):
 
-input_star = sys.argv[1] + '.star'
-output_star = sys.argv[1] + f'_preprocessed_L{int(new_imageSize)}.star'
+    star = starfile.read(input_star)
+    star['optics']['rlnImagePixelSize'] = star['optics']['rlnImagePixelSize'] * star['optics']['rlnImageSize']/new_imageSize
+    star['optics']['rlnImageSize'] = int(new_imageSize)
+
+    star['particles'] = star['particles'].drop(columns=['rlnOriginXAngst','rlnOriginYAngst','rlnOriginX','rlnOriginY'],errors='ignore')
+
+    #Replace MRCS file name in star file image reference
+    mrcs_filename = os.path.split(mrcs_file)[1]
+    star['particles']['rlnImageName'] = [f'{i+1}@{mrcs_filename}' for i in range(len(star['particles']))]
+    starfile.write(star,output_star)
 
 
+def preprocess_mrcs(input_star,output_mrcs,image_size):
+    star = starfile.read(input_star)
+    pixel_size = star['optics']['rlnImagePixelSize'].loc[0]
+    source = RelionSource(input_star,pixel_size = pixel_size)
 
-star = starfile.read(input_star)
-star['optics']['rlnImagePixelSize'] = star['optics']['rlnImagePixelSize'] * star['optics']['rlnImageSize']/new_imageSize
-star['optics']['rlnImageSize'] = int(new_imageSize)
+    if('rlnOriginXAngst' in star['particles'].columns):
+        shifts = np.array([star['particles'].rlnOriginXAngst,star['particles'].rlnOriginYAnst]).T / pixel_size
+    elif('rlnOriginX' in star['particles'].columns):
+        shifts = np.array([star['particles'].rlnOriginX,star['particles'].rlnOriginY]).T
 
-star['particles'] = star['particles'].drop(columns=['rlnOriginXAngst','rlnOriginYAngst'])
+    images = source.images[:]
+    images = images.shift(-shifts)
+    images = images.downsample(image_size)
 
-#Replace MRCS file name in star file image reference
-mrcs_file = os.path.split(sys.argv[1])[1] + f'_preprocessed_L{int(new_imageSize)}.mrcs'
-star['particles']['rlnImageName']= star['particles']['rlnImageName'].apply(lambda s : replaceMRCSName(s,mrcs_file))
-starfile.write(star,output_star)
+    images.save(output_mrcs)
 
+@click.command()
+@click.option('-i','--input-star',type=str,help='input star file')
+@click.option('-o','--output-star',type=str,help='output star file')
+@click.option('-l','--imagesize',type=int,help='image size for downsampling')
+def preprocess(input_star,output_star,imagesize):
+    if(os.path.isdir(output_star)):
+        output_star = os.path.join(output_star,os.path.basename(input_star))
+    output_mrcs = output_star.replace('.star','.mrcs')
+    preprocess_statfile(input_star,output_star,output_mrcs,imagesize)
+    preprocess_mrcs(input_star,output_mrcs,imagesize)
+
+if __name__ == "__main__":
+    preprocess()
