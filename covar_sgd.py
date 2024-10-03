@@ -16,9 +16,11 @@ class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None):
         images = src.images[:]
         if(mean_volume is not None): #Substracted projected mean from images
-            projected_mean = src.vol_forward(mean_volume,0,src.n)
-            projected_mean = projected_mean.asnumpy().astype(images.dtype)
-            images -= projected_mean 
+            batch_size = 512
+            for i in range(0,src.n,batch_size): #TODO : do this with own wrapper of nufft to improve run time
+                projected_mean = src.vol_forward(mean_volume,i,batch_size)
+                projected_mean = projected_mean.asnumpy().astype(images.dtype)
+                images[i:min(i+batch_size,src.n)] -= projected_mean 
         images = images.shift(-src.offsets)
         images = images/(src.amplitudes[:,np.newaxis,np.newaxis].astype(images.dtype))
         self.resolution = src.L
