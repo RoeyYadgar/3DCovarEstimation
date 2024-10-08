@@ -18,7 +18,7 @@ def preprocess_statfile(input_star,output_star,mrcs_file,new_imageSize):
     star['optics']['rlnImagePixelSize'] = star['optics']['rlnImagePixelSize'] * star['optics']['rlnImageSize']/new_imageSize
     star['optics']['rlnImageSize'] = int(new_imageSize)
 
-    star['particles'] = star['particles'].drop(columns=['rlnOriginXAngst','rlnOriginYAngst','rlnOriginX','rlnOriginY'],errors='ignore')
+    star['particles'] = star['particles'].drop(columns=['rlnOriginXAngst','rlnOriginYAngst','rlnOriginX','rlnOriginY','rlnImageSize','rlnImagePixelSize'],errors='ignore')
 
     #Replace MRCS file name in star file image reference
     mrcs_filename = os.path.split(mrcs_file)[1]
