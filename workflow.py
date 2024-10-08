@@ -139,26 +139,26 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 
         num_states = torch.sum(torch.unique(dataset.states) != -1)
         cluster_centers = torch.zeros((num_states,covar_rank))
-        cluster_ind = torch.full((coords_est.shape[0],),-1)
+        class_vols_est = aspire.volume.Volume(np.zeros((num_states,L,L,L),dtype=np.float32))
+        vol_tmp_file = 'vol_tmp.mrc'
         state_ind = 0
         for state in torch.unique(dataset.states):
             if(state != -1):
                 mean_state_coord = torch.mean(coords_est[dataset.states == state],dim=0) #This uses the actual labels to compute the cluster center, used as a metric for covar reconstruction and not for the actual clustering.
-                cluster_centers[state_ind] = mean_state_coord.cpu()
-                state_coord_covar = torch.mean(coords_covar_est[dataset.states == state],dim=0) #TODO : is this the right way to compute this?
-                index_under_threshold = mahalanobis_threshold(coords_est,mean_state_coord,state_coord_covar.to('cuda:0'))
-                cluster_ind[index_under_threshold.to('cpu')] = state
-        
-
+                cluster_center_ind = torch.argmin(torch.norm(coords_est-mean_state_coord,dim=1))
+                cluster_center = coords_est[cluster_center_ind]
+                cluster_centers[state_ind] = cluster_center.cpu()
+                state_coord_covar = coords_covar_est[cluster_center_ind]
+                #state_coord_covar = torch.mean(coords_covar_est[dataset.states == state],dim=0) #TODO : is this the right way to compute this?
+                index_under_threshold = mahalanobis_threshold(coords_est,cluster_center,state_coord_covar.to('cuda:0'))
+                #index_under_threshold = mahalanobis_threshold(coords_est,cluster_center,state_coord_covar)
+                print(f'Number of images used for reconstructing state {state} : {torch.sum(index_under_threshold)}')
+                class_vols_est[state_ind] = relionReconstruct(dataset.starfile,vol_tmp_file,mrcs_index=index_under_threshold.cpu().numpy())
                 state_ind += 1
 
-        s = aspire.storage.StarFile(dataset.starfile)
-        s['particles']['_rlnClassNumber'] = cluster_ind.tolist()
-        s.write(dataset.starfile + '.tmp')
-        reconstructClass(dataset.starfile+'.tmp',path.join(result_dir,'reconstructed_class_vols.mrc'),overwrite=True)
-        os.remove(dataset.starfile+'.tmp')
+        os.remove(vol_tmp_file)        
+        class_vols_est.save(path.join(result_dir,'reconstructed_class_vols.mrc'),overwrite=True)
 
-        class_vols_est = aspire.volume.Volume.load(path.join(result_dir,'reconstructed_class_vols.mrc'))
         class_vols_GD = aspire.volume.Volume.load(path.join(result_dir,'class_vols.mrc'))
 
         v1 = class_vols_est.asnumpy().reshape(num_states,-1)

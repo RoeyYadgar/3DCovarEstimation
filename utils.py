@@ -198,6 +198,8 @@ def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs
         vol.save(outputfile,overwrite=True)
     else:
         vol = Volume.load(outputfile)
+    if(mrcs_index is not None):
+        os.remove(subfile)
     return vol
 
 
