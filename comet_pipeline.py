@@ -11,13 +11,14 @@ from workflow import covar_workflow,covar_processing
 @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
 @click.option('-w','--whiten',is_flag = True,default=True,help='wether to whiten the images before processing')
 @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
+@click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
 @click.option('--disable-comet',is_flag = True,default = False,help='wether to disable logging of run to comet')
 @click.option('--batch-size',type=int,help = 'training batch size')
 @click.option('--max-epochs',type=int,help = 'number of epochs to train')
 @click.option('--lr',type=float,help= 'training learning rate')
 @click.option('--reg',type=float,help='regularization scaling')
 @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
-def run_pipeline(name,starfile,rank,whiten,noise_estimator,disable_comet,**training_kwargs):
+def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,disable_comet,**training_kwargs):
     if(not disable_comet):
         image_size = int(float(StarFile(starfile)['optics']['_rlnImageSize'][0]))
         run_config  = {'image_size' : image_size, 'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
@@ -26,7 +27,7 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,disable_comet,**train
         exp.log_parameters(run_config)
         #TODO : add to parameters image size. pass training arguments to workflow
     training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
-    data_dict, figure_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,**training_kwargs)
+    data_dict, figure_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
 
     if(not disable_comet):
         result_dir = os.path.join(os.path.split(starfile)[0],'result_data')

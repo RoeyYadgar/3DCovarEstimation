@@ -4,7 +4,7 @@ from sklearn.decomposition import PCA
 import os
 import torch
 from numpy import random
-from aspire.utils import coor_trans,Rotation
+from aspire.utils import coor_trans,Rotation,grid_2d,grid_3d
 from aspire.volume import Volume
 from aspire.source.image import ArrayImageSource
 from aspire.storage.starfile import StarFile
@@ -138,6 +138,9 @@ def np2torchDtype(np_dtype):
 
     return torch.float64 if (np_dtype == np.double) else torch.float32
 
+def get_torch_device():
+    return torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu")
+
 
 def appendCSV(dataframe,csv_file):
     if(os.path.isfile(csv_file)):
@@ -148,7 +151,28 @@ def appendCSV(dataframe,csv_file):
     else:
         dataframe.to_csv(csv_file)
         
-        
+def soft_edged_kernel(radius,L,dim,radius_backoff = 2):
+    #Implementation is based on RECOVAR https://github.com/ma-gilles/recovar/blob/main/recovar/mask.py#L106
+    if(radius < 3):
+        radius = 3
+        print(f'Warning : radius value {radius} is too small. setting radius to 3 pixels.')
+    if(dim == 2):
+        grid_func = grid_2d
+    elif(dim == 3):
+        grid_func = grid_3d
+
+    grid_radius = grid_func(L,shifted=True,normalized=False)['r']
+    radius0 = radius - radius_backoff
+
+    kernel = np.zeros(grid_radius.shape)
+
+    kernel[grid_radius < radius0] = 1
+
+    kernel = np.where((grid_radius >= radius0)*(grid_radius < radius),(1+np.cos(np.pi*(grid_radius-radius0)/(radius-radius0)))/2,kernel)
+
+    return kernel / np.sum(kernel)
+
+
 def meanCTFPSD(ctfs,L):
     ctfs_eval_grid = [np.power(ctf.evaluate_grid(L),2) for ctf in ctfs]
     return np.mean(np.array(ctfs_eval_grid),axis=0)

@@ -57,7 +57,7 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
-def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',generate_figs = True,save_data = True,skip_processing=False,**training_kwargs):
+def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
@@ -99,7 +99,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
         #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
         source = source.normalize_background(do_ramp=False) #TODO: figure out why normalize background fucks things up
     
-        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est)
+        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
         dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
         dataset.starfile = starfile
         pickle.dump(dataset,open(dataset_path,'wb'))
@@ -249,15 +249,16 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
 @click.option('-w','--whiten',is_flag = True,default=True,help='wether to whiten the images before processing')
 @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
+@click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
 @click.option('--skip-processing',is_flag = True,default = False,help='wether to disable logging of run to comet')
 @click.option('--batch-size',type=int,help = 'training batch size')
 @click.option('--max-epochs',type=int,help = 'number of epochs to train')
 @click.option('--lr',type=float,help= 'training learning rate')
 @click.option('--reg',type=float,help='regularization scaling')
 @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
-def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',skip_processing = False,**training_kwargs):
+def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',skip_processing = False,**training_kwargs):
     training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
-    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,skip_processing = skip_processing,**training_kwargs)
+    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,skip_processing = skip_processing,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()
