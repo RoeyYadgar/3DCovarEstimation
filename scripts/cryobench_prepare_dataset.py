@@ -16,10 +16,10 @@ def prepare_dataset(star_file,image_sizes,labels):
 
     for image_size in image_sizes:
         downsample_dir = os.path.join(stardir,f'downsample_L{image_size}')
-        
+        downsample_star = os.path.join(downsample_dir,os.path.basename(star_file))
         os.mkdir(downsample_dir) 
         os.system(f'python scripts/preprocess_star.py -i {star_file} -o {downsample_dir} -l {image_size}')
-        os.system(f'bash scripts/cryodrgn_preprocess.sh {star_file} {image_size} {downsample_dir}')
+        os.system(f'bash scripts/cryodrgn_preprocess.sh {downsample_star} {image_size} {downsample_dir}')
 
 
 
