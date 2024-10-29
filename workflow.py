@@ -86,18 +86,19 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
 
     dataset_path = path.join(result_dir,'dataset.pkl')
     if(not path.isfile(dataset_path)):
-        if(whiten): #TODO : speed this up
+        noise_est_num_ims = np.min(source.n,2**12)
+        if(whiten): #TODO : speed this up without aspire implementation. for now noise estimation uses only 2**12 images
             if(noise_estimator == 'anisotropic'):
-                noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source)
+                noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source[:noise_est_num_ims])
             elif(noise_estimator == 'white'):
-                noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
+                noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
             source = source.whiten(noise_estimator)
             noise_var = 1
         else:
-            noise_estimator = aspire.noise.WhiteNoiseEstimator(source)
+            noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
             noise_var = noise_estimator.estimate()
         #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
-        source = source.normalize_background(do_ramp=False) #TODO: figure out why normalize background fucks things up
+        source = source.normalize_background(do_ramp=False)
     
         dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
         dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor

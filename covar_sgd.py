@@ -14,18 +14,8 @@ from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_s
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask='fuzzy'):
-        images = src.images[:]
-        if(mean_volume is not None): #Substracted projected mean from images
-            batch_size = 512
-            for i in range(0,src.n,batch_size): #TODO : do this with own wrapper of nufft to improve run time
-                projected_mean = src.vol_forward(mean_volume,i,batch_size)
-                projected_mean = projected_mean.asnumpy().astype(images.dtype)
-                images[i:min(i+batch_size,src.n)] -= projected_mean 
-        images = images.shift(-src.offsets)
-        images = images/(src.amplitudes[:,np.newaxis,np.newaxis].astype(images.dtype))
         self.resolution = src.L
-        self.images = torch.tensor(images)
-        self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,self.images.shape[0],self.resolution**2))
+        self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,src.n,self.resolution**2))
         self.pts_rot = self.pts_rot.transpose(0,1) 
         self.noise_var = noise_var
 
@@ -37,6 +27,7 @@ class CovarDataset(Dataset):
         for i in range(num_filters):
             self.unique_filters[i] = torch.tensor(src.unique_filters[i].evaluate_grid(src.L))
    
+        self.images = torch.tensor(self.preprocess_images(src,mean_volume))
         self.estimate_filters_gain()
         self.estimate_signal_var()
         self.mask_images(mask)
@@ -55,11 +46,34 @@ class CovarDataset(Dataset):
         pts_rot = pts_rot.to(device)
         filters = self.unique_filters[filter_indices].to(device) if len(self.unique_filters) > 0 else None
 
-        self.nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
 
         return images,nufft_plan,filters
     '''
 
+    def preprocess_images(self,src,mean_volume,batch_size=512):
+        device = get_torch_device()
+        mean_volume = torch.tensor(mean_volume.asnumpy(),device=device)
+        nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean_volume.dtype,device=device)
+
+        images = src.images[:]
+        images = images.shift(-src.offsets)
+        images = images/(src.amplitudes[:,np.newaxis,np.newaxis].astype(images.dtype))
+        if(mean_volume is not None): #Substracted projected mean from images. Using own implemenation of volume projection since Aspire implemention is too slow
+            for i in range(0,src.n,batch_size): #TODO : do this with own wrapper of nufft to improve run time
+                pts_rot = self.pts_rot[i:(i+batch_size)]
+                filter_indices = self.filter_indices[i:(i+batch_size)]
+                filters = self.unique_filters[filter_indices].to(device) if len(self.unique_filters) > 0 else None
+                pts_rot = pts_rot.to(device)
+                nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+                projected_mean = vol_forward(mean_volume,nufft_plan,filters).squeeze(1)
+
+
+                images[i:min(i+batch_size,src.n)] -= projected_mean.cpu().numpy().astype(images.dtype)
+
+
+        return images
+    
     def set_vectorsGD(self,vectorsGD):
         if(type(vectorsGD) == torch.Tensor or type(vectorsGD) == np.ndarray):
             if(type(vectorsGD) != torch.Tensor):
