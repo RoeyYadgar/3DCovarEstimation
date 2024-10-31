@@ -84,29 +84,26 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
     print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
 
-    dataset_path = path.join(result_dir,'dataset.pkl')
-    if(not path.isfile(dataset_path)):
-        noise_est_num_ims = np.min(source.n,2**12)
-        if(whiten): #TODO : speed this up without aspire implementation. for now noise estimation uses only 2**12 images
-            if(noise_estimator == 'anisotropic'):
-                noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source[:noise_est_num_ims])
-            elif(noise_estimator == 'white'):
-                noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-            source = source.whiten(noise_estimator)
-            noise_var = 1
-        else:
+
+    noise_est_num_ims = min(source.n,2**12)
+    if(whiten): #TODO : speed this up without aspire implementation. for now noise estimation uses only 2**12 images
+        if(noise_estimator == 'anisotropic'):
+            noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source[:noise_est_num_ims])
+        elif(noise_estimator == 'white'):
             noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-            noise_var = noise_estimator.estimate()
-        #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
-        source = source.normalize_background(do_ramp=False)
-    
-        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
-        dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
-        dataset.starfile = starfile
-        pickle.dump(dataset,open(dataset_path,'wb'))
+        source = source.whiten(noise_estimator)
+        noise_var = 1
     else:
-        dataset = pickle.load(open(dataset_path,'rb'))
-        dataset.set_vectorsGD(covar_eigenvecs_gd) #Overwrite vectorsGD attribute since cached dataset might contain different vectors
+        noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
+        noise_var = noise_estimator.estimate()
+    #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
+    source = source.normalize_background(do_ramp=False)
+
+    dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
+    dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
+    dataset.starfile = starfile
+    
+    
 
     return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data,skip_processing,**training_kwargs)
 
