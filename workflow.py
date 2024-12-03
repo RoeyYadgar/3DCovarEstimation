@@ -118,7 +118,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         #Perform optimization for eigenvectors estimation
         cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var)
         default_training_kwargs = {'batch_size' : 32, 'max_epochs' : 10,
-                                'lr' : 1e-3,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+                                'lr' : 1e-2,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                                 'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
                                 'orthogonal_projection' : True}
         default_training_kwargs.update(training_kwargs)
@@ -225,7 +225,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         rec_fsc = fsc[1]
         fsc_auc = []
         for i in range(class_vols_GD.shape[0]):
-            fsc_auc.append(auc(np.linspace(0,1,L//2),rec_fsc[i].reshape(-1)))
+            fsc_auc.append(auc(np.arange(L//2)/L,np.abs(rec_fsc[i]).reshape(-1)))
         data_dict['fsc_auc_mean'] = np.mean(fsc_auc)
         data_dict['fsc_auc_std'] = np.std(fsc_auc)
         
