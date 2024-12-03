@@ -5,6 +5,7 @@ import pickle
 from matplotlib import pyplot as plt
 import aspire
 from umap import UMAP
+from sklearn.metrics import auc
 import click
 from utils import *
 from covar_sgd import CovarDataset,Covar
@@ -57,7 +58,7 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
-def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,**training_kwargs):
+def covar_workflow(starfile,covar_rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
@@ -69,15 +70,15 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     
     mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = False)
 
-    if(covar_eigenvecs is None):
-        #Estimate ground truth states:
+    if(class_vols is None):
+        #Estimate ground truth states #TODO : should only be done if ground truth labels exist and some flag is given
         class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
-        #Compute ground truth eigenvectors
-        _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
-        states_dist = counts/np.sum(counts)
-        covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
-    else:
-        covar_eigenvecs_gd = covar_eigenvecs.asnumpy().reshape((covar_rank,-1))
+    elif(class_vols.resolution != L): #Downsample ground truth volumes
+        class_vols = class_vols.downsample(L)
+    #Compute ground truth eigenvectors
+    _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
+    states_dist = counts/np.sum(counts)
+    covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
 
     #Print useful info TODO: use log files
     print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
@@ -102,6 +103,7 @@ def covar_workflow(starfile,covar_rank,covar_eigenvecs = None,whiten=True,noise_
     dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
     dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
     dataset.starfile = starfile
+    dataset.class_vols = class_vols
     
     
 
@@ -157,7 +159,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         os.remove(vol_tmp_file)        
         class_vols_est.save(path.join(result_dir,'reconstructed_class_vols.mrc'),overwrite=True)
 
-        class_vols_GD = aspire.volume.Volume.load(path.join(result_dir,'class_vols.mrc'))
+        class_vols_GD = dataset.class_vols
 
         v1 = class_vols_est.asnumpy().reshape(num_states,-1)
         v2 = class_vols_GD.asnumpy().reshape(num_states,-1)
@@ -220,6 +222,13 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         ax.legend([f'Class {i}' for i in range(num_states)])
         figure_dict['reconstructed_class_vol_fsc'] = fig
 
+        rec_fsc = fsc[1]
+        fsc_auc = []
+        for i in range(class_vols_GD.shape[0]):
+            fsc_auc.append(auc(np.linspace(0,1,L//2),rec_fsc[i].reshape(-1)))
+        data_dict['fsc_auc_mean'] = np.mean(fsc_auc)
+        data_dict['fsc_auc_std'] = np.std(fsc_auc)
+        
 
         fig,ax = plt.subplots()
         fsc = vol_fsc(Volume(eigen_est.cpu().numpy()),Volume(eigenvectors_GD.cpu().numpy()))
