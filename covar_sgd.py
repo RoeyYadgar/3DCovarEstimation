@@ -425,8 +425,10 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
         vols_fourier = centered_fft3(vols)
         vols_fourier*= torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
-        reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)
-        cost_val += reg_scale * reg_cost
+        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
+        #reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)
+        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
+        cost_val += reg_scale * reg_cost /(L**4) #L^4 needed here because objective function scales with L^2 when moving into fourier space? #TODO : not sure this is needed (should get canceled with noise?)
 
     return cost_val
 
