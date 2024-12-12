@@ -2,9 +2,59 @@ import torch
 from cufinufft import Plan as cuPlan 
 from finufft import Plan
 import numpy as np
+from abc import ABC
+
+class NufftPlanAbstract(ABC):
+
+    def setpts(self,points):
+        pass
+
+    def execute_forward(self,volume):
+        pass
+
+class NufftPlanDiscretized(NufftPlanAbstract):
+    """
+    Discretized version of the NUFFT operator (specifficaly for the usage of the projection operator and not general case of NUFFT).
+    Uses pytorch's `grid_sample` function to interpolate from the fourier tranform of the given volume.
+    Assumes input volume is already given in frequency domain.
+    """
+    def __init__(self,sz,mode='bilinear'):
+        self.sz = sz
+        self.mode = mode
+
+    def setpts(self,points):
+        L = self.sz[0]
+        self.points = points.transpose(-2,-1).reshape(1,-1,L,L,3)
+        self.points = self.points.flip(-1) #grid_sample uses xyz convention unlike the zyx given by aspire's `rotated_grids`
+
+        #For even image sizes fourier points are [-L/2, ... , L/2-1]/(L/2)*pi while torch grid_sample treats grid as [-1 , ... , 1]
+        #For add image sizes fourier points are [-(L-1)/2,...,(L-1)/2]/(L/2)*pi
+        if(L % 2 == 0):
+            self.points = (self.points + 1/L) 
+        self.points *= (L/(L-1)) / torch.pi
+
+        self.batch_points = self.points.shape[1]
+
+    def execute_forward(self,volume):
+        """
+        Assumes volume is given in fourier domain with shape (N,L,L,L)
+        """
+        L = self.sz[0]
+        #For some reason grid_sample does not support complex data. Instead the real and imaginary parts are splitted into different 'channels'
+        volume = volume.unsqueeze(1)
+        volume_real_imag_split = torch.cat((volume.real,volume.imag),dim=1).reshape(-1,L,L,L) #Shape of (N*2,L,L,L)
+        #Grid sample's batch is used when we need to sample different volumes with different grids, here however we want to sample all volumes with different grids so we use the grid_sample channels instead.
+        output = torch.nn.functional.grid_sample(input=volume_real_imag_split.unsqueeze(0),grid=self.points,mode=self.mode,align_corners=True) #Shape of (1,N*2,n,L,L)
+
+        #Put it back into its complex form
+        output = output.reshape(-1,2,self.batch_points,L,L)
+        output = torch.complex(output[:,0],output[:,1]) #Shape of (N,n,L,L)
+        return output
 
 
-class NufftPlan():
+
+    
+class NufftPlan(NufftPlanAbstract):
     def __init__(self,sz,batch_size = 1,eps = 1e-6,dtype = torch.float32,device = torch.device('cpu'),**kwargs):
         self.sz = sz
         self.batch_size = batch_size

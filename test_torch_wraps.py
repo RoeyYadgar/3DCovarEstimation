@@ -12,7 +12,6 @@ from aspire.nufft import nufft as aspire_nufft
 from aspire.nufft import anufft as aspire_anufft
 
 import nufft_plan
-from nufft_disc import nufft_disc
 import projection_funcs
 
 class TestTorchWraps(unittest.TestCase):
@@ -54,7 +53,9 @@ class TestTorchWraps(unittest.TestCase):
         nufft_forward_torch = nufft_forward_torch.cpu().numpy()
 
         pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(),device=self.device) + torch.pi , 2 * torch.pi) - torch.pi)
-        nufft_forward_disc = nufft_disc(projection_funcs.centered_fft3(vol_torch),pts_rot_torch)
+        plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3)
+        plan.setpts(pts_rot_torch)
+        nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch))
         nufft_forward_disc = nufft_forward_disc.reshape(1,-1).cpu().numpy()
 
         np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-3)
@@ -70,7 +71,9 @@ class TestTorchWraps(unittest.TestCase):
         nufft_forward_torch = nufft_forward_torch.cpu().numpy()
 
         pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(),device=self.device) + torch.pi , 2 * torch.pi) - torch.pi)
-        nufft_forward_disc = nufft_disc(projection_funcs.centered_fft3(vol_torch),pts_rot_torch)
+        plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3)
+        plan.setpts(pts_rot_torch)
+        nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch))
         nufft_forward_disc = nufft_forward_disc.reshape(self.vols.shape[0],-1).cpu().numpy()
 
         np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-3)
