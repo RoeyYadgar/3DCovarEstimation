@@ -58,54 +58,65 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
-def covar_workflow(starfile,covar_rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,**training_kwargs):
+def covar_workflow(starfile,covar_rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,save_dataset = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
-    if(not path.isdir(result_dir)):
-        os.mkdir(result_dir)
-    pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
-    source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
-    L = source.L
-    
-    mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = False)
+    dataset_path = os.path.join(result_dir,'dataset.pkl')
+    #Only perform this when save_dataset flag is False and there is no dataset pickle file already saved 
+    #(this is used for debugging to not have to perform preprocessing all over again)
+    if((not save_dataset) or (not os.path.isfile(dataset_path))): 
+        if(not path.isdir(result_dir)):
+            os.mkdir(result_dir)
+        pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
+        source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
+        L = source.L
+        
+        mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = False)
 
-    if(class_vols is None):
-        #Estimate ground truth states #TODO : should only be done if ground truth labels exist and some flag is given
-        class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
-    elif(class_vols.resolution != L): #Downsample ground truth volumes
-        class_vols = class_vols.downsample(L)
-    #Compute ground truth eigenvectors
-    _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
-    states_dist = counts/np.sum(counts)
-    covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
+        if(class_vols is None):
+            #Estimate ground truth states #TODO : should only be done if ground truth labels exist and some flag is given
+            class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
+        elif(class_vols.resolution != L): #Downsample ground truth volumes
+            class_vols = class_vols.downsample(L)
+        #Compute ground truth eigenvectors
+        _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
+        states_dist = counts/np.sum(counts)
+        covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
 
-    #Print useful info TODO: use log files
-    print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
-    print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
-    print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
+        #Print useful info TODO: use log files
+        print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
+        print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
+        print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
 
 
-    noise_est_num_ims = min(source.n,2**12)
-    if(whiten): #TODO : speed this up without aspire implementation. for now noise estimation uses only 2**12 images
-        if(noise_estimator == 'anisotropic'):
-            noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source[:noise_est_num_ims])
-        elif(noise_estimator == 'white'):
+        noise_est_num_ims = min(source.n,2**12)
+        if(whiten): #TODO : speed this up without aspire implementation. for now noise estimation uses only 2**12 images
+            if(noise_estimator == 'anisotropic'):
+                noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source[:noise_est_num_ims])
+            elif(noise_estimator == 'white'):
+                noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
+            source = source.whiten(noise_estimator)
+            noise_var = 1
+        else:
             noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-        source = source.whiten(noise_estimator)
-        noise_var = 1
-    else:
-        noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-        noise_var = noise_estimator.estimate()
-    #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
-    source = source.normalize_background(do_ramp=False)
+            noise_var = noise_estimator.estimate()
+        #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
+        source = source.normalize_background(do_ramp=False)
 
-    dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
-    dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
-    dataset.starfile = starfile
-    dataset.class_vols = class_vols
-    
-    
+        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
+        dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
+        dataset.starfile = starfile
+        dataset.class_vols = class_vols
+        
+        if(save_dataset):
+            with open(dataset_path,'wb') as fid:
+                pickle.dump(dataset,fid)
+    else:
+        print(f"Reading pickled dataset from {dataset_path}")
+        with open(dataset_path,'rb') as fid:
+            dataset = pickle.load(fid)
+        print(f"Dataset loaded successfuly")
 
     return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data,skip_processing,**training_kwargs)
 
@@ -254,18 +265,20 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 @click.command()    
 @click.option('-s','--starfile',type=str, help='path to star file.')
 @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
-@click.option('-w','--whiten',is_flag = True,default=True,help='wether to whiten the images before processing')
+@click.option('-w','--whiten',is_flag = True,default=True,help='whether to whiten the images before processing')
 @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
 @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
-@click.option('--skip-processing',is_flag = True,default = False,help='wether to disable logging of run to comet')
+@click.option('--skip-processing',is_flag = True,default = False,help='whether to disable logging of run to comet')
+@click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
 @click.option('--batch-size',type=int,help = 'training batch size')
 @click.option('--max-epochs',type=int,help = 'number of epochs to train')
 @click.option('--lr',type=float,help= 'training learning rate')
 @click.option('--reg',type=float,help='regularization scaling')
 @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
-def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',skip_processing = False,**training_kwargs):
+@click.option('--orthogonal-projection',type=bool,default = True,help = "force orthogonality of eigen vectors while training (default True)")
+def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',skip_processing = False,debug = False,**training_kwargs):
     training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
-    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,skip_processing = skip_processing,**training_kwargs)
+    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,skip_processing = skip_processing,save_dataset = debug,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()
