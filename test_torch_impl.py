@@ -8,7 +8,7 @@ from aspire.source import Simulation
 
 import nufft_plan
 #from covar_estimation import CovarCost
-from covar_sgd import Covar,cost,CovarDataset
+from covar_sgd import Covar,cost,cost_fourier_domain,CovarDataset
 from utils import volsCovarEigenvec,generateBallVoxel
 from projection_funcs import vol_forward,centered_fft3
 from fsc_utils import rpsd,expand_fourier_shell
@@ -20,7 +20,7 @@ from aspire.utils import Rotation
 class TestTorchImpl(unittest.TestCase):
     
     def setUp(self):
-        self.img_size = 16
+        self.img_size = 32
         self.num_imgs = 100
         c = 5
         self.vols = LegacyVolume(
@@ -38,7 +38,7 @@ class TestTorchImpl(unittest.TestCase):
             offsets = 0,
             unique_filters=[RadialCTFFilter(defocus=d,pixel_size=3) for d in np.linspace(8e3, 2.5e4, 7)]
         )
-        self.dataset = CovarDataset(self.sim,noise_var=0,vectorsGD = volsCovarEigenvec(self.vols))
+        self.dataset = CovarDataset(self.sim,noise_var=1,vectorsGD = volsCovarEigenvec(self.vols),mean_volume=Volume(np.zeros((self.img_size,)*3,dtype=np.float32)))
         rots = self.sim.rotations[:]
         pts_rot = rotated_grids(self.img_size,rots)
         self.pts_rot = pts_rot.reshape((3,-1))
@@ -198,7 +198,41 @@ class TestTorchImpl(unittest.TestCase):
 
         torch.testing.assert_close(reg_term_efficient_computation,reg_term_inefficient_computation, rtol=5e-3,atol=5e-3)
         
+    def test_fourier_domain_cost(self):
+        batch_size = 16
+        rank = 4
+        covar = Covar(self.img_size,rank=rank)
+        ims,pts_rot,filter_inds = self.dataset[:batch_size]
+        filters = self.dataset.unique_filters[filter_inds]
+        pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
 
+        #Spatial domain cost
+        plans = nufft_plan.NufftPlan((self.img_size,)*3,batch_size=rank)
+        plans.setpts(pts_rot)
+        cost_spatial = torch.tensor([
+            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var),
+            cost(covar.vectors * 1e3,ims,plans,filters,self.dataset.noise_var),
+            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var * 1e6)])
+
+        #Fourier domain cost
+        fourier_data = self.dataset.copy()
+        fourier_data.to_fourier_domain()
+        ims,pts_rot,filter_inds = fourier_data[:batch_size]
+        filters = fourier_data.unique_filters[filter_inds]
+        pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
+
+        covar.to_fourier_domain()
+        plans = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,mode='bilinear')
+        plans.setpts(pts_rot)
+        cost_fourier = torch.tensor([
+            cost_fourier_domain(covar.get_vectors(),ims, plans,filters,fourier_data.noise_var),
+            cost_fourier_domain(covar.get_vectors()*1e3,ims, plans,filters,fourier_data.noise_var),
+            cost_fourier_domain(covar.get_vectors(),ims, plans,filters,fourier_data.noise_var*1e6)])
+
+        print((cost_spatial,cost_fourier))
+        print((cost_spatial/cost_fourier) * self.img_size ** 4)
+
+        torch.testing.assert_close(cost_fourier/cost_spatial,(self.img_size ** 4) * torch.ones_like(cost_fourier), rtol=5e-3,atol=5e-3)
 
 
 if __name__ == "__main__":
