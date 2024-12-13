@@ -92,7 +92,7 @@ def cosineSimilarity(vec1,vec2):
     vec2 = vec2.reshape((vec2.shape[0],-1))
     vec1 = torch.linalg.svd(vec1,full_matrices = False)[2]
     vec2 = torch.linalg.svd(vec2,full_matrices = False)[2]
-    cosine_sim = torch.matmul(vec1,torch.transpose(vec2,0,1)).cpu().numpy()
+    cosine_sim = torch.matmul(vec1,torch.transpose(vec2,0,1).conj()).cpu().numpy()
     
     return cosine_sim
     
@@ -137,6 +137,18 @@ def asnumpy(data):
 def np2torchDtype(np_dtype):
 
     return torch.float64 if (np_dtype == np.double) else torch.float32
+
+dtype_mapping = {
+    torch.float16 : torch.complex32,
+    torch.complex32 : torch.float16,
+    torch.float32 : torch.complex64,
+    torch.complex64 : torch.float32,
+    torch.float64 : torch.complex128,
+    torch.complex128 : torch.float64
+}
+def get_complex_real_dtype(dtype):
+    return dtype_mapping[dtype]
+
 
 def get_torch_device():
     return torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu")

@@ -1,4 +1,4 @@
-from utils import cosineSimilarity,soft_edged_kernel,get_torch_device
+from utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
 import os
 import torch
 from torch.utils.data import Dataset
@@ -8,20 +8,21 @@ from tqdm import tqdm
 import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
-from nufft_plan import NufftPlan
-from projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3
+from nufft_plan import NufftPlan,NufftPlanDiscretized
+from projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3
 from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask='fuzzy'):
         self.resolution = src.L
-        self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,src.n,self.resolution**2))
+        self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,src.n,self.resolution**2)) #TODO : replace this with torch affine_grid with size (N,1,L,L,1)
         self.pts_rot = self.pts_rot.transpose(0,1) 
+        self.pts_rot = (torch.remainder(self.pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
         self.noise_var = noise_var
 
         self.set_vectorsGD(vectorsGD)
 
-        self.filter_indices = torch.tensor(src.filter_indices)
+        self.filter_indices = torch.tensor(src.filter_indices.astype(int)) #For some reason ASPIRE store filter_indices as string for some star files
         num_filters = len(src.unique_filters)
         self.unique_filters = torch.zeros((num_filters,src.L,src.L))
         for i in range(num_filters):
@@ -31,6 +32,9 @@ class CovarDataset(Dataset):
         self.estimate_filters_gain()
         self.estimate_signal_var()
         self.mask_images(mask)
+
+        self.dtype = self.images.dtype
+        self._in_spatial_domain = True
         
     def __len__(self):
         return len(self.images)
@@ -113,6 +117,21 @@ class CovarDataset(Dataset):
     def copy(self):
         return copy.deepcopy(self)
     
+
+    def to_fourier_domain(self):
+        if(self._in_spatial_domain):
+            self.images = centered_fft2(self.images)
+            #TODO : transform points into grid_sample format here instead of in discretization function?
+            self.noise_var *= self.resolution**2 #2-d Fourier transform scales everything by a factor of L (and the variance scaled by L**2)
+            self.dtype = get_complex_real_dtype(self.dtype)
+            self._in_spatial_domain = False
+
+    def to_spatial_domain(self):
+        if(not self._in_spatial_domain):
+            self.images = centered_ifft2(self.images)
+            self.noise_var /= self.resolution**2
+            self.dtype = get_complex_real_dtype(self.dtype)
+            self._in_spatial_domain = True
 
     def estimate_signal_var(self,support_radius = None,batch_size=512):
         #Estimates the signal variance per pixel
@@ -201,14 +220,10 @@ class CovarTrainer():
         self.batch_size = train_data.batch_size
         self.isDDP = type(self._covar) == torch.nn.parallel.distributed.DistributedDataParallel
         vectors = self.covar_vectors()
-        rank = vectors.shape[0]
-        dtype = vectors.dtype
         vol_shape = vectors.shape[1:] 
-        self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=device)
         self.filters = train_data.dataset.unique_filters
         if(len(self.filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
             self.filters = self.filters.to(self.device)
-        self.noise_var = train_data.dataset.noise_var
         self.save_path = save_path
         self.logTraining = self.device.index == 0 or self.device == torch.device('cpu') #Only log training on the first gpu
         self.training_log_freq = training_log_freq
@@ -229,8 +244,12 @@ class CovarTrainer():
     def covar(self):
         return self._covar.module if self.isDDP else self._covar
     
+    @property
+    def noise_var(self):
+        return self.train_data.dataset.noise_var
+    
     def covar_vectors(self):
-        return self.covar.vectors
+        return self.covar.get_vectors()
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
@@ -264,6 +283,7 @@ class CovarTrainer():
 
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
+                    vectors = self.covar_vectors()
                     self.log_training(vectors)
                     pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
                     if(self.vectorsGD is not None):
@@ -284,7 +304,7 @@ class CovarTrainer():
             print("Total cost value in epoch : {:.2e}".format(self.cost_in_epoch.item()))
             
     
-    def train(self,max_epochs,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,orthogonal_projection = False,scale_params = True):
+    def train(self,max_epochs,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,nufft_disc = None,orthogonal_projection = False,scale_params = True):
 
         self.use_orthogonal_projection = orthogonal_projection
 
@@ -303,10 +323,25 @@ class CovarTrainer():
                 lr /= self.train_data.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
                 #TODO : expirmantation suggests that normalizng lr by resolution is not needed. why?
                 #lr /= self.covar.resolution #gradient of cost function scales linearly with L
+                #TODO : should lr scale by L^2.5 when performing optimization in fourier domain? since gradient scales with L^4 and volume scales with L^1.5
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
+
+        vectors = self.covar_vectors()
+        rank = vectors.shape[0]
+        dtype = vectors.dtype
+        vol_shape = vectors.shape[1:]
+        self.optimize_in_fourier_domain = nufft_disc is not None #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
+        if(self.optimize_in_fourier_domain):
+            self.nufft_plans = NufftPlanDiscretized(vol_shape,mode=nufft_disc)
+            self.covar.to_fourier_domain()
+            self.train_data.dataset.to_fourier_domain()
+            if(self.logTraining):
+                self.vectorsGD = centered_fft3(self.vectorsGD.reshape((-1,) + vol_shape)).reshape(-1,vol_shape[0]**3)
+        else:
+            self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
 
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
@@ -320,6 +355,12 @@ class CovarTrainer():
             if(self.logTraining and self.save_path is not None):
                 self.save_result()
 
+        if(self.optimize_in_fourier_domain):#Transform back to spatial domain
+            self.covar.to_spatial_domain()
+            self.train_data.dataset.to_spatial_domain()
+            if(self.logTraining):
+                self.vectorsGD = centered_ifft3(self.vectorsGD.reshape((-1,) + vol_shape)).reshape(-1,vol_shape[0]**3).real
+
 
     def log_training(self,vectors):
         if(len(self.log_epoch_ind) != 0):
@@ -331,9 +372,9 @@ class CovarTrainer():
         if(self.vectorsGD != None):
             with torch.no_grad():
                 #self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.cpu().numpy()))
+                vectors = vectors.reshape((vectors.shape[0],-1))
                 self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),self.vectorsGD))
                 vectorsGD = self.vectorsGD.reshape((self.vectorsGD.shape[0],-1))
-                vectors = self.covar_vectors().reshape((vectors.shape[0],-1))
                 self.log_fro_err.append((frobeniusNormDiff(vectorsGD,vectors)/frobeniusNorm(vectorsGD)).cpu().numpy())
 
 
@@ -353,28 +394,46 @@ class CovarTrainer():
         torch.save(ckp,self.save_path)
                 
 class Covar(torch.nn.Module):
-    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,vectors = None):
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,vectors = None):
         super().__init__()
         self.resolution = resolution
         self.rank = rank
-        self.dtype = dtype
         self.pixel_var_estimate = pixel_var_estimate
+        self.dtype = dtype
+        self.cost_func = cost
+        self._in_spatial_domain = True
+
+        #We split tensor to real and imagniry part
+        # In the case of spatial domain imag part would be zeros and won't be used.
+        # In the case of fourier domain these tensors store the real and imag part seperately. The reason we don't use a complex tensor is that pytorch DDP doesn't support complex parameters (might be fixed in the future?)
         if(vectors is None):
-            self.vectors = self.init_random_vectors(rank)
+            self._vectors_real = self.init_random_vectors(rank)
+            self._vectors_imag = torch.zeros_like(self._vectors_real)
         else:
-            self.vectors = torch.clone(vectors)
-        self.vectors.requires_grad = True 
-        self.vectors = torch.nn.Parameter(self.vectors,requires_grad=True)
+            self._vectors_real = torch.clone(vectors)
+            self._vectors_imag = torch.zeros_like(self._vectors_real)
+        if(fourier_domain):
+            self.to_fourier_domain()
+        self._vectors_real = torch.nn.Parameter(self._vectors_real,requires_grad=True)
+        self._vectors_imag = torch.nn.Parameter(self._vectors_imag,requires_grad=True)
+        
 
     @property
     def device(self):
-        return self.vectors.device
+        return self._vectors_real.device
+    
+    @property
+    def vectors(self):
+        return self._vectors_real if self._in_spatial_domain else (self._vectors_real,self._vectors_imag)
 
+    def get_vectors(self): #This method is different in `vectors`` property when `self._in_spatial_domain == False` : in that case this method returns a complex tensor instead of (real,imag) tuple
+        return self.vectors if self._in_spatial_domain else torch.complex(*self.vectors)
+    
     def init_random_vectors(self,num_vectors):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
 
     def cost(self,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
-        return cost(self.vectors,images,nufft_plans,filters,noise_var,reg_scale,fourier_reg)
+        return self.cost_func(self.vectors,images,nufft_plans,filters,noise_var,reg_scale,fourier_reg)
 
 
     def forward(self,images,nufft_plans,filters,noise_var,reg_scale,fourier_reg):
@@ -383,19 +442,54 @@ class Covar(torch.nn.Module):
     @property
     def eigenvecs(self):
         with torch.no_grad():
-            vectors = self.vectors.clone().reshape(self.rank,-1)
+            vectors = self.get_vectors().clone().reshape(self.rank,-1)
             _,eigenvals,eigenvecs = torch.linalg.svd(vectors,full_matrices = False)
-            eigenvecs = eigenvecs.reshape(self.vectors.shape)
+            eigenvecs = eigenvecs.reshape(self._vectors_real.shape)
             eigenvals = eigenvals ** 2
             return eigenvecs,eigenvals
         
+    def to_fourier_domain(self):
+        if(self._in_spatial_domain):
+            with torch.no_grad():
+                fourier_vectors = centered_fft3(self._vectors_real)
+                self._vectors_real.data.copy_(fourier_vectors.real)
+                self._vectors_imag.data.copy_(fourier_vectors.imag)
+            self.cost_func = cost_fourier_domain
+            self._in_spatial_domain = False
+
+    def to_spatial_domain(self):
+        if(not self._in_spatial_domain):
+            with torch.no_grad():
+                spatial_vectors = centered_ifft3(torch.complex(self._vectors_real,self._vectors_imag)).real
+                self._vectors_real.data.copy_(spatial_vectors)
+                self._vectors_imag.data.copy_(torch.zeros_like(self._vectors_real))
+            self.cost_func = cost
+            self._in_spatial_domain = True
+
 
     def orthogonal_projection(self):
         with torch.no_grad():
-            vectors = self.vectors.reshape(self.rank,-1)
+            vectors = self.get_vectors().reshape(self.rank,-1)
             _,S,V = torch.linalg.svd(vectors,full_matrices = False)
-            orthogonal_vectors  = S.reshape(-1,1) * V
-            self.vectors.data.copy_(orthogonal_vectors.view_as(self.vectors))
+            orthogonal_vectors  = (S.reshape(-1,1) * V).view_as(self._vectors_real)
+            if(self._in_spatial_domain):
+                self._vectors_real.data.copy_(orthogonal_vectors)
+            else:
+                self._vectors_real.data.copy_(orthogonal_vectors.real)
+                self._vectors_imag.data.copy_(orthogonal_vectors.imag)
+
+
+    def state_dict(self,*args,**kwargs):
+        state_dict = super().state_dict(*args,**kwargs)
+        state_dict.update({'_in_spatial_domain' : self._in_spatial_domain, 'cost_func' : self.cost_func})
+        return state_dict
+    
+    def load_state_dict(self,state_dict,*args,**kwargs):
+        self._in_spatial_domain = state_dict.pop('_in_spatial_domain')
+        self.cost = state_dict.pop('cost_func')
+        super().load_state_dict(state_dict, *args, **kwargs)
+        return
+            
 
 
 
@@ -432,15 +526,39 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
 
     return cost_val
 
+def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier = None):
+    batch_size = images.shape[0]
+    #vols can either be a 2-tuple of (real,imag) tensors or a complex tensor
+    rank = vols[0].shape[0] if isinstance(vols,tuple) else vols.shape[0]
+    L = vols[0].shape[-1] if isinstance(vols,tuple) else vols.shape[-1]
+    projected_vols = nufft_plans.execute_forward(vols) * filters.unsqueeze(0) / L
+
+    images = images.reshape((batch_size,1,-1))
+    projected_vols = projected_vols.reshape((batch_size,rank,-1))
+
+    norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
+    images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2).conj())
+    projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2).conj())
+    
+    cost_val = (torch.pow(norm_squared_images,2) - 2 * torch.sum(torch.pow(images_projvols_term.abs(),2),dim=(1,2))
+                + torch.sum(torch.pow(projvols_prod_term.abs(),2),dim=(1,2)))
+    
+    #Add noise cost terms
+    norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2).real #This should be real already but this ensures the dtype gets actually converted
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) + (noise_var * L) ** 2 
+    cost_val = torch.mean(cost_val,dim=0)
+
+    return cost_val
+
 def frobeniusNorm(vecs):
     #Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
-    vecs_inn_prod = torch.matmul(vecs,vecs.transpose(0,1))
+    vecs_inn_prod = torch.matmul(vecs,vecs.transpose(0,1).conj())
     return torch.sqrt(torch.sum(torch.pow(vecs_inn_prod,2)))
 
 def frobeniusNormDiff(vec1,vec2):
     #returns the frobenius norm of the diffrence of two symmetric matrices given by their eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
     
-    normdiff_squared = torch.pow(frobeniusNorm(vec1),2) + torch.pow(frobeniusNorm(vec2),2)  - 2*torch.sum(torch.pow(torch.matmul(vec1,vec2.transpose(0,1)),2))
+    normdiff_squared = torch.pow(frobeniusNorm(vec1),2) + torch.pow(frobeniusNorm(vec2),2)  - 2*torch.sum(torch.pow(torch.matmul(vec1,vec2.transpose(0,1).conj()),2))
     
     return torch.sqrt(normdiff_squared)
 

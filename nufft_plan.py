@@ -37,12 +37,18 @@ class NufftPlanDiscretized(NufftPlanAbstract):
 
     def execute_forward(self,volume):
         """
-        Assumes volume is given in fourier domain with shape (N,L,L,L)
+        Assumes volume is given in fourier domain with shape (N,L,L,L) either as complex tensor or as tuple pair of real and imag tensors
         """
         L = self.sz[0]
         #For some reason grid_sample does not support complex data. Instead the real and imaginary parts are splitted into different 'channels'
-        volume = volume.unsqueeze(1)
-        volume_real_imag_split = torch.cat((volume.real,volume.imag),dim=1).reshape(-1,L,L,L) #Shape of (N*2,L,L,L)
+        if(isinstance(volume,tuple)):
+            volume_real = volume[0].unsqueeze(1)
+            volume_imag = volume[1].unsqueeze(1)
+        else:
+            volume = volume.unsqueeze(1)
+            volume_real = volume.real
+            volume_imag = volume.imag
+        volume_real_imag_split = torch.cat((volume_real,volume_imag),dim=1).reshape(-1,L,L,L) #Shape of (N*2,L,L,L)
         #Grid sample's batch is used when we need to sample different volumes with different grids, here however we want to sample all volumes with different grids so we use the grid_sample channels instead.
         output = torch.nn.functional.grid_sample(input=volume_real_imag_split.unsqueeze(0),grid=self.points,mode=self.mode,align_corners=True) #Shape of (1,N*2,n,L,L)
 
