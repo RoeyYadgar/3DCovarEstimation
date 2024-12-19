@@ -1,18 +1,43 @@
 import torch
 from nufft_plan import nufft_forward,nufft_adjoint,NufftPlan
+import math
 
+def pad_tensor(tensor,size,dims=None):
+    tensor_shape = tensor.shape
+    if(dims is None):
+        dims = [(-1-i)%tensor.ndim for i in range(len(size))]
+    padded_tensor_size = torch.tensor(tensor_shape)
+    padded_tensor_size[dims] = torch.tensor(size)
+    padded_tensor = torch.zeros(list(padded_tensor_size),dtype=tensor.dtype,device=tensor.device)
 
-def centered_fft2(image,im_dim = [-1,-2]):
-    return torch.fft.fftshift(torch.fft.fft2(torch.fft.ifftshift(image,dim=im_dim),dim=im_dim),dim=im_dim)
+    num_dims = len(size)
+    start_ind = [math.floor(tensor_shape[dims[i]]/2) - math.floor(size[i]/2) for i in range(num_dims)]
+    
+    slice_ind = tuple([slice(-start_ind[i],tensor_shape[dims[i]]-start_ind[i]) for i in range(num_dims)])
+    slice_ind_full = [slice(tensor.shape[i]) for i in range(tensor.ndim)]
+    for i in range(num_dims):
+        slice_ind_full[dims[i]] = slice_ind[i]
+    padded_tensor[slice_ind_full] = tensor
 
-def centered_ifft2(image,im_dim = [-1,-2]):
-    return torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(image,dim=im_dim),dim=im_dim),dim=im_dim)
+    return padded_tensor
+    
 
-def centered_fft3(image,im_dim = [-1,-2,-3]):
-    return torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(image,dim=im_dim),dim=im_dim),dim=im_dim)
+def centered_fft2(image,im_dim = [-1,-2],padding_size = None):
+    return _centered_fft(torch.fft.fft2,image,im_dim,padding_size)
 
-def centered_ifft3(image,im_dim = [-1,-2,-3]):
-    return torch.fft.fftshift(torch.fft.ifftn(torch.fft.ifftshift(image,dim=im_dim),dim=im_dim),dim=im_dim)
+def centered_ifft2(image,im_dim = [-1,-2],padding_size = None):
+    return _centered_fft(torch.fft.ifft2,image,im_dim,padding_size)
+
+def centered_fft3(image,im_dim = [-1,-2,-3],padding_size = None):
+    return _centered_fft(torch.fft.fftn,image,im_dim,padding_size)
+
+def centered_ifft3(image,im_dim = [-1,-2,-3],padding_size = None):
+    return _centered_fft(torch.fft.ifftn,image,im_dim,padding_size)
+    
+def _centered_fft(fft_func,tensor,dim,padding_size=None,**fft_kwargs):
+    if(padding_size is not None):
+        tensor = pad_tensor(tensor,padding_size,dim)
+    return torch.fft.fftshift(fft_func(torch.fft.ifftshift(tensor,dim=dim,**fft_kwargs),dim=dim),dim=dim)
 
 def vol_forward(volume,plan,filters = None):
     L = volume.shape[-1]

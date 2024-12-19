@@ -18,8 +18,9 @@ class NufftPlanDiscretized(NufftPlanAbstract):
     Uses pytorch's `grid_sample` function to interpolate from the fourier tranform of the given volume.
     Assumes input volume is already given in frequency domain.
     """
-    def __init__(self,sz,mode='bilinear'):
+    def __init__(self,sz,upsample_factor=1,mode='bilinear'):
         self.sz = sz
+        self.upsample_factor = upsample_factor
         self.mode = mode
 
     def setpts(self,points):
@@ -27,11 +28,12 @@ class NufftPlanDiscretized(NufftPlanAbstract):
         self.points = points.transpose(-2,-1).reshape(1,-1,L,L,3)
         self.points = self.points.flip(-1) #grid_sample uses xyz convention unlike the zyx given by aspire's `rotated_grids`
 
+        vol_L = L*self.upsample_factor
         #For even image sizes fourier points are [-L/2, ... , L/2-1]/(L/2)*pi while torch grid_sample treats grid as [-1 , ... , 1]
         #For add image sizes fourier points are [-(L-1)/2,...,(L-1)/2]/(L/2)*pi
-        if(L % 2 == 0):
-            self.points = (self.points + 1/L) 
-        self.points *= (L/(L-1)) / torch.pi
+        self.points *= (vol_L/(vol_L-1)) / torch.pi
+        if(vol_L % 2 == 0):
+            self.points = (self.points + 1/(vol_L-1))
 
         self.batch_points = self.points.shape[1]
 
@@ -48,7 +50,8 @@ class NufftPlanDiscretized(NufftPlanAbstract):
             volume = volume.unsqueeze(1)
             volume_real = volume.real
             volume_imag = volume.imag
-        volume_real_imag_split = torch.cat((volume_real,volume_imag),dim=1).reshape(-1,L,L,L) #Shape of (N*2,L,L,L)
+        volume_L = L*self.upsample_factor #Size of volume can be different than the L since might have been upsampled (or downsampled)
+        volume_real_imag_split = torch.cat((volume_real,volume_imag),dim=1).reshape(-1,volume_L,volume_L,volume_L) #Shape of (N*2,volume_L,volume_L,volume_L)
         #Grid sample's batch is used when we need to sample different volumes with different grids, here however we want to sample all volumes with different grids so we use the grid_sample channels instead.
         output = torch.nn.functional.grid_sample(input=volume_real_imag_split.unsqueeze(0),grid=self.points,mode=self.mode,align_corners=True) #Shape of (1,N*2,n,L,L)
 

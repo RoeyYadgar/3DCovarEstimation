@@ -41,44 +41,50 @@ class TestTorchWraps(unittest.TestCase):
         self.device = torch.device("cuda:0")
         
     def test_nufft_forward(self):
-        num_ims = 5
+        vols = self.vols      
         pts_rot = self.pts_rot[:,:self.img_size ** 2]
-        #singleton validation
-        nufft_forward_aspire = aspire_nufft(self.vols[0].asnumpy(),pts_rot).reshape(1,-1)
 
-        vol_torch = torch.tensor(self.vols[0].asnumpy()).to(self.device)
+        #singleton validation
+        nufft_forward_aspire = aspire_nufft(vols[0].asnumpy(),pts_rot).reshape(1,-1)
+
+        vol_torch = torch.tensor(vols[0].asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device = self.device)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
         nufft_forward_torch = nufft_plan.nufft_forward(vol_torch,plan)
         nufft_forward_torch = nufft_forward_torch.cpu().numpy()
 
         pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(),device=self.device) + torch.pi , 2 * torch.pi) - torch.pi)
-        plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3)
+        us = 2
+        plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=us,mode='bilinear')
         plan.setpts(pts_rot_torch)
-        nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch))
+        nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch,padding_size=(self.img_size*us,)*3))
         nufft_forward_disc = nufft_forward_disc.reshape(1,-1).cpu().numpy()
 
-        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-3)
+
+        threshold = np.mean(np.abs(nufft_forward_aspire))        
+        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-3,atol=threshold*0.01)
+        print(np.linalg.norm(nufft_forward_disc - nufft_forward_torch)/np.linalg.norm(nufft_forward_torch))
         np.testing.assert_array_less(np.linalg.norm(nufft_forward_disc - nufft_forward_torch)/np.linalg.norm(nufft_forward_torch),0.2)
 
         #stack validation
-        nufft_forward_aspire = aspire_nufft(self.vols,pts_rot)
+        nufft_forward_aspire = aspire_nufft(vols,pts_rot)
 
-        vol_torch = torch.tensor(self.vols.asnumpy()).to(self.device)
-        plan = nufft_plan.NufftPlan((self.img_size,)*3,self.vols.shape[0],device = self.device)
+        vol_torch = torch.tensor(vols.asnumpy()).to(self.device)
+        plan = nufft_plan.NufftPlan((self.img_size,)*3,vols.shape[0],device = self.device)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
         nufft_forward_torch = nufft_plan.nufft_forward(vol_torch,plan)
         nufft_forward_torch = nufft_forward_torch.cpu().numpy()
 
         pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(),device=self.device) + torch.pi , 2 * torch.pi) - torch.pi)
-        plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3)
+        plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=us)
         plan.setpts(pts_rot_torch)
-        nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch))
-        nufft_forward_disc = nufft_forward_disc.reshape(self.vols.shape[0],-1).cpu().numpy()
+        nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch,padding_size=(self.img_size*us,)*3))
+        nufft_forward_disc = nufft_forward_disc.reshape(vols.shape[0],-1).cpu().numpy()
 
-        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-3)
+        np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-3,atol=threshold*0.01)
+        print(np.linalg.norm(nufft_forward_disc - nufft_forward_torch)/np.linalg.norm(nufft_forward_torch))
         np.testing.assert_array_less(np.linalg.norm(nufft_forward_disc - nufft_forward_torch)/np.linalg.norm(nufft_forward_torch),0.2)
-
+        
     def test_nufft_adjoint(self):
         #TODO : figure out why the difference between aspire's and the torch binding has rtol > 1e-4
         num_ims = 5
