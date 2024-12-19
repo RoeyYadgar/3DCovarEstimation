@@ -40,6 +40,15 @@ class TestTorchWraps(unittest.TestCase):
 
         self.device = torch.device("cuda:0")
         
+    def test_centered_fft_pad_crop(self):
+        us = 2
+        vol_torch = torch.tensor(self.vols.asnumpy(),device=self.device)
+        vol_torch_fft_padded = projection_funcs.centered_fft3(vol_torch,padding_size=(self.img_size*us,)*3)
+        vol_torch_ifft_cropped = projection_funcs.centered_ifft3(vol_torch_fft_padded,cropping_size=(self.img_size,)*3).real
+
+        torch.testing.assert_close(vol_torch_ifft_cropped,vol_torch,rtol=1e-5,atol=1e-4)
+
+
     def test_nufft_forward(self):
         vols = self.vols      
         pts_rot = self.pts_rot[:,:self.img_size ** 2]

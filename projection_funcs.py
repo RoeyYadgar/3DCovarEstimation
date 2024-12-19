@@ -20,23 +20,39 @@ def pad_tensor(tensor,size,dims=None):
     padded_tensor[slice_ind_full] = tensor
 
     return padded_tensor
+
+def crop_tensor(tensor,size,dims=None):
+    tensor_shape = tensor.shape
+    if(dims is None):
+        dims = [(-1-i)%tensor.ndim for i in range(len(size))]
     
+    num_dims = len(size)
+    start_ind = [math.floor(tensor_shape[dims[i]]/2) - math.floor(size[i]/2) for i in range(num_dims)]
+    
+    slice_ind = tuple([slice(start_ind[i],size[i]+start_ind[i]) for i in range(num_dims)])
+    slice_ind_full = [slice(tensor.shape[i]) for i in range(tensor.ndim)]
+    for i in range(num_dims):
+        slice_ind_full[dims[i]] = slice_ind[i]
 
-def centered_fft2(image,im_dim = [-1,-2],padding_size = None):
-    return _centered_fft(torch.fft.fft2,image,im_dim,padding_size)
+    return tensor[slice_ind_full]
 
-def centered_ifft2(image,im_dim = [-1,-2],padding_size = None):
-    return _centered_fft(torch.fft.ifft2,image,im_dim,padding_size)
+
+def centered_fft2(image,im_dim = [-1,-2]):
+    return _centered_fft(torch.fft.fft2,image,im_dim)
+
+def centered_ifft2(image,im_dim = [-1,-2]):
+    return _centered_fft(torch.fft.ifft2,image,im_dim)
 
 def centered_fft3(image,im_dim = [-1,-2,-3],padding_size = None):
     return _centered_fft(torch.fft.fftn,image,im_dim,padding_size)
 
-def centered_ifft3(image,im_dim = [-1,-2,-3],padding_size = None):
-    return _centered_fft(torch.fft.ifftn,image,im_dim,padding_size)
+def centered_ifft3(image,im_dim = [-1,-2,-3],cropping_size = None):
+    tensor = _centered_fft(torch.fft.ifftn,image,im_dim)
+    return crop_tensor(tensor,cropping_size,im_dim)
     
-def _centered_fft(fft_func,tensor,dim,padding_size=None,**fft_kwargs):
-    if(padding_size is not None):
-        tensor = pad_tensor(tensor,padding_size,dim)
+def _centered_fft(fft_func,tensor,dim,size=None,**fft_kwargs):
+    if(size is not None):
+        tensor = pad_tensor(tensor,size,dim)
     return torch.fft.fftshift(fft_func(torch.fft.ifftshift(tensor,dim=dim,**fft_kwargs),dim=dim),dim=dim)
 
 def vol_forward(volume,plan,filters = None):
