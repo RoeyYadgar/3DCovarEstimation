@@ -284,7 +284,7 @@ class CovarTrainer():
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
                     vectors = self.covar_vectors()
-                    self.log_training(vectors)
+                    self.log_training()
                     pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
                     if(self.vectorsGD is not None):
                         #TODO : update log metrics, use principal angles
@@ -332,14 +332,11 @@ class CovarTrainer():
         vectors = self.covar_vectors()
         rank = vectors.shape[0]
         dtype = vectors.dtype
-        vol_shape = vectors.shape[1:]
+        vol_shape = (self.covar.resolution,)*3
         self.optimize_in_fourier_domain = nufft_disc is not None #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
         if(self.optimize_in_fourier_domain):
-            self.nufft_plans = NufftPlanDiscretized(vol_shape,mode=nufft_disc)
-            self.covar.to_fourier_domain()
+            self.nufft_plans = NufftPlanDiscretized(vol_shape,upsample_factor=self.covar.upsampling_factor,mode=nufft_disc)
             self.train_data.dataset.to_fourier_domain()
-            if(self.logTraining):
-                self.vectorsGD = centered_fft3(self.vectorsGD.reshape((-1,) + vol_shape)).reshape(-1,vol_shape[0]**3)
         else:
             self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
 
@@ -355,14 +352,11 @@ class CovarTrainer():
             if(self.logTraining and self.save_path is not None):
                 self.save_result()
 
-        if(self.optimize_in_fourier_domain):#Transform back to spatial domain
-            self.covar.to_spatial_domain()
+        if(self.optimize_in_fourier_domain):#Transform back to spatial domain            
             self.train_data.dataset.to_spatial_domain()
-            if(self.logTraining):
-                self.vectorsGD = centered_ifft3(self.vectorsGD.reshape((-1,) + vol_shape)).reshape(-1,vol_shape[0]**3).real
 
 
-    def log_training(self,vectors):
+    def log_training(self):
         if(len(self.log_epoch_ind) != 0):
             self.log_epoch_ind.append(self.log_epoch_ind[-1] + self.training_log_freq / len(self.train_data))
         else:
@@ -372,6 +366,7 @@ class CovarTrainer():
         if(self.vectorsGD != None):
             with torch.no_grad():
                 #self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.cpu().numpy()))
+                vectors = self.covar.get_vectors_spatial_domain()
                 vectors = vectors.reshape((vectors.shape[0],-1))
                 self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),self.vectorsGD))
                 vectorsGD = self.vectorsGD.reshape((self.vectorsGD.shape[0],-1))
@@ -394,28 +389,29 @@ class CovarTrainer():
         torch.save(ckp,self.save_path)
                 
 class Covar(torch.nn.Module):
-    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,vectors = None):
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
         super().__init__()
         self.resolution = resolution
         self.rank = rank
         self.pixel_var_estimate = pixel_var_estimate
         self.dtype = dtype
-        self.cost_func = cost
-        self._in_spatial_domain = True
+        self.upsampling_factor = upsampling_factor
 
         #We split tensor to real and imagniry part
         # In the case of spatial domain imag part would be zeros and won't be used.
-        # In the case of fourier domain these tensors store the real and imag part seperately. The reason we don't use a complex tensor is that pytorch DDP doesn't support complex parameters (might be fixed in the future?)
-        if(vectors is None):
-            self._vectors_real = self.init_random_vectors(rank)
-            self._vectors_imag = torch.zeros_like(self._vectors_real)
-        else:
-            self._vectors_real = torch.clone(vectors)
-            self._vectors_imag = torch.zeros_like(self._vectors_real)
+        # In the case of fourier domain these tensors store the real and imag part seperately. The reason we don't use a complex tensor is that pytorch DDP doesn't support complex parameters (might be supported in the future?)
+        vectors = self.init_random_vectors(rank) if vectors is None else torch.clone(vectors)
+
         if(fourier_domain):
-            self.to_fourier_domain()
-        self._vectors_real = torch.nn.Parameter(self._vectors_real,requires_grad=True)
-        self._vectors_imag = torch.nn.Parameter(self._vectors_imag,requires_grad=True)
+            fourier_vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
+            self._vectors_real = torch.nn.Parameter(fourier_vectors.real,requires_grad=True)
+            self._vectors_imag = torch.nn.Parameter(fourier_vectors.imag,requires_grad=True)
+            self.cost_func = cost_fourier_domain
+            self._in_spatial_domain = False
+        else:
+            self.cost_func = cost
+            self._in_spatial_domain = True
+            self._vectors_real = torch.nn.Parameter(vectors,requires_grad=True)
         
 
     @property
@@ -442,29 +438,17 @@ class Covar(torch.nn.Module):
     @property
     def eigenvecs(self):
         with torch.no_grad():
-            vectors = self.get_vectors().clone().reshape(self.rank,-1)
+            vectors = self.get_vectors_spatial_domain().clone().reshape(self.rank,-1)
             _,eigenvals,eigenvecs = torch.linalg.svd(vectors,full_matrices = False)
             eigenvecs = eigenvecs.reshape(self._vectors_real.shape)
             eigenvals = eigenvals ** 2
             return eigenvecs,eigenvals
         
-    def to_fourier_domain(self):
-        if(self._in_spatial_domain):
-            with torch.no_grad():
-                fourier_vectors = centered_fft3(self._vectors_real)
-                self._vectors_real.data.copy_(fourier_vectors.real)
-                self._vectors_imag.data.copy_(fourier_vectors.imag)
-            self.cost_func = cost_fourier_domain
-            self._in_spatial_domain = False
+    def get_vectors_fourier_domain(self):
+        return self.get_vectors() if (not self._in_spatial_domain) else centered_fft3(self.get_vectors(),padding_size=(self.resolution*self.upsampling_factor,)*3)
 
-    def to_spatial_domain(self):
-        if(not self._in_spatial_domain):
-            with torch.no_grad():
-                spatial_vectors = centered_ifft3(torch.complex(self._vectors_real,self._vectors_imag)).real
-                self._vectors_real.data.copy_(spatial_vectors)
-                self._vectors_imag.data.copy_(torch.zeros_like(self._vectors_real))
-            self.cost_func = cost
-            self._in_spatial_domain = True
+    def get_vectors_spatial_domain(self):
+        return self.get_vectors() if (self._in_spatial_domain) else centered_ifft3(self.get_vectors(),cropping_size=(self.resolution,)*3).real
 
 
     def orthogonal_projection(self):
@@ -530,8 +514,14 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     batch_size = images.shape[0]
     #vols can either be a 2-tuple of (real,imag) tensors or a complex tensor
     rank = vols[0].shape[0] if isinstance(vols,tuple) else vols.shape[0]
-    L = vols[0].shape[-1] if isinstance(vols,tuple) else vols.shape[-1]
-    projected_vols = nufft_plans.execute_forward(vols) * filters.unsqueeze(0) / L
+    L = images.shape[-1]    
+    projected_vols = nufft_plans.execute_forward(vols) / L
+    if(filters is not None):
+        projected_vols *= filters.unsqueeze(0)
+    if(L % 2 == 0):
+        projected_vols[:,:,0,:] = 0
+        projected_vols[:,:,:,0] = 0
+    
 
     images = images.reshape((batch_size,1,-1))
     projected_vols = projected_vols.reshape((batch_size,rank,-1))
