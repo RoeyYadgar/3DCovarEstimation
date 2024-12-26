@@ -228,7 +228,7 @@ class TestTorchImpl(unittest.TestCase):
         pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
 
         
-        plans = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=upsampling_factor,mode='bilinear')
+        plans = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=upsampling_factor,mode='nearest')
         plans.setpts(pts_rot)
         cost_fourier = torch.tensor([
             cost_fourier_domain(covar.get_vectors_fourier_domain(),ims, plans,filters,fourier_data.noise_var),
@@ -236,7 +236,7 @@ class TestTorchImpl(unittest.TestCase):
             cost_fourier_domain(covar.get_vectors_fourier_domain(),ims, plans,filters,fourier_data.noise_var*1e6)])
 
         print((cost_spatial,cost_fourier))
-        print((cost_spatial/cost_fourier) * self.img_size ** 4)
+        print((cost_spatial/cost_fourier))
         
 
         torch.testing.assert_close(cost_fourier/cost_spatial,(self.img_size ** 4) * torch.ones_like(cost_fourier), rtol=5e-3,atol=5e-3)

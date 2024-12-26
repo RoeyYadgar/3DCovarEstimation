@@ -9,7 +9,7 @@ import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
 from nufft_plan import NufftPlan,NufftPlanDiscretized
-from projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3
+from projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
 from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell
 
 class CovarDataset(Dataset):
@@ -440,7 +440,7 @@ class Covar(torch.nn.Module):
         with torch.no_grad():
             vectors = self.get_vectors_spatial_domain().clone().reshape(self.rank,-1)
             _,eigenvals,eigenvecs = torch.linalg.svd(vectors,full_matrices = False)
-            eigenvecs = eigenvecs.reshape(self._vectors_real.shape)
+            eigenvecs = eigenvecs.reshape((self.rank,self.resolution,self.resolution,self.resolution))
             eigenvals = eigenvals ** 2
             return eigenvecs,eigenvals
         
@@ -486,7 +486,8 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
     images = images.reshape((batch_size,1,-1))
     projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
-    norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
+    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2) 
+    norm_squared_images = 0#This term is constant with respect to volumes
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2))
     
@@ -495,7 +496,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
     
     #Add noise cost terms
     norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2)
-    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) + (noise_var * L) ** 2
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) #+ (noise_var * L) ** 2 #term is constant
     
     cost_val = torch.mean(cost_val,dim=0)
             
@@ -510,7 +511,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
 
     return cost_val
 
-def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier = None):
+def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
     batch_size = images.shape[0]
     #vols can either be a 2-tuple of (real,imag) tensors or a complex tensor
     rank = vols[0].shape[0] if isinstance(vols,tuple) else vols.shape[0]
@@ -526,7 +527,8 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     images = images.reshape((batch_size,1,-1))
     projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
-    norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
+    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
+    norm_squared_images = 0#This term is constant with respect to volumes
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2).conj())
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2).conj())
     
@@ -535,10 +537,18 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     
     #Add noise cost terms
     norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2).real #This should be real already but this ensures the dtype gets actually converted
-    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) + (noise_var * L) ** 2 
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) #+ 0*(noise_var * L) ** 2 #Term is constant
     cost_val = torch.mean(cost_val,dim=0)
 
-    return cost_val
+    if(fourier_reg is not None and reg_scale != 0):        
+        vols_fourier = torch.complex(*vols) * torch.sqrt(fourier_reg)
+        vols_fourier = vols_fourier.reshape((rank,-1))
+        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
+        #reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)
+        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
+        cost_val += reg_scale * reg_cost
+
+    return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 
 def frobeniusNorm(vecs):
     #Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
