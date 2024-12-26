@@ -24,7 +24,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
     
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset))
     covar_model = covar_model.to(device)
-    covar_model = DDP(covar_model,device_ids=[rank],find_unused_parameters = (covar_model._in_spatial_domain)) #When covar is in spatial domain _vectors_imag tensors isn't actually used in the forward pass. 
+    covar_model = DDP(covar_model,device_ids=[rank])
     if(type(covar_model.module) == Covar):
         trainer = CovarTrainer(covar_model,dataloader,device,savepath)
     elif(type(covar_model.module) == IterativeCovar):

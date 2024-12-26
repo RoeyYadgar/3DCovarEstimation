@@ -235,7 +235,7 @@ class CovarTrainer():
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
-        L = vol_shape[-1]
+        L = self.train_data.dataset.resolution
         vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.reshape((-1,L,L,L)))
         self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)) #TODO : validate this regularization term
         self.reg_scale = 1/(len(self.train_data.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
@@ -403,15 +403,15 @@ class Covar(torch.nn.Module):
         vectors = self.init_random_vectors(rank) if vectors is None else torch.clone(vectors)
 
         if(fourier_domain):
-            fourier_vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
-            self._vectors_real = torch.nn.Parameter(fourier_vectors.real,requires_grad=True)
-            self._vectors_imag = torch.nn.Parameter(fourier_vectors.imag,requires_grad=True)
+            #fourier_vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
+            #self._vectors_real = torch.nn.Parameter(fourier_vectors.real,requires_grad=True)
+            #self._vectors_imag = torch.nn.Parameter(fourier_vectors.imag,requires_grad=True)
             self.cost_func = cost_fourier_domain
             self._in_spatial_domain = False
         else:
             self.cost_func = cost
             self._in_spatial_domain = True
-            self._vectors_real = torch.nn.Parameter(vectors,requires_grad=True)
+        self._vectors_real = torch.nn.Parameter(vectors,requires_grad=True)
         
 
     @property
@@ -420,16 +420,17 @@ class Covar(torch.nn.Module):
     
     @property
     def vectors(self):
-        return self._vectors_real if self._in_spatial_domain else (self._vectors_real,self._vectors_imag)
+        #return self._vectors_real if self._in_spatial_domain else (self._vectors_real,self._vectors_imag)
+        return self._vectors_real
 
     def get_vectors(self): #This method is different in `vectors`` property when `self._in_spatial_domain == False` : in that case this method returns a complex tensor instead of (real,imag) tuple
-        return self.vectors if self._in_spatial_domain else torch.complex(*self.vectors)
+        return self.get_vectors_spatial_domain() if self._in_spatial_domain else self.get_vectors_fourier_domain()
     
     def init_random_vectors(self,num_vectors):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
 
     def cost(self,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
-        return self.cost_func(self.vectors,images,nufft_plans,filters,noise_var,reg_scale,fourier_reg)
+        return self.cost_func(self.get_vectors(),images,nufft_plans,filters,noise_var,reg_scale,fourier_reg)
 
 
     def forward(self,images,nufft_plans,filters,noise_var,reg_scale,fourier_reg):
@@ -445,22 +446,18 @@ class Covar(torch.nn.Module):
             return eigenvecs,eigenvals
         
     def get_vectors_fourier_domain(self):
-        return self.get_vectors() if (not self._in_spatial_domain) else centered_fft3(self.get_vectors(),padding_size=(self.resolution*self.upsampling_factor,)*3)
+        return centered_fft3(self.vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
 
     def get_vectors_spatial_domain(self):
-        return self.get_vectors() if (self._in_spatial_domain) else centered_ifft3(self.get_vectors(),cropping_size=(self.resolution,)*3).real
-
+        return self.vectors
 
     def orthogonal_projection(self):
         with torch.no_grad():
-            vectors = self.get_vectors().reshape(self.rank,-1)
+            vectors = self.get_vectors_spatial_domain().reshape(self.rank,-1)
             _,S,V = torch.linalg.svd(vectors,full_matrices = False)
             orthogonal_vectors  = (S.reshape(-1,1) * V).view_as(self._vectors_real)
-            if(self._in_spatial_domain):
-                self._vectors_real.data.copy_(orthogonal_vectors)
-            else:
-                self._vectors_real.data.copy_(orthogonal_vectors.real)
-                self._vectors_imag.data.copy_(orthogonal_vectors.imag)
+            self._vectors_real.data.copy_(orthogonal_vectors)
+
 
 
     def state_dict(self,*args,**kwargs):
@@ -486,17 +483,16 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
     images = images.reshape((batch_size,1,-1))
     projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
-    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2) 
-    norm_squared_images = 0#This term is constant with respect to volumes
+    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2) #This term is constant with respect to volumes
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2))
     
-    cost_val = (torch.pow(norm_squared_images,2) - 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
-                + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
+    cost_val = (- 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
+                + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2))) # +torch.pow(norm_squared_images,2) term is constant
     
     #Add noise cost terms
     norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2)
-    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) #+ (noise_var * L) ** 2 #term is constant
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)) #-2*noise_var*norm_squared_images+(noise_var * L) ** 2 #Term is constant
     
     cost_val = torch.mean(cost_val,dim=0)
             
@@ -511,33 +507,28 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
 
     return cost_val
 
+#TODO : merge this into a single function in cost
 def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
     batch_size = images.shape[0]
     #vols can either be a 2-tuple of (real,imag) tensors or a complex tensor
     rank = vols[0].shape[0] if isinstance(vols,tuple) else vols.shape[0]
-    L = images.shape[-1]    
-    projected_vols = nufft_plans.execute_forward(vols) / L
-    if(filters is not None):
-        projected_vols *= filters.unsqueeze(0)
-    if(L % 2 == 0):
-        projected_vols[:,:,0,:] = 0
-        projected_vols[:,:,:,0] = 0
-    
+    L = images.shape[-1]
+    projected_vols = vol_forward(vols,nufft_plans,filters,fourier_domain=True)
+
 
     images = images.reshape((batch_size,1,-1))
     projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
-    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
-    norm_squared_images = 0#This term is constant with respect to volumes
+    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2) #This term is constant with respect to volumes
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2).conj())
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2).conj())
     
-    cost_val = (torch.pow(norm_squared_images,2) - 2 * torch.sum(torch.pow(images_projvols_term.abs(),2),dim=(1,2))
-                + torch.sum(torch.pow(projvols_prod_term.abs(),2),dim=(1,2)))
+    cost_val = (- 2 * torch.sum(torch.pow(images_projvols_term.abs(),2),dim=(1,2))
+                + torch.sum(torch.pow(projvols_prod_term.abs(),2),dim=(1,2))) #+torch.pow(norm_squared_images,2) term is constant
     
     #Add noise cost terms
     norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2).real #This should be real already but this ensures the dtype gets actually converted
-    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)-norm_squared_images) #+ 0*(noise_var * L) ** 2 #Term is constant
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)) #-2*noise_var*norm_squared_images+(noise_var * L) ** 2 #Term is constant
     cost_val = torch.mean(cost_val,dim=0)
 
     if(fourier_reg is not None and reg_scale != 0):        

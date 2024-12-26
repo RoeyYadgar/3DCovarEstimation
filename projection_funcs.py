@@ -1,5 +1,5 @@
 import torch
-from nufft_plan import nufft_forward,nufft_adjoint,NufftPlan
+from nufft_plan import nufft_forward,nufft_adjoint,NufftPlanAbstract
 import math
 
 def pad_tensor(tensor,size,dims=None):
@@ -48,21 +48,21 @@ def centered_fft3(image,im_dim = [-1,-2,-3],padding_size = None):
 
 def centered_ifft3(image,im_dim = [-1,-2,-3],cropping_size = None):
     tensor = _centered_fft(torch.fft.ifftn,image,im_dim)
-    return crop_tensor(tensor,cropping_size,im_dim)
+    return crop_tensor(tensor,cropping_size,im_dim) if cropping_size is not None else tensor
     
 def _centered_fft(fft_func,tensor,dim,size=None,**fft_kwargs):
     if(size is not None):
         tensor = pad_tensor(tensor,size,dim)
     return torch.fft.fftshift(fft_func(torch.fft.ifftshift(tensor,dim=dim,**fft_kwargs),dim=dim),dim=dim)
 
-def vol_forward(volume,plan,filters = None):
-    L = volume.shape[-1]
+def vol_forward(volume,plan,filters = None,fourier_domain = False):
+    L = plan.sz[-1]
     if(type(plan) == list or type(plan) == tuple): #When mupltiple plans are given loop through them
         volume_forward = torch.zeros((len(plan),volume.shape[0],L,L),dtype = volume.dtype,device = volume.device)
         for i in range(len(plan)):
             volume_forward[i] = vol_forward(volume,plan[i],filters[i]) if filters is not None else vol_forward(volume,plan[i])
         return volume_forward
-    elif(type(plan) == NufftPlan):
+    elif(isinstance(plan,NufftPlanAbstract)):
         vol_nufft = nufft_forward(volume,plan)
         vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,L,L)).transpose(0,1)
         batch_size = vol_nufft.shape[1]
@@ -80,9 +80,9 @@ def vol_forward(volume,plan,filters = None):
         if(batch_size == 1):
             vol_nufft_clone = vol_nufft_clone.squeeze(0)
 
-        volume_forward = centered_ifft2(vol_nufft_clone)
+        volume_forward = centered_ifft2(vol_nufft_clone).real if (not fourier_domain) else vol_nufft_clone
 
-        return torch.real(volume_forward)/L
+        return volume_forward/L
 
 
 def im_backward(image,plan):

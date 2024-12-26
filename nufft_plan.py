@@ -154,5 +154,8 @@ class TorchNufftAdjoint(torch.autograd.Function):
         return signal_grad, None
     
 
-nufft_forward = TorchNufftForward.apply
+def nufft_forward(signal,nufft_plan):
+    return TorchNufftForward.apply(signal,nufft_plan) if isinstance(nufft_plan,NufftPlan) else nufft_plan.execute_forward(signal) #NufftPlan.execute_forward does not have autograd and so we must pass it into the autograd class
+
+#TODO : implement adjoint operator for NufftPlanDiscretized? (Not really needed)
 nufft_adjoint = TorchNufftAdjoint.apply
