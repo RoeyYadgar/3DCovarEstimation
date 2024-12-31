@@ -2,10 +2,10 @@ import torch
 from scipy.stats import chi2
 from nufft_plan import NufftPlan
 from projection_funcs import vol_forward
+from tqdm import tqdm
+import math
 
-
-
-def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 64,start_ind = None,end_ind = None,return_eigen_forward = False):
+def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 1024,start_ind = None,end_ind = None,return_eigen_forward = False):
     if(start_ind is None):
         start_ind = 0
     if(end_ind is None):
@@ -27,6 +27,8 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 64,start_ind = None,e
     coords = torch.zeros((end_ind-start_ind,rank),device=device)
     if(return_eigen_forward):
         eigen_forward_images = torch.zeros((end_ind-start_ind,rank,L,L),dtype=dtype)
+
+    pbar = tqdm(total=math.ceil(coords.shape[0]/batch_size), desc=f'Computing latent coordinates')
     for i in range(0,coords.shape[0],batch_size):
         images,pts_rot,filter_indices = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
         num_ims = images.shape[0]
@@ -46,6 +48,9 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 64,start_ind = None,e
             image_coor_covar = eigen_forward_R @ eigenvals @ eigen_forward_R.T + covar_noise
             image_coor = eigenvals @ eigen_forward_R.T @ torch.inverse(image_coor_covar) @ image_coor
             coords[i+j,:] = image_coor
+        
+        pbar.update(1)
+    pbar.close()
 
 
     if(not return_eigen_forward):
@@ -56,7 +61,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 64,start_ind = None,e
 
 
     
-def latentMAP(dataset,eigenvecs,eigenvals,batch_size=64,start_ind = None,end_ind = None,return_coords_covar = False):
+def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_ind = None,return_coords_covar = False):
     if(start_ind is None):
         start_ind = 0
     if(end_ind is None):
@@ -73,10 +78,14 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=64,start_ind = None,end_ind
     if(len(eigenvals.shape) == 1):
         eigenvals = torch.diag(eigenvals)
 
+    eigenvals_inv = torch.inverse(eigenvals)
+
     nufft_plans = NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device)
     coords = torch.zeros((end_ind-start_ind,rank),device=device)
     if(return_coords_covar):
         coords_covar = torch.zeros((end_ind-start_ind,rank,rank),dtype=dtype)
+
+    pbar = tqdm(total=math.ceil(coords.shape[0]/batch_size), desc=f'Computing latent coordinates')
     for i in range(0,coords.shape[0],batch_size):
         images,pts_rot,filter_indices = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
         num_ims = images.shape[0]
@@ -89,13 +98,15 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=64,start_ind = None,end_ind
 
         eigen_forward = eigen_forward.reshape((num_ims,rank,-1))
 
-        for j in range(num_ims):
-            m = eigen_forward[j] @ eigen_forward[j].T / dataset.noise_var + torch.inverse(eigenvals)
-            im_coor = eigen_forward[j] @ images[j] / dataset.noise_var
-            coord_covar = torch.inverse(m)
-            coords[i+j,:] = coord_covar @ im_coor
-            if(return_coords_covar):
-                coords_covar[i+j] = coord_covar.to('cpu')
+        m = torch.bmm(eigen_forward,eigen_forward.transpose(-1,-2)) / dataset.noise_var + eigenvals_inv
+        im_coor = torch.bmm(eigen_forward,images.unsqueeze(-1)) / dataset.noise_var
+        coord_covar = torch.linalg.inv(m)
+        coords[i:(i+batch_size)] = torch.bmm(coord_covar,im_coor).squeeze(-1)
+        if(return_coords_covar):
+            coords_covar[i:(i+batch_size)] = coord_covar.to('cpu')
+
+        pbar.update(1)
+    pbar.close()
 
     if(not return_coords_covar):
         return coords
