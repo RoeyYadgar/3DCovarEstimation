@@ -1,6 +1,7 @@
 from utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
 import os
 import torch
+import time
 from torch.utils.data import Dataset
 from aspire.utils import support_mask,fuzzy_mask
 import numpy as np
@@ -217,28 +218,37 @@ class CovarTrainer():
         self.train_data = train_data
         self._covar = covar.to(device)
         
-        self.batch_size = train_data.batch_size
+        self.batch_size = train_data.data_iterable.batch_size if (not isinstance(train_data,torch.utils.data.DataLoader)) else train_data.batch_size
         self.isDDP = type(self._covar) == torch.nn.parallel.distributed.DistributedDataParallel
         vectors = self.covar_vectors()
         vol_shape = vectors.shape[1:] 
-        self.filters = train_data.dataset.unique_filters
+        self.filters = self.dataset.unique_filters
         if(len(self.filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
             self.filters = self.filters.to(self.device)
         self.save_path = save_path
         self.logTraining = self.device.index == 0 or self.device == torch.device('cpu') #Only log training on the first gpu
         self.training_log_freq = training_log_freq
         if(self.logTraining):
-            self.vectorsGD = train_data.dataset.vectorsGD
+            self.vectorsGD = self.dataset.vectorsGD
             self.log_epoch_ind = []
             self.log_cosine_sim = []
             self.log_fro_err = []
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
-        L = self.train_data.dataset.resolution
-        vectorsGD_rpsd = rpsd(*train_data.dataset.vectorsGD.reshape((-1,L,L,L)))
-        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)) #TODO : validate this regularization term
-        self.reg_scale = 1/(len(self.train_data.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
+        L = self.dataset.resolution
+        vectors_gd_padded = pad_tensor(self.dataset.vectorsGD.reshape((-1,L,L,L)),vol_shape,dims=[-1,-2,-3])
+        vectorsGD_rpsd = rpsd(*vectors_gd_padded)
+        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,vol_shape[-1],3),dim=0)) #TODO : validate this regularization term        
+        self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
+
+    @property
+    def dataset(self):
+        return self.train_data.data_iterable.dataset if (not isinstance(self.train_data,torch.utils.data.DataLoader)) else self.train_data.dataset
+    
+    @property
+    def dataloader_len(self):
+        return len(self.train_data.data_iterable) if (not isinstance(self.train_data,torch.utils.data.DataLoader)) else len(self.train_data)
 
     @property
     def covar(self):
@@ -246,7 +256,7 @@ class CovarTrainer():
     
     @property
     def noise_var(self):
-        return self.train_data.dataset.noise_var
+        return self.dataset.noise_var
     
     def covar_vectors(self):
         return self.covar.get_vectors()
@@ -267,7 +277,7 @@ class CovarTrainer():
         if(self.isDDP):
             self.train_data.sampler.set_epoch(epoch)
         if(self.logTraining):
-            pbar = tqdm(total=len(self.train_data), desc=f'Epoch {epoch} , ',position=0,leave=True)
+            pbar = tqdm(total=self.dataloader_len, desc=f'Epoch {epoch} , ',position=0,leave=True)
 
         self.cost_in_epoch = torch.tensor(0,device=self.device,dtype=torch.float32)
         for batch_ind,data in enumerate(self.train_data):
@@ -312,15 +322,15 @@ class CovarTrainer():
             lr = 1e-2 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
 
         if(scale_params):
-            lr *= self.train_data.batch_size #Scale learning rate with batch size
-            #reg *= self.train_data.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
+            lr *= self.batch_size #Scale learning rate with batch size
+            #reg *= self.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
             #reg /= self.covar.resolution ** 2 #gradient of cost function scales linearly with L while regulriaztion scales with L^3
         
         
         if(optim_type == 'SGD'):
             if(scale_params):
-                lr /= self.train_data.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
-                lr /= self.train_data.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
+                lr /= self.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
+                lr /= self.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
                 #TODO : expirmantation suggests that normalizng lr by resolution is not needed. why?
                 #lr /= self.covar.resolution #gradient of cost function scales linearly with L
                 #TODO : should lr scale by L^2.5 when performing optimization in fourier domain? since gradient scales with L^4 and volume scales with L^1.5
@@ -336,7 +346,7 @@ class CovarTrainer():
         self.optimize_in_fourier_domain = nufft_disc is not None #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
         if(self.optimize_in_fourier_domain):
             self.nufft_plans = NufftPlanDiscretized(vol_shape,upsample_factor=self.covar.upsampling_factor,mode=nufft_disc)
-            self.train_data.dataset.to_fourier_domain()
+            self.dataset.to_fourier_domain()
         else:
             self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
 
@@ -353,14 +363,14 @@ class CovarTrainer():
                 self.save_result()
 
         if(self.optimize_in_fourier_domain):#Transform back to spatial domain            
-            self.train_data.dataset.to_spatial_domain()
+            self.dataset.to_spatial_domain()
 
 
     def log_training(self):
         if(len(self.log_epoch_ind) != 0):
-            self.log_epoch_ind.append(self.log_epoch_ind[-1] + self.training_log_freq / len(self.train_data))
+            self.log_epoch_ind.append(self.log_epoch_ind[-1] + self.training_log_freq / self.dataloader_len)
         else:
-            self.log_epoch_ind.append(self.training_log_freq / len(self.train_data))
+            self.log_epoch_ind.append(self.training_log_freq / self.dataloader_len)
         
 
         if(self.vectorsGD != None):
@@ -574,7 +584,11 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
 
 
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
-    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True)
+    num_workers = max(1,os.cpu_count()-1)
+    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
+                                             num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device='cuda:0')
+    #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
+    #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
     trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
     trainer.train(**kwargs) 
     return
