@@ -58,14 +58,13 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
-def covar_workflow(starfile,covar_rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,save_dataset = False,**training_kwargs):
+def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
     dataset_path = os.path.join(result_dir,'dataset.pkl')
-    #Only perform this when save_dataset flag is False and there is no dataset pickle file already saved 
-    #(this is used for debugging to not have to perform preprocessing all over again)
-    if((not save_dataset) or (not os.path.isfile(dataset_path))): 
+    #Only perform this when debug flag is False and there is no dataset pickle file already saved (In order to skip preprocessing when running multiple times for debugging)
+    if((not debug) or (not os.path.isfile(dataset_path))): 
         if(not path.isdir(result_dir)):
             os.mkdir(result_dir)
         pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
@@ -82,7 +81,7 @@ def covar_workflow(starfile,covar_rank,class_vols = None,whiten=True,noise_estim
         #Compute ground truth eigenvectors
         _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
         states_dist = counts/np.sum(counts)
-        covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:covar_rank]
+        covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
 
         #Print useful info TODO: use log files
         print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
@@ -109,7 +108,7 @@ def covar_workflow(starfile,covar_rank,class_vols = None,whiten=True,noise_estim
         dataset.starfile = starfile
         dataset.class_vols = class_vols
         
-        if(save_dataset):
+        if(debug):
             with open(dataset_path,'wb') as fid:
                 pickle.dump(dataset,fid)
     else:
@@ -118,7 +117,7 @@ def covar_workflow(starfile,covar_rank,class_vols = None,whiten=True,noise_estim
             dataset = pickle.load(fid)
         print(f"Dataset loaded successfuly")
 
-    return covar_processing(dataset,covar_rank,result_dir,generate_figs,save_data,skip_processing,**training_kwargs)
+    return covar_processing(dataset,rank,result_dir,generate_figs,save_data,skip_processing,**training_kwargs)
 
     
 
@@ -127,14 +126,26 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 
     if(not skip_processing):
         #Perform optimization for eigenvectors estimation
-        cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var)
-        default_training_kwargs = {'batch_size' : 32, 'max_epochs' : 10,
+        default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 10,
                                 'lr' : 1e-2,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                                 'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
-                                'orthogonal_projection' : True}
+                                'orthogonal_projection' : True,'nufft_disc' : None}
+        #TODO : change batch_size into batch per GPU? 
+        #TODO : change upsampling_factor into a training argument and pass that into Covar's methods instead of at constructor
+        if('fourier_upsampling' in training_kwargs.keys()):
+            upsampling_factor = training_kwargs['fourier_upsampling']
+            del training_kwargs['fourier_upsampling']
+        else:
+            upsampling_factor = 2        
         default_training_kwargs.update(training_kwargs)
+
+        optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
+        cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
+                    fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
+            
         trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
-                        **default_training_kwargs)
+            **default_training_kwargs)
+        
         
         #Compute wiener coordinates using estimated and ground truth eigenvectors
         eigen_est,eigenval_est= cov.eigenvecs
@@ -262,23 +273,33 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 
     return data_dict,figure_dict,training_data,default_training_kwargs
 
-@click.command()    
-@click.option('-s','--starfile',type=str, help='path to star file.')
-@click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
-@click.option('-w','--whiten',is_flag = True,default=True,help='whether to whiten the images before processing')
-@click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
-@click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
-@click.option('--skip-processing',is_flag = True,default = False,help='whether to disable logging of run to comet')
-@click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
-@click.option('--batch-size',type=int,help = 'training batch size')
-@click.option('--max-epochs',type=int,help = 'number of epochs to train')
-@click.option('--lr',type=float,help= 'training learning rate')
-@click.option('--reg',type=float,help='regularization scaling')
-@click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
-@click.option('--orthogonal-projection',type=bool,default = True,help = "force orthogonality of eigen vectors while training (default True)")
+
+def workflow_click_decorator(func):
+    @click.option('-s','--starfile',type=str, help='path to star file.')
+    @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
+    @click.option('-w','--whiten',is_flag = True,default=True,help='whether to whiten the images before processing')
+    @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
+    @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
+    @click.option('--skip-processing',is_flag = True,default = False,help='whether to disable logging of run to comet')
+    @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
+    @click.option('--batch-size',type=int,help = 'training batch size')
+    @click.option('--max-epochs',type=int,help = 'number of epochs to train')
+    @click.option('--lr',type=float,help= 'training learning rate')
+    @click.option('--reg',type=float,help='regularization scaling')
+    @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
+    @click.option('--orthogonal-projection',type=bool,default = True,help = "force orthogonality of eigen vectors while training (default True)")
+    @click.option('--nufft-disc',type=click.Choice([None,'bilinear','nearest']),default=None,help="Discretisation of NUFFT computation")
+    @click.option('--fourier-upsampling',type=int,default=None,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
+    def wrapper(*args,**kwargs):
+        kwargs = {k : v for k,v in kwargs.items() if v is not None}
+        return func(*args,**kwargs)
+    
+    return wrapper
+
+@click.command()
+@workflow_click_decorator
 def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',skip_processing = False,debug = False,**training_kwargs):
-    training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
-    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,skip_processing = skip_processing,save_dataset = debug,**training_kwargs)
+    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,skip_processing = skip_processing,debug = debug,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()
