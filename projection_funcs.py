@@ -1,5 +1,5 @@
 import torch
-from nufft_plan import nufft_forward,nufft_adjoint,NufftPlanAbstract
+from nufft_plan import nufft_forward,nufft_adjoint,BaseNufftPlan
 import math
 
 def pad_tensor(tensor,size,dims=None):
@@ -62,7 +62,7 @@ def vol_forward(volume,plan,filters = None,fourier_domain = False):
         for i in range(len(plan)):
             volume_forward[i] = vol_forward(volume,plan[i],filters[i]) if filters is not None else vol_forward(volume,plan[i])
         return volume_forward
-    elif(isinstance(plan,NufftPlanAbstract)):
+    elif(isinstance(plan,BaseNufftPlan)):
         vol_nufft = nufft_forward(volume,plan)
         vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,L,L)).transpose(0,1)
         batch_size = vol_nufft.shape[1]

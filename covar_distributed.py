@@ -10,19 +10,21 @@ import math
 
 TMP_STATE_DICT_FILE = 'tmp_state_dict.pt'
 
-def ddp_setup(rank,world_size):
+def ddp_setup(rank,world_size,backend):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12356'
-    dist.init_process_group("gloo",rank=rank,world_size=world_size) #TODO: solve compatability issues with NCCL and cuFINUFFT
+    dist.init_process_group(backend,rank=rank,world_size=world_size) #TODO: solve compatability issues with NCCL and cuFINUFFT
     torch.cuda.set_device(rank)
 
 
 def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath = None,kwargs = {}):
-    ddp_setup(rank,world_size)
+    backend = 'nccl' if kwargs.get('nufft_disc') is not None else 'gloo' #For some reason cuFINUFFT breaks when using NCCL backend
+    ddp_setup(rank,world_size,backend)
     device = torch.device(f'cuda:{rank}')
     
-    
-    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset))
+    num_workers = min(4,(os.cpu_count()-1)//world_size)
+    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset),
+                                             num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=f'cuda:{rank}')
     covar_model = covar_model.to(device)
     covar_model = DDP(covar_model,device_ids=[rank])
     if(type(covar_model.module) == Covar):

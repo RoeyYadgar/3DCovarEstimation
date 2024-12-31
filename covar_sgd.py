@@ -584,7 +584,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
 
 
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
-    num_workers = max(1,os.cpu_count()-1)
+    num_workers = min(4,os.cpu_count()-1)
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
                                              num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device='cuda:0')
     #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
