@@ -221,7 +221,6 @@ class CovarTrainer():
         self.batch_size = train_data.data_iterable.batch_size if (not isinstance(train_data,torch.utils.data.DataLoader)) else train_data.batch_size
         self.isDDP = type(self._covar) == torch.nn.parallel.distributed.DistributedDataParallel
         vectors = self.covar_vectors()
-        vol_shape = vectors.shape[1:] 
         self.filters = self.dataset.unique_filters
         if(len(self.filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
             self.filters = self.filters.to(self.device)
@@ -236,11 +235,6 @@ class CovarTrainer():
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
-        L = self.dataset.resolution
-        vectors_gd_padded = pad_tensor(self.dataset.vectorsGD.reshape((-1,L,L,L)),vol_shape,dims=[-1,-2,-3])
-        vectorsGD_rpsd = rpsd(*vectors_gd_padded)
-        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,vol_shape[-1],3),dim=0)) #TODO : validate this regularization term        
-        self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
 
     @property
     def dataset(self):
@@ -349,6 +343,12 @@ class CovarTrainer():
             self.dataset.to_fourier_domain()
         else:
             self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
+
+        L = self.dataset.resolution
+        vectorsGD_rpsd = rpsd(*self.dataset.vectorsGD.reshape((-1,L,L,L)))
+        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)) #TODO : validate this regularization term        
+        self.fourier_reg = self.fourier_reg.to(self.device)
+        self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
 
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
@@ -541,8 +541,9 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)) #-2*noise_var*norm_squared_images+(noise_var * L) ** 2 #Term is constant
     cost_val = torch.mean(cost_val,dim=0)
 
-    if(fourier_reg is not None and reg_scale != 0):        
-        vols_fourier = torch.complex(*vols) * torch.sqrt(fourier_reg)
+    if(fourier_reg is not None and reg_scale != 0):
+        us_factor = int(vols.shape[-1]/L)
+        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
         vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
         #reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)

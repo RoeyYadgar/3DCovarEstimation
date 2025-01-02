@@ -212,13 +212,18 @@ class TestTorchImpl(unittest.TestCase):
         filters = self.dataset.unique_filters[filter_inds]
         pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
 
+        vectorsGD_rpsd = rpsd(*self.dataset.vectorsGD.reshape((-1,self.img_size,self.img_size,self.img_size)))
+        fourier_reg = (self.dataset.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,self.img_size,3),dim=0))
+        
         #Spatial domain cost
         plans = nufft_plan.NufftPlan((self.img_size,)*3,batch_size=rank)
         plans.setpts(pts_rot)
         cost_spatial = torch.tensor([
             cost(covar.vectors,ims,plans,filters,self.dataset.noise_var),
             cost(covar.vectors * 1e3,ims,plans,filters,self.dataset.noise_var),
-            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var * 1e6)])
+            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var * 1e6),
+            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var,reg_scale=1,fourier_reg = fourier_reg)
+            ])
 
         #Fourier domain cost
         fourier_data = self.dataset.copy()
@@ -233,7 +238,9 @@ class TestTorchImpl(unittest.TestCase):
         cost_fourier = torch.tensor([
             cost_fourier_domain(covar.get_vectors_fourier_domain(),ims, plans,filters,fourier_data.noise_var),
             cost_fourier_domain(covar.get_vectors_fourier_domain()*1e3,ims, plans,filters,fourier_data.noise_var),
-            cost_fourier_domain(covar.get_vectors_fourier_domain(),ims, plans,filters,fourier_data.noise_var*1e6)])
+            cost_fourier_domain(covar.get_vectors_fourier_domain(),ims, plans,filters,fourier_data.noise_var*1e6),
+            cost_fourier_domain(covar.get_vectors_fourier_domain(),ims, plans,filters,fourier_data.noise_var,reg_scale=self.img_size**0,fourier_reg=fourier_reg)
+            ])
 
         print((cost_spatial,cost_fourier))
         print((cost_spatial/cost_fourier))

@@ -12,8 +12,8 @@ class FourierShell():
             grid_func = grid_2d
         elif(dim == 3):
             grid_func = grid_3d
-        self.grid_radius = torch.tensor(grid_func(L,shifted=True,normalized=False)['r'],dtype=dtype,device=device)
-        self.max_radial_resolution = int(torch.ceil(torch.max(self.grid_radius)).item())
+        self.grid_radius = torch.tensor(grid_func(L,shifted=False,normalized=False)['r'],dtype=dtype,device=device)
+        self.radial_values = torch.arange(0,int(torch.ceil(torch.max(self.grid_radius)).item()))
 
 
     @staticmethod
@@ -21,14 +21,21 @@ class FourierShell():
         L = tensor.shape[0]
         dim = tensor.ndim
         return FourierShell(L,dim,tensor.dtype,tensor.device)
+    
+    def radial_avg_interval(self,radial_index):
+        lower_rad_threshold = self.radial_values[radial_index] - 0.5
+        upper_rad_threshold = self.radial_values[radial_index] + 0.5 if (radial_index < len(self.radial_values)-1) else self.radial_values[radial_index] + 1
+
+        return lower_rad_threshold,upper_rad_threshold
+        
+
 
     def avergage_fourier_shell(self,*spectrum_signals):
         n = len(spectrum_signals)
         #TODO : what should be done with zero freqeuncy component in odd image length?
-        shell_avg = torch.zeros(n, self.max_radial_resolution, dtype=self.dtype ,device=self.device)
+        shell_avg = torch.zeros(n, len(self.radial_values), dtype=self.dtype ,device=self.device)
         for i in range(shell_avg.shape[1]):
-            lower_rad_threshold = 0.5 + i
-            upper_rad_threshold = 1.5 + i
+            lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
             shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
             for j in range(n):
                 shell_avg[j,i] = torch.mean(spectrum_signals[j][shell_ind])
@@ -53,8 +60,7 @@ class FourierShell():
         n = len(shells)
         shell_sum = torch.zeros(len(shells),dtype=self.dtype,device=self.device)
         for i in range(len(shells[0])):
-            lower_rad_threshold = 0.5 + i
-            upper_rad_threshold = 1.5 + i
+            lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
             shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
             num_comps_in_shell = torch.sum(shell_ind)
             for j in range(n):
@@ -70,8 +76,7 @@ class FourierShell():
         n = len(shells)
         fourier_signal = torch.zeros((len(shells),)+(self.L,)*self.dim,dtype=self.dtype,device=self.device)
         for i in range(len(shells[0])):
-            lower_rad_threshold = 0.5 + i
-            upper_rad_threshold = 1.5 + i
+            lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
             shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
             for j in range(n):
                 fourier_signal[j][shell_ind] = shells[j][i]
