@@ -14,6 +14,10 @@ class FourierShell():
             grid_func = grid_3d
         self.grid_radius = torch.tensor(grid_func(L,shifted=False,normalized=False)['r'],dtype=dtype,device=device)
         self.radial_values = torch.arange(0,int(torch.ceil(torch.max(self.grid_radius)).item()))
+        #self.shell_ind = []
+        #for i in range(len(self.radial_values)):
+        #    lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
+        #    self.shell_ind.append((self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold))
 
 
     @staticmethod
@@ -28,35 +32,36 @@ class FourierShell():
 
         return lower_rad_threshold,upper_rad_threshold
         
+    def _unsqueeze_batch_dim(self,tensor):
+        #Add batch dimension if necessery
+        if(tensor.ndim == self.dim + 1):
+            return tensor
+        elif(tensor.ndim == self.dim):
+            return tensor.unsqueeze(0)
+        else:
+            raise Exception(f"Tensor dimension should be either {self.dim} or {self.dim+1} (for batch computation)")
 
-
-    def avergage_fourier_shell(self,*spectrum_signals):
-        n = len(spectrum_signals)
+    def avergage_fourier_shell(self,spectrum_signals):
+        spectrum_signals = self._unsqueeze_batch_dim(spectrum_signals)
+        n = spectrum_signals.shape[0]
         #TODO : what should be done with zero freqeuncy component in odd image length?
         shell_avg = torch.zeros(n, len(self.radial_values), dtype=self.dtype ,device=self.device)
         for i in range(shell_avg.shape[1]):
             lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
             shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
-            for j in range(n):
-                shell_avg[j,i] = torch.mean(spectrum_signals[j][shell_ind])
+            shell_avg[:,i] = torch.sum(spectrum_signals * shell_ind.unsqueeze(0),dim=tuple([-i-1 for i in range(self.dim)])) / torch.sum(shell_ind)
 
         if(n == 1):
             return shell_avg[0]
         
         return shell_avg
     
-    def rpsd(self,*signals):
-        n = len(signals)
-        signals_psd = torch.zeros((n,)+signals[0].shape,dtype=self.dtype,device=self.device)
-        for i in range(n):
-            if(self.dim == 2):
-                signal_fourier = centered_fft2(signals[i])
-            elif(self.dim == 3):
-                signal_fourier = centered_fft3(signals[i])
-            signals_psd[i] = torch.abs(signal_fourier)**2
-        return self.avergage_fourier_shell(*signals_psd)
+    def rpsd(self,signals):        
+        signals_psd = torch.abs(centered_fft3(self._unsqueeze_batch_dim(signals)))**2
+        return self.avergage_fourier_shell(signals_psd)
 
-    def sum_over_shell(self,*shells):
+    def sum_over_shell(self,shells):
+        shells = shells.unsqueeze(0) if shells.ndim == 1 else shells
         n = len(shells)
         shell_sum = torch.zeros(len(shells),dtype=self.dtype,device=self.device)
         for i in range(len(shells[0])):
@@ -72,14 +77,14 @@ class FourierShell():
         return shell_sum
     
 
-    def expand_fourier_shell(self,*shells):
+    def expand_fourier_shell(self,shells):
+        shells = shells.unsqueeze(0) if shells.ndim == 1 else shells
         n = len(shells)
         fourier_signal = torch.zeros((len(shells),)+(self.L,)*self.dim,dtype=self.dtype,device=self.device)
         for i in range(len(shells[0])):
             lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
             shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
-            for j in range(n):
-                fourier_signal[j][shell_ind] = shells[j][i]
+            fourier_signal[:,shell_ind] = shells[:,i].unsqueeze(1)
 
         if(n == 1):
             return fourier_signal[0]
@@ -87,14 +92,17 @@ class FourierShell():
 
         return fourier_signal
 
+def concat_tensor_tuple(tensor_tuple):
+    return torch.cat([t.unsqueeze(0) for t in tensor_tuple])
+
 def average_fourier_shell(*spectrum_signals):
-    return FourierShell.from_tensor(spectrum_signals[0]).avergage_fourier_shell(*spectrum_signals)
+    return FourierShell.from_tensor(spectrum_signals[0]).avergage_fourier_shell(concat_tensor_tuple(spectrum_signals))
 
 def rpsd(*signals):
-    return FourierShell.from_tensor(signals[0]).rpsd(*signals)
+    return FourierShell.from_tensor(signals[0]).rpsd(concat_tensor_tuple(signals))
 
 def expand_fourier_shell(shells,L,dim):
-    return FourierShell(L,dim,shells.dtype,shells.device).expand_fourier_shell(*shells)
+    return FourierShell(L,dim,shells.dtype,shells.device).expand_fourier_shell(shells)
 
 def sum_over_shell(shell,L,dim):
     return FourierShell(L,dim,shell.dtype,shell.device).sum_over_shell(shell)

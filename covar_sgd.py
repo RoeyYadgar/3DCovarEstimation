@@ -345,9 +345,9 @@ class CovarTrainer():
             self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
 
         L = self.dataset.resolution
-        vectorsGD_rpsd = rpsd(*self.dataset.vectorsGD.reshape((-1,L,L,L)))
+        vgd = self.dataset.vectorsGD.reshape((-1,L,L,L)).to(self.device)
+        vectorsGD_rpsd = rpsd(*vgd)
         self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)) #TODO : validate this regularization term        
-        self.fourier_reg = self.fourier_reg.to(self.device)
         self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
 
         print(f'Actual learning rate {lr}')
@@ -513,7 +513,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
         vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
         #reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)
         reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
-        cost_val += reg_scale * reg_cost /(L**4) #L^4 needed here because objective function scales with L^2 when moving into fourier space? #TODO : not sure this is needed (should get canceled with noise?)
+        cost_val += reg_scale * reg_cost /(L**4) #L^4 needed here because objective function scales with L^4 when moving into fourier space
 
     return cost_val
 
