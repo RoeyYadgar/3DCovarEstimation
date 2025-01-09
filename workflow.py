@@ -8,7 +8,7 @@ from umap import UMAP
 from sklearn.metrics import auc
 import click
 from utils import *
-from covar_sgd import CovarDataset,Covar
+from covar_sgd import CovarDataset,Covar,trainCovar
 from covar_distributed import trainParallel
 from wiener_coords import latentMAP,mahalanobis_threshold
 
@@ -143,8 +143,13 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
                     fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
             
-        trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
-            **default_training_kwargs)
+        if(torch.cuda.device_count() > 1):
+            trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+                **default_training_kwargs)
+        else:
+            cov = cov.to(get_torch_device())
+            trainCovar(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+                **default_training_kwargs)
         
         
         #Compute wiener coordinates using estimated and ground truth eigenvectors

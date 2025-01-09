@@ -127,6 +127,26 @@ def frobeniusNormDiff(vec1,vec2):
     
     return np.sqrt(normdiff_squared)
 
+def randomized_svd(A_mv, dim, rank, num_iters=10):
+    # Generate random test matrix
+    Q = torch.randn(dim, rank)
+    for _ in range(num_iters):
+        # Orthogonalize
+        Q, _ = torch.linalg.qr(A_mv(Q))
+        Q = Q[:, :rank]  # Reduce to desired rank
+    
+    # Compute B = Q^T A
+    B = torch.zeros(rank, dim)
+    for i in range(rank):
+        B[i] = A_mv(Q[:, i])
+    
+    # Compute SVD of the smaller matrix B
+    U_tilde, S, V = torch.svd(B)
+    
+    # Project U_tilde back to the original space
+    U = Q @ U_tilde
+    return U, S, V
+
 
 def asnumpy(data):
     if(type(data) == aspire.volume.volume.Volume or type(data) == aspire.image.image.Image):
