@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 import os
+import re
 import torch
 from numpy import random
 from aspire.utils import coor_trans,Rotation,grid_2d,grid_3d
@@ -192,6 +193,11 @@ def meanCTFPSD(ctfs,L):
 def sub_starfile(star_input,star_output,mrcs_index):
     star_out = StarFile(star_input)
     star_out['particles'] = pd.DataFrame(star_out['particles']).iloc[mrcs_index].to_dict(orient='list')
+    star_out.write(star_output)
+
+def mrcs_replace_starfile(star_input,star_output,mrcs_name):
+    star_out = StarFile(star_input)
+    star_out['particles']['_rlnImageName'] = [re.sub(r'@[^@]+', f'@{mrcs_name}', s) for s in star_out['particles']['_rlnImageName']]
     star_out.write(star_output)
 
 def estimateMean(source,basis = None):
