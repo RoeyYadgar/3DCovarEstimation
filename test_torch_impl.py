@@ -20,7 +20,7 @@ from aspire.utils import Rotation
 class TestTorchImpl(unittest.TestCase):
     
     def setUp(self):
-        self.img_size = 32
+        self.img_size = 16
         self.num_imgs = 100
         c = 5
         noise_var = 1
@@ -166,35 +166,26 @@ class TestTorchImpl(unittest.TestCase):
         rank = self.dataset.vectorsGD.shape[0]
         vgd = self.dataset.vectorsGD.reshape((rank,L,L,L))
         vectorsGD_rpsd = rpsd(*vgd)
-        gd_psd = torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)
-        '''
-        rank = 1
-        vgd = self.dataset.vectorsGD[0].reshape(1,L,L,L)
-        vectorsGD_rpsd = rpsd(*vgd)
-        gd_psd = expand_fourier_shell(vectorsGD_rpsd.reshape(1,-1),L,3)
-        '''
+        gd_psd = torch.sum(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0) if rank > 1 else expand_fourier_shell(vectorsGD_rpsd,L,3)
+
         noise_var = 10
-        fourier_reg = noise_var / (gd_psd * (rank) ** 0.5)
+        fourier_reg = noise_var / gd_psd
 
         #vols = torch.randn((rank,L,L,L))
         vols = vgd
         vols_fourier = centered_fft3(vols)
         vols_fourier*= torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
-        vols_prod = torch.real(torch.matmul(vols_fourier,torch.conj(vols_fourier).transpose(0,1)))
-        reg_term = torch.sum(torch.pow(vols_prod,2))
-        vols_psd_sum = torch.sum(torch.abs(vols_fourier) ** 2,dim=0)
-        correction_term = torch.norm(vols_psd_sum)**2 - 0.5 * torch.norm(vols_psd_sum - noise_var * rank ** 0.5)**2
-        reg_term_efficient_computation = reg_term - correction_term
+
+        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
+        reg_term_efficient_computation = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
+
         
-
-
         vols_fourier = centered_fft3(vols).reshape(rank,-1)
-        sigma = vols_fourier.T @ torch.conj(vols_fourier)
-        M = rank * gd_psd.reshape(1,-1) * gd_psd.reshape(-1,1)
-        M += torch.diag(rank * gd_psd.reshape(-1) ** 2)
-        reg_matrix_coeff = torch.sqrt(noise_var ** 2 / (M)) 
-        reg_term_inefficient_computation = torch.norm(reg_matrix_coeff * (sigma - torch.diag(rank * gd_psd.reshape(-1)))) ** 2
+        vgd_fourier = centered_fft3(vgd).reshape(rank,-1)
+        M = vgd_fourier.T @ vgd_fourier.conj()
+        reg_matrix_coeff = noise_var / torch.abs(M) #torch.sqrt(noise_var ** 2 / torch.abs(M)**2)
+        reg_term_inefficient_computation = torch.norm(reg_matrix_coeff * (vols_fourier.T @ vols_fourier.conj()))**2
 
         print((reg_term_efficient_computation,reg_term_inefficient_computation))
         print((reg_term_efficient_computation-reg_term_inefficient_computation)/reg_term_inefficient_computation)

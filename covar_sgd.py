@@ -235,6 +235,7 @@ class CovarTrainer():
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
+        self.reg_after_epoch = 5
 
     @property
     def dataset(self):
@@ -257,7 +258,8 @@ class CovarTrainer():
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
-        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg)
+        used_reg_scale = self.reg_scale if self.epoch_index >= self.reg_after_epoch else 0
+        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,used_reg_scale,self.fourier_reg)
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
@@ -313,10 +315,9 @@ class CovarTrainer():
         self.use_orthogonal_projection = orthogonal_projection
 
         if(lr is None):
-            lr = 1e-2 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
+            lr = 1e0 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
 
-        if(scale_params):
-            lr *= self.batch_size #Scale learning rate with batch size
+        #if(scale_params):
             #reg *= self.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
             #reg /= self.covar.resolution ** 2 #gradient of cost function scales linearly with L while regulriaztion scales with L^3
         
@@ -325,6 +326,7 @@ class CovarTrainer():
             if(scale_params):
                 lr /= self.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
                 lr /= self.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
+                lr *= self.batch_size #Scale learning rate with batch size
                 #TODO : expirmantation suggests that normalizng lr by resolution is not needed. why?
                 #lr /= self.covar.resolution #gradient of cost function scales linearly with L
                 #TODO : should lr scale by L^2.5 when performing optimization in fourier domain? since gradient scales with L^4 and volume scales with L^1.5
@@ -347,12 +349,18 @@ class CovarTrainer():
         L = self.dataset.resolution
         vgd = self.dataset.vectorsGD.reshape((-1,L,L,L)).to(self.device)
         vectorsGD_rpsd = rpsd(*vgd)
-        self.fourier_reg = (self.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)) #TODO : validate this regularization term        
+        vectorsGD_rpsd[:,L//2:] = vectorsGD_rpsd[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
+        self.fourier_reg = (self.noise_var) / (torch.sum(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0)) #TODO : validate this regularization term        
         self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
 
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
         for epoch in range(max_epochs):
+            self.epoch_index = epoch
+            if(epoch == self.reg_after_epoch): #Restart scheduler with original learning rate when introducing regularization
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = lr
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
             self.run_epoch(epoch)
 
             self.reg_scale *= gamma_reg
@@ -511,9 +519,8 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
         vols_fourier*= torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
         vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
-        #reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)
         reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
-        cost_val += reg_scale * reg_cost /(L**4) #L^4 needed here because objective function scales with L^4 when moving into fourier space
+        cost_val += reg_scale * reg_cost 
 
     return cost_val
 
@@ -546,7 +553,6 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
         vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
         vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
-        #reg_cost = torch.sum(torch.norm(vols_fourier,dim=1)**2)
         reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
         cost_val += reg_scale * reg_cost
 
