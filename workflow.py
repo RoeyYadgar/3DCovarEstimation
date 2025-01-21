@@ -126,10 +126,11 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 
     if(not skip_processing):
         #Perform optimization for eigenvectors estimation
-        default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 10,
-                                'lr' : 1e-2,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+        default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 50,
+                                'lr' : 1e0,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                                 'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
-                                'orthogonal_projection' : True,'nufft_disc' : None}
+                                'orthogonal_projection' : True,'nufft_disc' : None,
+                                'num_reg_update_iters' : 3, 'use_halfsets' : False}
         #TODO : change batch_size into batch per GPU? 
         #TODO : change upsampling_factor into a training argument and pass that into Covar's methods instead of at constructor
         if('fourier_upsampling' in training_kwargs.keys()):
@@ -143,7 +144,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
                     fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
             
-        if(torch.cuda.device_count() > 1):
+        if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
             trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
                 **default_training_kwargs)
         else:
@@ -282,7 +283,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 def workflow_click_decorator(func):
     @click.option('-s','--starfile',type=str, help='path to star file.')
     @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
-    @click.option('-w','--whiten',is_flag = True,default=True,help='whether to whiten the images before processing')
+    @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
     @click.option('--skip-processing',is_flag = True,default = False,help='whether to disable logging of run to comet')
@@ -295,6 +296,8 @@ def workflow_click_decorator(func):
     @click.option('--orthogonal-projection',type=bool,default = True,help = "force orthogonality of eigen vectors while training (default True)")
     @click.option('--nufft-disc',type=click.Choice([None,'bilinear','nearest']),default=None,help="Discretisation of NUFFT computation")
     @click.option('--fourier-upsampling',type=int,default=None,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
+    @click.option('--num-reg-update-iters',type=int,default=3,help='Number of iterations to update regularization')
+    @click.option('--use-halfsets',type=bool,default=False,help='Whether to split data into halfsets for regularization update')
     def wrapper(*args,**kwargs):
         kwargs = {k : v for k,v in kwargs.items() if v is not None}
         return func(*args,**kwargs)

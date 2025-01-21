@@ -11,7 +11,7 @@ from aspire.volume import Volume
 from aspire.volume import rotated_grids
 from nufft_plan import NufftPlan,NufftPlanDiscretized
 from projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
-from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell
+from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask='fuzzy'):
@@ -92,6 +92,34 @@ class CovarDataset(Dataset):
         subset.filter_indices = subset.filter_indices[idx]
 
         return subset
+    
+    def half_split(self,permute = True):
+        data_size = len(self)
+        if(permute):
+            permutation = torch.randperm(data_size)
+        else:
+            permutation = torch.arange(0,data_size)
+
+        ds1 = self.get_subset(permutation[:data_size//2])
+        ds2 = self.get_subset(permutation[data_size//2:])
+
+        return ds1,ds2
+    
+
+    def get_total_gain(self):
+        """Returns a 3D tensor represntaing the total gain of each frequency, observed by the dataset"""
+        pts_rot_grid = torch.round(self.pts_rot / torch.pi * (self.resolution//2)).to(torch.long)
+        gain_tensor = torch.zeros((self.resolution,)*3,dtype=self.unique_filters.dtype)
+        filters = self.unique_filters[self.filter_indices]
+        
+        coords = (pts_rot_grid + (self.resolution // 2)) % self.resolution
+        indices = coords[:,0] * self.resolution**2 + coords[:,1] * self.resolution + coords[:,2]
+        gain_tensor = gain_tensor.view(-1)
+        gain_tensor.scatter_add_(0,indices.reshape(-1),filters.reshape(-1)**2)
+
+        gain_tensor = gain_tensor.reshape((self.resolution,)*3)
+
+        return gain_tensor
 
     def remove_vol_from_images(self,vol,coeffs = None,copy_dataset = False):
         device = vol.device
@@ -129,7 +157,7 @@ class CovarDataset(Dataset):
 
     def to_spatial_domain(self):
         if(not self._in_spatial_domain):
-            self.images = centered_ifft2(self.images)
+            self.images = centered_ifft2(self.images).real
             self.noise_var /= self.resolution**2
             self.dtype = get_complex_real_dtype(self.dtype)
             self._in_spatial_domain = True
@@ -235,7 +263,8 @@ class CovarTrainer():
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
-        self.reg_after_epoch = 5
+        self.filter_gain_shell = self.dataset.get_total_gain().to(self.device)
+        self.num_reduced_lr_before_stop = 4
 
     @property
     def dataset(self):
@@ -258,8 +287,7 @@ class CovarTrainer():
 
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
-        used_reg_scale = self.reg_scale if self.epoch_index >= self.reg_after_epoch else 0
-        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,used_reg_scale,self.fourier_reg)
+        cost_val,vectors = self._covar.forward(images,nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg)
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
@@ -311,8 +339,21 @@ class CovarTrainer():
             
     
     def train(self,max_epochs,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,nufft_disc = None,orthogonal_projection = False,scale_params = True):
+        self.setup_training(lr = lr,
+                            momentum = momentum,
+                            optim_type = optim_type,
+                            reg = reg,
+                            gamma_lr = gamma_lr,
+                            gamma_reg = gamma_reg,
+                            nufft_disc = nufft_disc,
+                            orthogonal_projection = orthogonal_projection,
+                            scale_params = scale_params)
+        self.train_epochs(max_epochs)
+        self.complete_training()
 
+    def setup_training(self,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,nufft_disc = None,orthogonal_projection = False,scale_params = True):
         self.use_orthogonal_projection = orthogonal_projection
+        self.gamma_reg = gamma_reg
 
         if(lr is None):
             lr = 1e0 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
@@ -333,7 +374,8 @@ class CovarTrainer():
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
+        self.lr = lr
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
 
         vectors = self.covar_vectors()
         rank = vectors.shape[0]
@@ -355,21 +397,32 @@ class CovarTrainer():
 
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
+
+    def restart_optimizer(self):
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.lr
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
+
+    def train_epochs(self,max_epochs,restart_optimizer = False):
+        if(restart_optimizer):
+            self.restart_optimizer()
+
         for epoch in range(max_epochs):
             self.epoch_index = epoch
-            if(epoch == self.reg_after_epoch): #Restart scheduler with original learning rate when introducing regularization
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = lr
-                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
             self.run_epoch(epoch)
 
-            self.reg_scale *= gamma_reg
-            scheduler.step(self.cost_in_epoch)
-            print(f'New learning rate set to {scheduler.get_last_lr()}')
+            self.reg_scale *= self.gamma_reg #TODO : remove gamma_reg
+            self.scheduler.step(self.cost_in_epoch)
+            print(f'New learning rate set to {self.scheduler.get_last_lr()}')
 
             if(self.logTraining and self.save_path is not None):
                 self.save_result()
 
+            if self.scheduler.num_bad_epochs >= self.num_reduced_lr_before_stop:
+                print("Learning rate has been reduced 5 times. Stopping training.")
+                break
+
+    def complete_training(self):
         if(self.optimize_in_fourier_domain):#Transform back to spatial domain            
             self.dataset.to_spatial_domain()
 
@@ -405,7 +458,49 @@ class CovarTrainer():
         os.makedirs(savedir,exist_ok=True)
         ckp = self.results_dict()
         torch.save(ckp,self.save_path)
-                
+
+
+def update_fourier_reg(trainer1,trainer2):
+    rank = trainer1.covar.rank
+    L = trainer1.covar.resolution
+    filter_gain = (trainer1.filter_gain_shell + trainer2.filter_gain_shell)/2
+    current_fourier_reg = trainer1.fourier_reg
+
+    filter_gain_shell_correction = average_fourier_shell(filter_gain / (filter_gain + current_fourier_reg+1e-12)**2) / average_fourier_shell(filter_gain**2 / (filter_gain + current_fourier_reg+1e-12)**2)
+    #filter_gain_shell_correction = 1/average_fourier_shell(filter_gain)
+    filter_gain_shell_correction[L//2:] = filter_gain_shell_correction[L//2]
+
+    #Get the covariance eigenvectors from each trainer
+    eigenvecs1 = trainer1.covar.eigenvecs
+    eigenvecs1 = eigenvecs1[0] * eigenvecs1[1].reshape(-1,1,1,1)
+    
+    eigenvecs2 = trainer2.covar.eigenvecs
+    eigenvecs2 = eigenvecs2[0] * eigenvecs2[1].reshape(-1,1,1,1)
+
+    #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
+    U,_,V = torch.linalg.svd(eigenvecs1.reshape(rank,-1) @ eigenvecs2.reshape(rank,-1).T)
+    eigenvecs1 = (U @ (V.T @ eigenvecs1.reshape(rank,-1))).reshape((rank,L,L,L))
+
+    eigenvecs_fsc = concat_tensor_tuple([vol_fsc(eigenvecs1[i],eigenvecs2[i]) for i in range(rank)])
+    fsc_epsilon = 1e-3
+    eigenvecs_fsc[eigenvecs_fsc < fsc_epsilon] = fsc_epsilon
+    eigenvecs_fsc[eigenvecs_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
+    #eigenvecs_fsc[:,L//2:] = eigenvecs_fsc[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
+
+    new_fourier_reg = filter_gain_shell_correction/torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0) #TODO : shuold filter gain correction be multiplied or divided?
+    #new_fourier_reg = 1/(torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0)*filter_gain_shell_correction) #TODO : shuold filter gain correction be multiplied or divided?
+    new_fourier_reg[new_fourier_reg < 0] = 0
+
+    from matplotlib import pyplot as plt #Remove this
+    fig = plt.figure()
+    plt.plot(np.log(new_fourier_reg.cpu().numpy()).T)
+    fig.savefig('test.jpg')
+
+    new_fourier_reg_tensor = expand_fourier_shell(new_fourier_reg.to(trainer1.device),L,3)
+    trainer1.fourier_reg = new_fourier_reg_tensor
+    trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
+
+
 class Covar(torch.nn.Module):
     def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
         super().__init__()
@@ -592,10 +687,51 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
 
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
     num_workers = min(4,os.cpu_count()-1)
-    dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
-                                             num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device='cuda:0')
-    #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
-    #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
-    trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
-    trainer.train(**kwargs) 
+    use_halfsets = kwargs.pop('use_halfsets')
+    num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
+    if(not use_halfsets):
+        dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
+                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
+        #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
+        trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
+        trainer.train(**kwargs)
+
+    else:
+        covar_model_copy = copy.deepcopy(covar_model)
+        with torch.no_grad(): #Reinitalize the copied model since having the same initalization will produce unwanted correlation even after training
+            covar_model_copy._vectors_real.data.copy_(covar_model_copy.init_random_vectors(covar_model.rank))
+        half1,half2 = dataset.half_split()
+
+        num_epochs = kwargs.pop('max_epochs')
+
+        dataloader1 = torch.utils.data.DataLoader(half1,batch_size = batch_size,shuffle = True,
+                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        trainer1 = CovarTrainer(covar_model,dataloader1,covar_model.device,savepath)
+        trainer1.setup_training(**kwargs) 
+
+        dataloader2 = torch.utils.data.DataLoader(half2,batch_size = batch_size,shuffle = True,
+                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        trainer2 = CovarTrainer(covar_model_copy,dataloader2,covar_model_copy.device,save_path=None)
+        trainer2.setup_training(**kwargs)
+
+        #Start with no reg
+        trainer1.fourier_reg *= 0
+        trainer2.fourier_reg *= 0
+
+        for i in range(0,num_reg_update_iters):
+            trainer1.train_epochs(num_epochs,restart_optimizer=True)
+            trainer2.train_epochs(num_epochs,restart_optimizer=True)
+            update_fourier_reg(trainer1,trainer2)
+
+        trainer1.complete_training()
+        trainer2.complete_training()
+
+        #Train on full dataset #TODO: reuse trainer1 to avoid having to set up the training again, this still requries to transform the dataset to fourier domain if needed
+        full_dataloader = torch.utils.DataLoader(dataset,batch_size = batch_size,shuffle = True,
+                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath)
+        trainer_final.train(max_epochs=num_epochs,**kwargs)
+        
+
     return
