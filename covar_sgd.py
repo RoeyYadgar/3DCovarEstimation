@@ -263,7 +263,7 @@ class CovarTrainer():
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
-        self.filter_gain_shell = self.dataset.get_total_gain().to(self.device)
+        self.filter_gain = self.dataset.get_total_gain().to(self.device)
         self.num_reduced_lr_before_stop = 4
 
     @property
@@ -418,8 +418,8 @@ class CovarTrainer():
             if(self.logTraining and self.save_path is not None):
                 self.save_result()
 
-            if self.scheduler.num_bad_epochs >= self.num_reduced_lr_before_stop:
-                print("Learning rate has been reduced 5 times. Stopping training.")
+            if self.scheduler.get_last_lr()[0] <= self.lr * (self.scheduler.factor ** self.num_reduced_lr_before_stop):
+                print(f"Learning rate has been reduced {self.num_reduced_lr_before_stop} times. Stopping training.")
                 break
 
     def complete_training(self):
@@ -463,19 +463,25 @@ class CovarTrainer():
 def update_fourier_reg(trainer1,trainer2):
     rank = trainer1.covar.rank
     L = trainer1.covar.resolution
-    filter_gain = (trainer1.filter_gain_shell + trainer2.filter_gain_shell)/2
+    filter_gain = (trainer1.filter_gain + trainer2.filter_gain)/2
     current_fourier_reg = trainer1.fourier_reg
-
-    filter_gain_shell_correction = average_fourier_shell(filter_gain / (filter_gain + current_fourier_reg+1e-12)**2) / average_fourier_shell(filter_gain**2 / (filter_gain + current_fourier_reg+1e-12)**2)
-    #filter_gain_shell_correction = 1/average_fourier_shell(filter_gain)
-    filter_gain_shell_correction[L//2:] = filter_gain_shell_correction[L//2]
-
     #Get the covariance eigenvectors from each trainer
     eigenvecs1 = trainer1.covar.eigenvecs
     eigenvecs1 = eigenvecs1[0] * eigenvecs1[1].reshape(-1,1,1,1)
     
     eigenvecs2 = trainer2.covar.eigenvecs
     eigenvecs2 = eigenvecs2[0] * eigenvecs2[1].reshape(-1,1,1,1)
+
+    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L)
+
+    trainer1.fourier_reg = new_fourier_reg_tensor.to(trainer1.device)
+    trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
+
+def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L):
+
+    filter_gain_shell_correction = average_fourier_shell(filter_gain / (filter_gain + current_fourier_reg+1e-12)**2) / average_fourier_shell(filter_gain**2 / (filter_gain + current_fourier_reg+1e-12)**2)
+    #filter_gain_shell_correction = 1/average_fourier_shell(filter_gain)
+    filter_gain_shell_correction[L//2:] = filter_gain_shell_correction[L//2]
 
     #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
     U,_,V = torch.linalg.svd(eigenvecs1.reshape(rank,-1) @ eigenvecs2.reshape(rank,-1).T)
@@ -496,9 +502,9 @@ def update_fourier_reg(trainer1,trainer2):
     plt.plot(np.log(new_fourier_reg.cpu().numpy()).T)
     fig.savefig('test.jpg')
 
-    new_fourier_reg_tensor = expand_fourier_shell(new_fourier_reg.to(trainer1.device),L,3)
-    trainer1.fourier_reg = new_fourier_reg_tensor
-    trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
+    new_fourier_reg_tensor = expand_fourier_shell(new_fourier_reg,L,3)
+    return new_fourier_reg_tensor
+
 
 
 class Covar(torch.nn.Module):
@@ -705,6 +711,7 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
 
         num_epochs = kwargs.pop('max_epochs')
 
+        #TODO: Use sampler like in DDP to not have to split dataset?
         dataloader1 = torch.utils.data.DataLoader(half1,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         trainer1 = CovarTrainer(covar_model,dataloader1,covar_model.device,savepath)
@@ -728,7 +735,7 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
         trainer2.complete_training()
 
         #Train on full dataset #TODO: reuse trainer1 to avoid having to set up the training again, this still requries to transform the dataset to fourier domain if needed
-        full_dataloader = torch.utils.DataLoader(dataset,batch_size = batch_size,shuffle = True,
+        full_dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath)
         trainer_final.train(max_epochs=num_epochs,**kwargs)
