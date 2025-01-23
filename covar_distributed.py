@@ -33,6 +33,9 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
         group1 = dist.new_group(ranks=list(range(world_size//2)))
         group2 = dist.new_group(ranks=list(range(world_size//2,world_size)))
         is_group1 = rank in range(world_size//2)
+        if not is_group1:
+            torch.manual_seed(1) #Reinitalize vectors in group2
+            covar_model._vectors_real.data.copy_(covar_model.init_random_vectors(covar_model.rank))
         covar_model = DDP(covar_model,device_ids=[rank],process_group=group1 if is_group1 else group2)
     else:
         covar_model = DDP(covar_model,device_ids=[rank])
@@ -60,13 +63,22 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
             #eigenvecs_list will have the same eigenvecs in each distributed group (i.e. [eigenvecs1,...,eigenvecs1,eigenvesc2,...,eigenvecs2])
             eigenvecs1 = eigenvecs_list[0]
             eigenvecs2 = eigenvecs_list[-1]
-            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.rank,covar_model.module.resolution)
+            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.rank,covar_model.module.resolution,trainer.noise_var)
             trainer.fourier_reg = new_fourier_reg_term
 
         #Train a single model on the whole dataset
-        for param in covar_model.parameters(): #Update state of group2
-            dist.broadcast(param,src=0)
-        trainer._covar = DDP(covar_model.module,device_ids=[rank]) #Reset DDP model to include all ranks
+        with torch.no_grad():
+            for param in covar_model.parameters(): #Update state of group2
+                dist.broadcast(param,src=0)
+        #Reset DDP model to include all ranks
+        covar_model = Covar(covar_model.module.resolution,
+                    covar_model.module.rank,
+                    pixel_var_estimate=covar_model.module.pixel_var_estimate,
+                    fourier_domain = not covar_model.module._in_spatial_domain,
+                    upsampling_factor=covar_model.module.upsampling_factor,
+                    vectors=covar_model.module._vectors_real.clone().detach()).to(device)
+        covar_model = DDP(covar_model,device_ids=[rank])
+        trainer._covar = covar_model
         trainer.train_epochs(num_epochs,restart_optimizer=True)
         trainer.complete_training()
 
