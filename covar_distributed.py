@@ -49,15 +49,23 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
 
 
     if(not use_halfsets):
-        trainer.train(**kwargs)
-    else:
         num_epochs = kwargs.pop('max_epochs')
         trainer.setup_training(**kwargs)
-        trainer.fourier_reg *= 0
         for _ in range(num_reg_update_iters):
             trainer.train_epochs(num_epochs,restart_optimizer=True)
             eigenvecs = trainer.covar.eigenvecs
-            eigenvecs = eigenvecs[0] * eigenvecs[1].reshape(-1,1,1,1)
+            eigenvecs = eigenvecs[0] * (eigenvecs[1]**0.5).reshape(-1,1,1,1)
+            trainer.compute_fourier_reg_term(eigenvecs)
+            trainer.covar.orthogonal_projection()
+        trainer.train_epochs(num_epochs,restart_optimizer=True)
+        trainer.complete_training()
+    else:
+        num_epochs = kwargs.pop('max_epochs')
+        trainer.setup_training(**kwargs)
+        for _ in range(num_reg_update_iters):
+            trainer.train_epochs(num_epochs,restart_optimizer=True)
+            eigenvecs = trainer.covar.eigenvecs
+            eigenvecs = eigenvecs[0] * (eigenvecs[1]**0.5).reshape(-1,1,1,1)
             eigenvecs_list = [torch.zeros_like(eigenvecs) for _ in range(world_size)]
             dist.all_gather(tensor_list = eigenvecs_list,tensor = eigenvecs)
             #eigenvecs_list will have the same eigenvecs in each distributed group (i.e. [eigenvecs1,...,eigenvecs1,eigenvesc2,...,eigenvecs2])
