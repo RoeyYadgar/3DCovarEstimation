@@ -10,8 +10,9 @@ import comet_ml
 @click.option('-z','--zdim',type=int,help='Latent space dimension')
 @click.option('--num-epochs',type=int,help='Number of epochs to train CRYODRGN')
 @click.option('-l','--labels',default=None,type=str,help='path to pkl labels file')
+@click.option('--mask',default='sphere',type=str,help='mask type for recovar')
 @click.option('--disable-comet',is_flag = True,default = False,help='wether to disable logging of run to comet')
-def run_pipeline(name,alg,mrc,zdim,num_epochs,labels,disable_comet):
+def run_pipeline(name,alg,mrc,zdim,num_epochs,labels,mask,disable_comet):
     mrcdir = os.path.split(mrc)[0]
     starfile = mrc.replace('.mrcs','.star')
     poses = os.path.join(mrcdir,'poses.pkl')
@@ -21,8 +22,8 @@ def run_pipeline(name,alg,mrc,zdim,num_epochs,labels,disable_comet):
         command = f'cryodrgn train_vae {mrc} --poses {poses} --ctf {ctf} --zdim {zdim} -n {num_epochs} -o {output_path} --multigpu'
         analyze_command = f'cryodrgn analyze {output_path} {num_epochs-1}'
     if(alg == 'recovar'):
-        command = f'python ~/recovar/pipeline.py {mrc} --poses {poses} --ctf {ctf} --zdim {zdim} -o {output_path} --mask-option spherical --correct-contrast --low-memory-option'
-        analyze_command = f'python ~/recovar/analyze.py --zdim {zdim}'
+        command = f'python ~/recovar/pipeline.py {mrc} --poses {poses} --ctf {ctf} --zdim {zdim} -o {output_path} --mask {mask} --correct-contrast --low-memory-option'
+        analyze_command = f'python ~/recovar/analyze.py --zdim {zdim} {output_path}'
     if(not disable_comet):
         run_config  = {'starfile' : starfile, 'zdim' : zdim, 'command' : command, 'analyze_command' : analyze_command}
         exp = comet_ml.Experiment(project_name="3d_cov",parse_args=False)
