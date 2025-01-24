@@ -30,14 +30,15 @@ def generate_dummy_dataset(path,image_size,rank,num_ims = 1000,volumes_path=None
         filters = [ArrayFilter(np.ones((image_size,image_size)))]
 
     mean_voxel = Volume(np.mean(voxels,axis=0))
-    sim = Simulation(n = num_ims , vols = voxels,unique_filters=filters,offsets=0,amplitudes=1)
+    images_states = np.arange(0,voxels.shape[0]).repeat(np.ceil(num_ims / voxels.shape[0]))[:num_ims]
+    sim = Simulation(n = num_ims , vols = voxels,unique_filters=filters,offsets=0,amplitudes=1,states=images_states)
 
     var = np.var((sim.images[:] - sim.vol_forward(mean_voxel,0,sim.n)).asnumpy())
 
     if(snr is not None):
         noise_var = var / snr
         noise_adder = WhiteNoiseAdder(noise_var)
-        sim = Simulation(n = num_ims, vols = voxels,unique_filters=filters,noise_adder=noise_adder,offsets=0,amplitudes=1)
+        sim = Simulation(n = num_ims, vols = voxels,unique_filters=filters,noise_adder=noise_adder,offsets=0,amplitudes=1,states=images_states)
 
 
     #The starfile format ASPIRE saves the file as is a little different.
