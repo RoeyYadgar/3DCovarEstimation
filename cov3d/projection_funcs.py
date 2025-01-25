@@ -1,5 +1,5 @@
 import torch
-from nufft_plan import nufft_forward,nufft_adjoint,BaseNufftPlan
+from cov3d.nufft_plan import nufft_forward,nufft_adjoint,BaseNufftPlan
 import math
 
 def pad_tensor(tensor,size,dims=None):

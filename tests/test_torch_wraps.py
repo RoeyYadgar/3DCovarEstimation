@@ -11,8 +11,8 @@ from aspire.utils import Rotation
 from aspire.nufft import nufft as aspire_nufft
 from aspire.nufft import anufft as aspire_anufft
 
-import nufft_plan
-import projection_funcs
+from cov3d import nufft_plan
+from cov3d import projection_funcs
 
 class TestTorchWraps(unittest.TestCase):
     

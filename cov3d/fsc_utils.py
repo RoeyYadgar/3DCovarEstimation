@@ -1,6 +1,6 @@
 import torch
 from aspire.utils import grid_2d, grid_3d
-from projection_funcs import centered_fft2,centered_fft3
+from cov3d.projection_funcs import centered_fft2,centered_fft3
 
 class FourierShell():
     def __init__(self,L,dim,dtype=torch.float32,device=torch.device('cpu')):

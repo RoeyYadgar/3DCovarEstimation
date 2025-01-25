@@ -6,12 +6,11 @@ from aspire.volume import Volume,LegacyVolume,rotated_grids
 from aspire.source import Simulation
 from aspire.noise import WhiteNoiseAdder
 
-import nufft_plan
-#from covar_estimation import CovarCost
-from covar_sgd import Covar,cost,cost_fourier_domain,CovarDataset
-from utils import volsCovarEigenvec,generateBallVoxel
-from projection_funcs import vol_forward,centered_fft3
-from fsc_utils import rpsd,expand_fourier_shell
+from cov3d import nufft_plan
+from cov3d.covar_sgd import Covar,cost,cost_fourier_domain,CovarDataset
+from cov3d.utils import volsCovarEigenvec,generateBallVoxel
+from cov3d.projection_funcs import vol_forward,centered_fft3
+from cov3d.fsc_utils import rpsd,expand_fourier_shell
 from aspire.operators import RadialCTFFilter,ArrayFilter
 from aspire.utils import Rotation
 

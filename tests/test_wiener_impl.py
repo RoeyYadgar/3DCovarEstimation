@@ -1,11 +1,11 @@
 import unittest
 from aspire.volume import Volume,LegacyVolume
 from aspire.source import Simulation
-from covar_sgd import CovarDataset,Covar
+from cov3d.covar_sgd import CovarDataset,Covar
 from aspire.operators import RadialCTFFilter
 from aspire.denoising import src_wiener_coords
 import time
-from wiener_coords import wiener_coords,latentMAP
+from cov3d.wiener_coords import wiener_coords,latentMAP
 import torch
 import numpy as np
 
@@ -31,7 +31,7 @@ class TestWienerImpl(unittest.TestCase):
             )
         mean_vol = Volume(np.mean(vols,axis=0))
         noise_var = 1
-        dataset = CovarDataset(source,noise_var,vectorsGD=None,mean_volume=mean_vol)
+        dataset = CovarDataset(source,noise_var,vectorsGD=None,mean_volume=mean_vol,mask=None)
         device = torch.device('cuda:0')
 
 

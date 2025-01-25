@@ -1,4 +1,3 @@
-from utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
 import os
 import torch
 import time
@@ -9,9 +8,10 @@ from tqdm import tqdm
 import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
-from nufft_plan import NufftPlan,NufftPlanDiscretized
-from projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
-from fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc
+from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
+from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
+from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
+from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask='fuzzy'):
@@ -192,7 +192,9 @@ class CovarDataset(Dataset):
 
 
     def mask_images(self,mask,batch_size=512):
-        if(mask == 'fuzzy'):
+        if(mask is None):
+            return
+        elif(mask == 'fuzzy'):
             mask = torch.tensor(fuzzy_mask((self.resolution,)*2,dtype=np.float32),dtype=self.images.dtype)
             self.images *= mask
         elif(isinstance(mask,Volume) or isinstance(mask,str)):

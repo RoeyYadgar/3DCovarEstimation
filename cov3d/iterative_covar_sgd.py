@@ -1,8 +1,8 @@
 import torch
 from torch import distributed as dist
-from covar_sgd import Covar,CovarDataset,CovarTrainer,cost
-from nufft_plan import NufftPlan
-from wiener_coords import wiener_coords
+from cov3d.covar_sgd import Covar,CovarDataset,CovarTrainer,cost
+from cov3d.nufft_plan import NufftPlan
+from cov3d.wiener_coords import wiener_coords
 
 class IterativeCovarTrainer(CovarTrainer):
     def __init__(self,*args,**kwargs):

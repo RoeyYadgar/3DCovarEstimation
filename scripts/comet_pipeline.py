@@ -3,7 +3,7 @@ import click
 import sys
 import comet_ml
 from aspire.storage import StarFile
-from workflow import covar_workflow,workflow_click_decorator
+from cov3d.workflow import covar_workflow,workflow_click_decorator
 
 
 @click.command()

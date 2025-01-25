@@ -1,7 +1,7 @@
 import torch
 from scipy.stats import chi2
-from nufft_plan import NufftPlan
-from projection_funcs import vol_forward
+from cov3d.nufft_plan import NufftPlan
+from cov3d.projection_funcs import vol_forward
 from tqdm import tqdm
 import math
 

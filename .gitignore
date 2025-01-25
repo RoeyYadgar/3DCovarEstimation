@@ -1,4 +1,5 @@
-__pycache__/*
+cov3d/__pycache__/
+cov3d.egg-info/
 .vscode/*
 
 

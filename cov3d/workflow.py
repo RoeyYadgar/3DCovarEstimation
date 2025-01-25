@@ -7,10 +7,10 @@ import aspire
 from umap import UMAP
 from sklearn.metrics import auc
 import click
-from utils import *
-from covar_sgd import CovarDataset,Covar,trainCovar
-from covar_distributed import trainParallel
-from wiener_coords import latentMAP,mahalanobis_threshold
+from cov3d.utils import *
+from cov3d.covar_sgd import CovarDataset,Covar,trainCovar
+from cov3d.covar_distributed import trainParallel
+from cov3d.wiener_coords import latentMAP,mahalanobis_threshold
 
 
 def reconstructClass(starfile_path,vol_path,overwrite = False):
