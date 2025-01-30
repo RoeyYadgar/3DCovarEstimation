@@ -12,6 +12,16 @@ from cov3d.covar_sgd import CovarDataset,Covar,trainCovar
 from cov3d.covar_distributed import trainParallel
 from cov3d.wiener_coords import latentMAP,mahalanobis_threshold
 
+def determineMaxBatchSize(devices,L,rank,dtype):
+    devices_memory = [torch.cuda.get_device_properties(d).total_memory for d in devices]
+    mem_per_device = min(devices_memory)
+    model_size = L**3*rank*2*dtype.itemsize*3 # factor of 2 for complex numbers. factor of 3 comes from additional fourier reg tensor & vectorsGD (if exists)
+
+    mem_for_batch = mem_per_device - model_size
+    maximal_batch_size_per_device = mem_for_batch // (L**2*6*dtype.itemsize) # factor of 6 comes from complex number of images, 3d fourier points, and CTF filter 
+
+    return maximal_batch_size_per_device*len(devices)
+
 
 def reconstructClass(starfile_path,vol_path,overwrite = False):
     '''
@@ -126,12 +136,12 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 
     if(not skip_processing):
         #Perform optimization for eigenvectors estimation
-        default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 50,
-                                'lr' : 1e0,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+        default_training_kwargs = {'batch_size' : 4096, 'max_epochs' : 20,
+                                'lr' : 1e-1,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                                 'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
-                                'orthogonal_projection' : True,'nufft_disc' : None,
-                                'num_reg_update_iters' : 3, 'use_halfsets' : False}
-        #TODO : change batch_size into batch per GPU? 
+                                'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
+                                'num_reg_update_iters' : 2, 'use_halfsets' : True}
+        
         #TODO : change upsampling_factor into a training argument and pass that into Covar's methods instead of at constructor
         if('fourier_upsampling' in training_kwargs.keys()):
             upsampling_factor = training_kwargs['fourier_upsampling']
@@ -157,11 +167,11 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         eigen_est,eigenval_est= cov.eigenvecs
         eigen_est = eigen_est.to('cuda:0')
         eigenval_est = eigenval_est.to('cuda:0')
-        coords_est,coords_covar_est = latentMAP(dataset,eigen_est,eigenval_est,return_coords_covar=True)
+        coords_est,coords_covar_inv_est = latentMAP(dataset,eigen_est,eigenval_est,return_coords_covar=True)
 
         eigenvals_GD = torch.norm(dataset.vectorsGD,dim=1) ** 2
         eigenvectors_GD = (dataset.vectorsGD / torch.sqrt(eigenvals_GD).unsqueeze(1)).reshape((-1,L,L,L))
-        coords_GD,coords_covar_GD = latentMAP(dataset,eigenvectors_GD.to('cuda:0'),eigenvals_GD.to('cuda:0'),return_coords_covar=True)
+        coords_GD,coords_covar_inv_GD = latentMAP(dataset,eigenvectors_GD.to('cuda:0'),eigenvals_GD.to('cuda:0'),return_coords_covar=True)
         
         print(f'Eigenvalues of estimated covariance {eigenval_est}')
 
@@ -176,7 +186,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
                 cluster_center_ind = torch.argmin(torch.norm(coords_est-mean_state_coord,dim=1))
                 cluster_center = coords_est[cluster_center_ind]
                 cluster_centers[state_ind] = cluster_center.cpu()
-                state_coord_covar = coords_covar_est[cluster_center_ind]
+                state_coord_covar = coords_covar_inv_est[cluster_center_ind]
                 #state_coord_covar = torch.mean(coords_covar_est[dataset.states == state],dim=0) #TODO : is this the right way to compute this?
                 index_under_threshold = mahalanobis_threshold(coords_est,cluster_center,state_coord_covar.to('cuda:0'))
                 #index_under_threshold = mahalanobis_threshold(coords_est,cluster_center,state_coord_covar)
@@ -201,13 +211,15 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
 
         data_dict = {}
         if(save_data):
-            data_dict = {'eigen_est' : eigen_est.cpu(), 'eigenval_est' : eigenval_est.cpu(),
-                        'eigenvals_GD' : eigenvals_GD.cpu(),'eigenvectors_GD' : eigenvectors_GD.cpu(),
-                        'coords_est' : coords_est.cpu(),'coords_GD' : coords_GD.cpu(),
-                        'coords_covar_est' : coords_covar_est, 'coords_covar_GD' : coords_covar_GD,
-                        'umap_est' : umap_est, 'umap_gd' : umap_gd}
+            data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
+                        'eigenvals_GD' : eigenvals_GD.cpu().numpy(),'eigenvectors_GD' : eigenvectors_GD.cpu().numpy(),
+                        'coords_est' : coords_est.cpu().numpy(),'coords_GD' : coords_GD.cpu().numpy(),
+                        'coords_covar_inv_est' : coords_covar_inv_est.numpy(), 'coords_covar_inv_GD' : coords_covar_inv_GD.numpy(),
+                        'umap_est' : umap_est, 'umap_gd' : umap_gd,
+                        'starfile' : dataset.starfile}
             with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
                 pickle.dump(data_dict,fid)
+            aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
     else:
         with open(path.join(result_dir,'recorded_data.pkl'),'rb') as fid:
             data_dict = pickle.load(fid)

@@ -83,7 +83,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
     nufft_plans = NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device)
     coords = torch.zeros((end_ind-start_ind,rank),device=device)
     if(return_coords_covar):
-        coords_covar = torch.zeros((end_ind-start_ind,rank,rank),dtype=dtype)
+        coords_covar_inv = torch.zeros((end_ind-start_ind,rank,rank),dtype=dtype)
 
     pbar = tqdm(total=math.ceil(coords.shape[0]/batch_size), desc=f'Computing latent coordinates')
     for i in range(0,coords.shape[0],batch_size):
@@ -103,7 +103,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
         coord_covar = torch.linalg.inv(m)
         coords[i:(i+batch_size)] = torch.bmm(coord_covar,im_coor).squeeze(-1)
         if(return_coords_covar):
-            coords_covar[i:(i+batch_size)] = coord_covar.to('cpu')
+            coords_covar_inv[i:(i+batch_size)] = m.to('cpu')
 
         pbar.update(1)
     pbar.close()
@@ -111,15 +111,15 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
     if(not return_coords_covar):
         return coords
     else:
-        return coords,coords_covar
+        return coords,coords_covar_inv
     
 
-def mahalanobis_distance(coords,coords_mean,coords_covar):
+def mahalanobis_distance(coords,coords_mean,coords_covar_inv):
     mean_centered_coords = coords - coords_mean
-    dist = torch.sum((mean_centered_coords @ torch.inverse(coords_covar)) * mean_centered_coords,dim=1)
+    dist = torch.sum((mean_centered_coords @ (coords_covar_inv)) * mean_centered_coords,dim=1)
 
     return dist
 
-def mahalanobis_threshold(coords,coords_mean,coords_covar,q=0.95):
-    dist = mahalanobis_distance(coords,coords_mean,coords_covar)
+def mahalanobis_threshold(coords,coords_mean,coords_covar_inv,q=0.95):
+    dist = mahalanobis_distance(coords,coords_mean,coords_covar_inv)
     return dist < chi2.ppf(q,df=coords.shape[1])

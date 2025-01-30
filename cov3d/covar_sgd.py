@@ -215,19 +215,19 @@ class CovarDataset(Dataset):
 
             device = get_torch_device()
 
-            mask = torch.tensor(mask.asnumpy(),device=device)
+            self.mask = torch.tensor(mask.asnumpy(),device=device)
 
             softening_kernel = soft_edged_kernel(radius=5,L=self.resolution,dim=2)
             softening_kernel = torch.tensor(softening_kernel,device=device)
             softening_kernel_fourier = centered_fft2(softening_kernel)
 
-            nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mask.dtype,device=device)
+            nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=self.mask.dtype,device=device)
 
             for i in range(0,len(self.images),batch_size):
                 _,pts_rot,_ = self[i:(i+batch_size)]
                 pts_rot = pts_rot.to(device)
                 nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-                projected_mask = vol_forward(mask,nufft_plan).squeeze(1)
+                projected_mask = vol_forward(self.mask,nufft_plan).squeeze(1)
 
                 if(i == 0): #Use first batch to determine threshold
                     vals = projected_mask.reshape(-1).cpu().numpy()
@@ -239,7 +239,8 @@ class CovarDataset(Dataset):
                 soft_mask_binary = centered_ifft2(mask_binary_fourier * softening_kernel_fourier).real
 
                 self.images[i:min(i+batch_size,len(self.images))] *= soft_mask_binary.cpu()
-        
+
+            self.mask = self.mask.cpu()
         
         
 class CovarTrainer():

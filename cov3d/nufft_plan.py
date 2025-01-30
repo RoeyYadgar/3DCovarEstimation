@@ -57,7 +57,6 @@ class NufftPlanDiscretized(BaseNufftPlan):
 
         self.batch_points = self.points.shape[1]
 
-    @torch.compile
     def execute_forward(self,volume):
         """
         Assumes volume is given in fourier domain with shape (N,L,L,L) either as complex tensor or as tuple pair of real and imag tensors
