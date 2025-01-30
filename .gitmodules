@@ -1,0 +1,3 @@
+[submodule "external/CryoBench"]
+	path = external/CryoBench
+	url = https://github.com/ml-struct-bio/CryoBench.git
