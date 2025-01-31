@@ -17,9 +17,10 @@ def compare_recovar_results(recovar_results,cov3d_results):
     rank = cov3d_eigenvectors.shape[0]
     L = cov3d_eigenvectors.shape[1]
 
-    with open(os.path.join(recovar_results,'model/eigenvals.pkl'), 'rb') as f:
-        recovar_eigenvalues = pickle.load(f)
-        #recovar_eigenvalues = recovar_results['s']
+    with open(os.path.join(recovar_results,'recorded_data.pkl'), 'rb') as f:
+        recovar_data = pickle.load(f)
+        print(recovar_results)
+        recovar_eigenvalues = recovar_data['eigenval_est']
     
     recovar_eigenvectors = Volume(np.zeros((rank,L,L,L)))
     for i in range(rank):
