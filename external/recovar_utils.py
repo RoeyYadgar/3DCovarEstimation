@@ -52,29 +52,25 @@ def recovarReconstruct(inputfile,outputfile,overwrite = True):
 def torch_to_numpy(arr):
     return arr.numpy() if isinstance(arr,torch.Tensor) else arr
 
-
-def recovarReconstructFromEmbedding(inputfile,outputfolder,cov_results_path,embedding_positions,n_bins=30):
-    dataset,dataset_perm = getRecovarDataset(inputfile)
+def prepareDatasetForReconstruction(result_path):
+    with open(result_path,'rb') as f:
+        result = pickle.load(f)
+    starfile = result['starfile']
+    dataset,dataset_perm = getRecovarDataset(starfile)
     batch_size = recovar.utils.get_image_batch_size(dataset[0].grid_size, gpu_memory = recovar.utils.get_gpu_memory_total()) 
     noise_variance,_ = recovar.noise.estimate_noise_variance(dataset[0], batch_size)
-    L = 64
-    with open(cov_results_path,'rb') as f:
-        cov_results = pickle.load(f)
-        zs = cov_results['coords_est']
-        cov_zs = cov_results['coords_covar_est']
-        cov_zs = torch.linalg.inv(cov_zs) #For some reason recovar expects the inverse of the covariance matrix?
-        #TODO : remove torch_to_numpy
-        zs = torch_to_numpy(zs)
-        cov_zs = torch_to_numpy(cov_zs)
-        zs = zs[dataset_perm]
-        cov_zs = cov_zs[dataset_perm]
+
+    zs = result['coords_est'][dataset_perm]
+    cov_zs = result['coords_covar_inv_est'][dataset_perm]
+
+    return dataset,zs,cov_zs,noise_variance,dataset_perm
+
+def recovarReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,n_bins=30):
+    dataset,zs,cov_zs,noise_variance,dataset_perm = prepareDatasetForReconstruction(inputfile)
+    L = dataset[0].grid_size
     B_factor = 0 #TODO: handle B_factor
-    with open(embedding_positions,'rb') as f:
-        embedding_positions = pickle.load(f)
-    recovar_output.compute_and_save_reweighted(dataset, embedding_positions, zs, cov_zs, noise_variance*np.ones(L//2-1), outputfolder, B_factor, n_bins = n_bins)
-
+    if(os.path.isfile(embedding_positions)):
+        with open(embedding_positions,'rb') as f:
+            embedding_positions = pickle.load(f)
     
-
-if __name__ == "__main__":
-    #s = recovarReconstruct('/data/roaiyadgar/data/igg_1d/images/snr0.01/downsample_L128/snr0.01.star',outputfile = "exp_data/test.mrc")
-    recovarReconstructFromEmbedding('/data/roaiyadgar/data/igg_1d/images/snr0.01/downsample_L64/snr0.01.star','exp_data','/data/roaiyadgar/data/igg_1d/images/snr0.01/downsample_L64/result_data/recorded_data.pkl','exp_data/embedding_positions.pkl')
+    recovar_output.compute_and_save_reweighted(dataset, embedding_positions, zs, cov_zs, noise_variance*np.ones(L//2-1), outputfolder, B_factor, n_bins = n_bins)
