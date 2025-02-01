@@ -17,7 +17,8 @@ from recovar import dataset, embedding, output
 
 sys.path.append(os.path.join(ROOTDIR, "fsc"))
 from CryoBench.metrics.fsc.utils import volumes, conformations, interface
-from recovar_utils import prepareDatasetForReconstruction,recovarReconstructFromEmbedding
+from CryoBench.metrics.fsc import plot_fsc
+from recovar_utils import recovarReconstructFromEmbedding
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +42,7 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
 
 
 def main(args: argparse.Namespace) -> None:
+    #TODO: get Apix from star file
     """Running the script to get FSCs across conformations produced by RECOVAR."""
 
     results_dump = os.path.join(args.input_dir, "recorded_data.pkl")
@@ -77,6 +79,7 @@ def main(args: argparse.Namespace) -> None:
             vol_fl_function=lambda i: os.path.join(
                 f"vol{i:04d}", "locres_filtered"
             ),
+            num_vols = args.num_vols,
         )
 
         if args.align_vols:
@@ -89,7 +92,11 @@ def main(args: argparse.Namespace) -> None:
                 vol_fl_function=lambda i: os.path.join(
                     f"vol{i:04d}", "locres_filtered"
                 ),
+                num_vols = args.num_vols,
             )
+
+    
+    plot_fsc.main(args)
 
 
 if __name__ == "__main__":

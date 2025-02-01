@@ -20,11 +20,11 @@ def getRecovarDataset(source,starfile,ctf_file = None):
                             source.rotations, source.offsets, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
 '''
 
-def getRecovarDataset(starfile,split = True,perm = None):
-    
-    starfile_dir,starfile_name = os.path.split(starfile)
-    #dataset_dict = recovar_ds.get_default_dataset_option()
-    dataset_dict = {'datadir' : None}
+def getRecovarDataset(starfile,split = True,perm = None,uninvert_data = False):
+    #TODO: handle ctf and poses pkl files not in the same dir as star and mrcs files
+
+    starfile_dir,starfile_name = os.path.split(starfile)    
+    dataset_dict = {'datadir' : None,'uninvert_data' : uninvert_data}
     dataset_dict['ctf_file'] = os.path.join(starfile_dir,'ctf.pkl')
     dataset_dict['poses_file'] = os.path.join(starfile_dir,'poses.pkl')
     dataset_dict['particles_file'] = os.path.join(starfile_dir,starfile_name.replace('.star','.mrcs')) #TODO: handle different file names between star and mrcs
@@ -56,7 +56,7 @@ def prepareDatasetForReconstruction(result_path):
     with open(result_path,'rb') as f:
         result = pickle.load(f)
     starfile = result['starfile']
-    dataset,dataset_perm = getRecovarDataset(starfile)
+    dataset,dataset_perm = getRecovarDataset(starfile,uninvert_data=result['data_sign_inverted'])
     batch_size = recovar.utils.get_image_batch_size(dataset[0].grid_size, gpu_memory = recovar.utils.get_gpu_memory_total()) 
     noise_variance,_ = recovar.noise.estimate_noise_variance(dataset[0], batch_size)
 
