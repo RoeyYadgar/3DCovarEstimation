@@ -14,12 +14,13 @@ from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,cent
 from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc
 
 class CovarDataset(Dataset):
-    def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask='fuzzy'):
+    def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask=None,invert_data = False):
         self.resolution = src.L
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,src.n,self.resolution**2)) #TODO : replace this with torch affine_grid with size (N,1,L,L,1)
         self.pts_rot = self.pts_rot.transpose(0,1) 
         self.pts_rot = (torch.remainder(self.pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
         self.noise_var = noise_var
+        self.data_inverted = invert_data
 
         self.set_vectorsGD(vectorsGD)
 
@@ -34,6 +35,9 @@ class CovarDataset(Dataset):
         self.estimate_signal_var()
         self.mask_images(mask)
 
+        if(self.data_inverted):
+            self.images = -1*self.images
+
         self.dtype = self.images.dtype
         self._in_spatial_domain = True
         
@@ -43,19 +47,6 @@ class CovarDataset(Dataset):
     def __getitem__(self,idx):
         return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx]
     
-    '''
-    def prepare_batch(self,idx,nufft_plan):
-        device = nufft_plan.device
-        images,pts_rot,filter_indices = self.__getitem__(idx)
-        images = images.to(device)
-        pts_rot = pts_rot.to(device)
-        filters = self.unique_filters[filter_indices].to(device) if len(self.unique_filters) > 0 else None
-
-        nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-
-        return images,nufft_plan,filters
-    '''
-
     def preprocess_images(self,src,mean_volume,batch_size=512):
         device = get_torch_device()
         mean_volume = torch.tensor(mean_volume.asnumpy(),device=device)
@@ -194,53 +185,35 @@ class CovarDataset(Dataset):
     def mask_images(self,mask,batch_size=512):
         if(mask is None):
             return
-        elif(mask == 'fuzzy'):
-            mask = torch.tensor(fuzzy_mask((self.resolution,)*2,dtype=np.float32),dtype=self.images.dtype)
-            self.images *= mask
-        elif(isinstance(mask,Volume) or isinstance(mask,str)):
-            if(isinstance(mask,str)):
-                if(os.path.isfile(mask)):
-                    mask = Volume.load(mask)
-                else:
-                    raise Exception(f'Mask input {mask} is not a valid file')
 
-            if(mask.resolution > self.resolution):
-                mask = mask.downsample(self.resolution)
+        device = get_torch_device()
+
+        self.mask = torch.tensor(mask.asnumpy(),device=device)
+
+        softening_kernel = soft_edged_kernel(radius=5,L=self.resolution,dim=2)
+        softening_kernel = torch.tensor(softening_kernel,device=device)
+        softening_kernel_fourier = centered_fft2(softening_kernel)
+
+        nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=self.mask.dtype,device=device)
+
+        for i in range(0,len(self.images),batch_size):
+            _,pts_rot,_ = self[i:(i+batch_size)]
+            pts_rot = pts_rot.to(device)
+            nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+            projected_mask = vol_forward(self.mask,nufft_plan).squeeze(1)
+
+            if(i == 0): #Use first batch to determine threshold
+                vals = projected_mask.reshape(-1).cpu().numpy()
+                threshold = np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
             
-            min_mask_val = mask.asnumpy().min()
-            max_mask_val = mask.asnumpy().max()
-            if(np.abs(min_mask_val) > 1e-3 or np.abs(max_mask_val - 1) > 1e-3):
-                print(f'Warning : mask volume range is [{min_mask_val},{max_mask_val}]. Normalzing mask')
-                mask = (mask - min_mask_val) / (max_mask_val - min_mask_val)
+            mask_binary = projected_mask > threshold
+            mask_binary_fourier = centered_fft2(mask_binary)
 
-            device = get_torch_device()
+            soft_mask_binary = centered_ifft2(mask_binary_fourier * softening_kernel_fourier).real
 
-            self.mask = torch.tensor(mask.asnumpy(),device=device)
+            self.images[i:min(i+batch_size,len(self.images))] *= soft_mask_binary.cpu()
 
-            softening_kernel = soft_edged_kernel(radius=5,L=self.resolution,dim=2)
-            softening_kernel = torch.tensor(softening_kernel,device=device)
-            softening_kernel_fourier = centered_fft2(softening_kernel)
-
-            nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=self.mask.dtype,device=device)
-
-            for i in range(0,len(self.images),batch_size):
-                _,pts_rot,_ = self[i:(i+batch_size)]
-                pts_rot = pts_rot.to(device)
-                nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-                projected_mask = vol_forward(self.mask,nufft_plan).squeeze(1)
-
-                if(i == 0): #Use first batch to determine threshold
-                    vals = projected_mask.reshape(-1).cpu().numpy()
-                    threshold = np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
-                
-                mask_binary = projected_mask > threshold
-                mask_binary_fourier = centered_fft2(mask_binary)
-
-                soft_mask_binary = centered_ifft2(mask_binary_fourier * softening_kernel_fourier).real
-
-                self.images[i:min(i+batch_size,len(self.images))] *= soft_mask_binary.cpu()
-
-            self.mask = self.mask.cpu()
+        self.mask = self.mask.cpu()
         
         
 class CovarTrainer():

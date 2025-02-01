@@ -68,6 +68,27 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
         
     return scale_const
 
+
+def load_mask(mask,L):
+    if(mask == 'fuzzy'):
+        mask = aspire.utils.fuzzy_mask((L,)*3,dtype=np.float32)
+    elif(path.isfile(mask)):
+        mask = aspire.volume.Volume.load(mask)
+        if(mask.resolution > L):
+            mask = mask.downsample(L)
+
+        min_mask_val = mask.asnumpy().min()
+        max_mask_val = mask.asnumpy().max()
+        if(np.abs(min_mask_val) > 1e-3 or np.abs(max_mask_val - 1) > 1e-3):
+            print(f'Warning : mask volume range is [{min_mask_val},{max_mask_val}]. Normalzing mask')
+            mask = (mask - min_mask_val) / (max_mask_val - min_mask_val)
+
+    return mask
+        
+
+def check_dataset_sign(volume,mask):
+     return np.sum((volume*mask).asnumpy()) > 0
+
 def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
@@ -81,7 +102,7 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
         L = source.L
         
-        mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = False)
+        mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = True)
 
         if(class_vols is None):
             #Estimate ground truth states #TODO : should only be done if ground truth labels exist and some flag is given
@@ -113,7 +134,11 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
         source = source.normalize_background(do_ramp=False)
 
-        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask)
+        mask = load_mask(mask,L)
+        invert_data = not check_dataset_sign(mean_est,mask)
+        if(invert_data):
+            (-1 * mean_est).save(path.join(result_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
+        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask,invert_data = invert_data)
         dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
         dataset.starfile = starfile
         dataset.class_vols = class_vols
@@ -216,7 +241,7 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
                         'coords_est' : coords_est.cpu().numpy(),'coords_GD' : coords_GD.cpu().numpy(),
                         'coords_covar_inv_est' : coords_covar_inv_est.numpy(), 'coords_covar_inv_GD' : coords_covar_inv_GD.numpy(),
                         'umap_est' : umap_est, 'umap_gd' : umap_gd,
-                        'starfile' : dataset.starfile}
+                        'starfile' : dataset.starfile, 'data_sign_inverted' : dataset.data_inverted}
             with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
                 pickle.dump(data_dict,fid)
             aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
@@ -305,11 +330,11 @@ def workflow_click_decorator(func):
     @click.option('--lr',type=float,help= 'training learning rate')
     @click.option('--reg',type=float,help='regularization scaling')
     @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
-    @click.option('--orthogonal-projection',type=bool,default = True,help = "force orthogonality of eigen vectors while training (default True)")
-    @click.option('--nufft-disc',type=click.Choice([None,'bilinear','nearest']),default=None,help="Discretisation of NUFFT computation")
-    @click.option('--fourier-upsampling',type=int,default=None,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
-    @click.option('--num-reg-update-iters',type=int,default=3,help='Number of iterations to update regularization')
-    @click.option('--use-halfsets',type=bool,default=False,help='Whether to split data into halfsets for regularization update')
+    @click.option('--orthogonal-projection',type=bool,help = "force orthogonality of eigen vectors while training (default True)")
+    @click.option('--nufft-disc',type=click.Choice([None,'bilinear','nearest']),help="Discretisation of NUFFT computation")
+    @click.option('--fourier-upsampling',type=int,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
+    @click.option('--num-reg-update-iters',type=int,help='Number of iterations to update regularization')
+    @click.option('--use-halfsets',type=bool,help='Whether to split data into halfsets for regularization update')
     def wrapper(*args,**kwargs):
         kwargs = {k : v for k,v in kwargs.items() if v is not None}
         return func(*args,**kwargs)
