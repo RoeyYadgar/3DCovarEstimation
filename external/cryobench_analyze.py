@@ -15,22 +15,32 @@ def run_with_conda_env(command):
 
     process.wait()
 
+def analysis_click_decorator(func):
+    @click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
+    @click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
+    @click.option('--mask',type=str,help="Mask mrc file used for FSC computation")
+    @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
+    def wrapper(*args,**kwargs):
+        kwargs = {k : v for k,v in kwargs.items() if v is not None}
+        return func(*args,**kwargs)
+    
+    return wrapper
+
 @click.command()
 @click.option('-i','--result_dir',type=str,help="Result dir of algorithm's output")
-@click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
-@click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
-@click.option('--mask',type=str,help="Mask mrc file used for FSC computation")
-@click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
+@analysis_click_decorator
+def cryobench_analyze_cli(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols = None):
+    cryobench_analyze(result_dir,gt_dir=gt_dir,gt_latent=gt_latent,mask=mask)
+
 def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols = None):
 
     output_dir = os.path.join(result_dir,'output')
     
-
-    commands_to_run = []
     if(gt_latent is not None):
         script_path = os.path.join(os.path.dirname(__file__), 'compute_neighbor_sim.py')
         neighb_sim = f"python {script_path} {result_dir} -o {result_dir} --gt-latent {gt_latent}"
-        commands_to_run.append(neighb_sim)
+        run_with_conda_env(neighb_sim)
+
 
     if(gt_dir is not None):
         if(num_vols is None):
@@ -38,14 +48,13 @@ def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols =
             print(f"num-vols was not provided. Using all {num_vols} GT volumes from {gt_dir}")
 
         script_path = os.path.join(os.path.dirname(__file__), 'compute_fsc.py')
-        fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --num-vols {num_vols}"
-        commands_to_run.append(fsc_no_mask)
+        fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --num-vols {num_vols} --overwrite"
+        run_with_conda_env(fsc_no_mask)
     
         if(mask is not None):
             fsc_mask = fsc_no_mask + f" --mask {mask}"
-            commands_to_run.append(fsc_mask)
+            run_with_conda_env(fsc_mask)
 
-    [run_with_conda_env(command) for command in commands_to_run]
 
 if __name__ == "__main__":
-    cryobench_analyze()
+    cryobench_analyze_cli()

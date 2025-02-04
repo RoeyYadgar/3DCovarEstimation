@@ -29,24 +29,22 @@ def generate_alg_params(alg_fixed_params, alg_var_params):
     return alg_params,param_description
 
 
-def run_alg(datasets,run_prefix,params,params_description,run_pipeline=True,run_analysis=True):
+def run_alg(datasets,run_prefix,params,params_description,run_analysis=True):
 
     for L, dataset in datasets.items():
         for i, data in enumerate(dataset):
             for param, param_description in zip(params, params_description):
-                if(run_pipeline):
-                    run_name = f'{run_prefix}_L{L}_{param_description}'
-                    alg_param = {**param, 'starfile' : data['dataset'], 'mask' : data['mask'], 'name' : f'"{run_name}"'}
-                    command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v}' for k, v in alg_param.items()])
-                    os.system(command)
-                if(run_analysis): #TODO: analysis is run temporaly here, should be part of comet pipeline to log analysis metrics
-                    alg_result_dir = os.path.join(os.path.split(data['dataset'])[0],'result_data')
-                    command = f'python external/cryobench_analyze.py -i {alg_result_dir} --mask {data["mask"]}'
+                run_name = f'{run_prefix}_L{L}_{param_description}'
+                alg_param = {**param, 'starfile' : data['dataset'], 'mask' : data['mask'], 'name' : f'"{run_name}"'}
+                command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v}' for k, v in alg_param.items()])
+                
+                if(run_analysis):
+                    command += ' --run-analysis'
                     if(data['gt_latent'] is not None):
                         command += f" --gt-latent {data['gt_latent']}"
                     if(data['gt_dir'] is not None):
                         command += f" --gt-dir {data['gt_dir']}"
-                    os.system(command)
+                os.system(command)
 
 
 datasets_L64 = [
@@ -139,5 +137,5 @@ def pre_cryobench_analyze():
 
 alg_fixed_params,alg_var_params,run_prefix = pre_cryobench_analyze()
 alg_params_list,alg_param_description = generate_alg_params(alg_fixed_params, alg_var_params)
-run_alg(datasets, run_prefix, alg_params_list,alg_param_description,run_pipeline=False)
+run_alg(datasets, run_prefix, alg_params_list,alg_param_description)
 

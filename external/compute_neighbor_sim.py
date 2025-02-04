@@ -83,6 +83,8 @@ def main(args: argparse.Namespace) -> None:
 
     generate_neighbor_sim_figure(k_neigh_range,mean_neigh_hit_k.mean(0),mean_neigh_hit_k.std(0),
                                  num_points,decimation_factor,os.path.join(args.outdir,'neighbor_sim.pdf'))
+    generate_neighbor_sim_figure(k_neigh_range,mean_neigh_hit_k.mean(0),mean_neigh_hit_k.std(0),
+                                 num_points,decimation_factor,os.path.join(args.outdir,'neighbor_sim.png'))
 
 
 if __name__ == "__main__":

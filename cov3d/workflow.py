@@ -305,7 +305,7 @@ def workflow_click_decorator(func):
     @click.option('--reg',type=float,help='regularization scaling')
     @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
     @click.option('--orthogonal-projection',type=bool,help = "force orthogonality of eigen vectors while training (default True)")
-    @click.option('--nufft-disc',type=click.Choice([None,'bilinear','nearest']),help="Discretisation of NUFFT computation")
+    @click.option('--nufft-disc',type=click.Choice(['bilinear','nearest']),default=None,help="Discretisation of NUFFT computation") #TODO: fix default values
     @click.option('--fourier-upsampling',type=int,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
     @click.option('--num-reg-update-iters',type=int,help='Number of iterations to update regularization')
     @click.option('--use-halfsets',type=bool,help='Whether to split data into halfsets for regularization update')
