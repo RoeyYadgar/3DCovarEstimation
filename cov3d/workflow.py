@@ -200,10 +200,10 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         
         print(f'Eigenvalues of estimated covariance {eigenval_est}')
 
+        #TODO: move all this to analysis script
+        
         num_states = torch.sum(torch.unique(dataset.states) != -1)
         cluster_centers = torch.zeros((num_states,covar_rank))
-        class_vols_est = aspire.volume.Volume(np.zeros((num_states,L,L,L),dtype=np.float32))
-        vol_tmp_file = 'vol_tmp.mrc'
         state_ind = 0
         for state in torch.unique(dataset.states):
             if(state != -1):
@@ -212,21 +212,9 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
                 cluster_center = coords_est[cluster_center_ind]
                 cluster_centers[state_ind] = cluster_center.cpu()
                 state_coord_covar = coords_covar_inv_est[cluster_center_ind]
-                #state_coord_covar = torch.mean(coords_covar_est[dataset.states == state],dim=0) #TODO : is this the right way to compute this?
                 index_under_threshold = mahalanobis_threshold(coords_est,cluster_center,state_coord_covar.to('cuda:0'))
-                #index_under_threshold = mahalanobis_threshold(coords_est,cluster_center,state_coord_covar)
-                print(f'Number of images used for reconstructing state {state} : {torch.sum(index_under_threshold)}')
-                class_vols_est[state_ind] = relionReconstruct(dataset.starfile,vol_tmp_file,mrcs_index=index_under_threshold.cpu().numpy())
+                #class_vols_est[state_ind] = relionReconstruct(dataset.starfile,vol_tmp_file,mrcs_index=index_under_threshold.cpu().numpy())
                 state_ind += 1
-
-        os.remove(vol_tmp_file)        
-        class_vols_est.save(path.join(result_dir,'reconstructed_class_vols.mrc'),overwrite=True)
-
-        class_vols_GD = dataset.class_vols
-
-        v1 = class_vols_est.asnumpy().reshape(num_states,-1)
-        v2 = class_vols_GD.asnumpy().reshape(num_states,-1)
-        print(f'L2 norm error of class volumes {np.linalg.norm((v1-v2),axis=1)/np.linalg.norm(v2,axis=1)}')
 
 
         reducer = UMAP(n_components=2)
@@ -280,20 +268,6 @@ def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_dat
         fig,ax = plt.subplots()
         ax.scatter(umap_gd[:,0],umap_gd[:,1],c=dataset.states,s=0.1)
         figure_dict['umap_coords_gd'] = fig
-
-        fig,ax = plt.subplots()
-        fsc = vol_fsc(class_vols_est,class_vols_GD)
-        ax.plot(fsc[1].T)
-        ax.legend([f'Class {i}' for i in range(num_states)])
-        figure_dict['reconstructed_class_vol_fsc'] = fig
-
-        rec_fsc = fsc[1]
-        fsc_auc = []
-        for i in range(class_vols_GD.shape[0]):
-            fsc_auc.append(auc(np.arange(L//2)/L,np.abs(rec_fsc[i]).reshape(-1)))
-        data_dict['fsc_auc_mean'] = np.mean(fsc_auc)
-        data_dict['fsc_auc_std'] = np.std(fsc_auc)
-        
 
         fig,ax = plt.subplots()
         fsc = vol_fsc(Volume(eigen_est.cpu().numpy()),Volume(eigenvectors_GD.cpu().numpy()))

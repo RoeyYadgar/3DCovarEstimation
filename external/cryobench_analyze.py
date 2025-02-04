@@ -21,27 +21,29 @@ def run_with_conda_env(command):
 @click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
 @click.option('--mask',type=str,help="Mask mrc file used for FSC computation")
 @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
-def cryobench_analyze(result_dir,gt_dir,gt_latent,mask,num_vols = None):
+def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols = None):
 
     output_dir = os.path.join(result_dir,'output')
+    
 
-    script_path = os.path.join(os.path.dirname(__file__), 'compute_neighbor_sim.py')
-    neighb_sim = f"python {script_path} {result_dir} -o {result_dir} --gt-latent {gt_latent}"
+    commands_to_run = []
+    if(gt_latent is not None):
+        script_path = os.path.join(os.path.dirname(__file__), 'compute_neighbor_sim.py')
+        neighb_sim = f"python {script_path} {result_dir} -o {result_dir} --gt-latent {gt_latent}"
+        commands_to_run.append(neighb_sim)
 
-    if(num_vols is None):
-        num_vols = len(os.listdir(gt_dir))
-        print(f"num-vols was not provided. Using all {num_vols} GT volumes from {gt_dir}")
+    if(gt_dir is not None):
+        if(num_vols is None):
+            num_vols = len(os.listdir(gt_dir))
+            print(f"num-vols was not provided. Using all {num_vols} GT volumes from {gt_dir}")
 
-
-    script_path = os.path.join(os.path.dirname(__file__), 'compute_fsc.py')
-    fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --num-vols {num_vols}"
-    fsc_mask = fsc_no_mask + f" --mask {mask}"
-
-    commands_to_run = [
-        neighb_sim,
-        fsc_no_mask,
-        fsc_mask
-    ]
+        script_path = os.path.join(os.path.dirname(__file__), 'compute_fsc.py')
+        fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --num-vols {num_vols}"
+        commands_to_run.append(fsc_no_mask)
+    
+        if(mask is not None):
+            fsc_mask = fsc_no_mask + f" --mask {mask}"
+            commands_to_run.append(fsc_mask)
 
     [run_with_conda_env(command) for command in commands_to_run]
 

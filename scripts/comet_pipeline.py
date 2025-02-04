@@ -31,7 +31,7 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,disable_comet,**
         metrics = {"frobenius_norm_error" : training_data['log_fro_err'][-1],
                    "eigen_vector_cosine_sim" : training_data['log_cosine_sim'][-1],
                    "eigenvals_GD" : data_dict["eigenvals_GD"],"eigenval_est" : data_dict["eigenval_est"],
-                   "fsc_auc_mean" : data_dict["fsc_auc_mean"],"fsc_auc_std" : data_dict["fsc_auc_std"]}
+                   }
         exp.log_metrics(metrics)
 
         fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['log_fro_err'])]
