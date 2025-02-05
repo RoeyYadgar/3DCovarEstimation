@@ -36,11 +36,13 @@ def preprocess_mrcs(input_star,output_mrcs,image_size):
         shifts = np.array([star['particles'].rlnOriginXAngst,star['particles'].rlnOriginYAngst]).T / pixel_size
     elif('rlnOriginX' in star['particles'].columns):
         shifts = np.array([star['particles'].rlnOriginX,star['particles'].rlnOriginY]).T
-    shifts = np.flip(shifts,axis=1) #TODO: aspire python flips things the other way around, open a ticket?
     images = source.images[:]
+    print('Loaded images')
     images = images.shift(-shifts)
+    print('Shifted images')
     if(image_size != orig_image_size):
         images = images.downsample(image_size)
+        print('Downsampled images')
 
     images.save(output_mrcs)
 
