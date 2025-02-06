@@ -11,6 +11,12 @@ import click
 def create_scatter_figure(coords,cluster_coords,labels):
     fig = plt.figure()
     plt.scatter(coords[:,0],coords[:,1],s=0.1,c=labels)
+    x_min, x_max = np.percentile(coords[:,0], [0.5, 99.5])
+    x_delta = x_max - x_min
+    y_min, y_max = np.percentile(coords[:,1], [0.5, 99.5])
+    y_delta = y_max-y_min
+    plt.xlim(x_min - 0.1 * x_delta, x_max + 0.1 * x_delta)
+    plt.ylim(y_min - 0.1 * y_delta, y_max + 0.1 * y_delta)
     for i in range(cluster_coords.shape[0]):
         plt.annotate(str(i),(cluster_coords[i,0],cluster_coords[i,1]),fontweight='bold')
     return fig
@@ -18,16 +24,16 @@ def create_scatter_figure(coords,cluster_coords,labels):
 def create_umap_figure(umap_coords,cluster_coords,labels=None):
     fig = create_scatter_figure(umap_coords,cluster_coords,labels)
     plt.xlabel('UMAP 1')
-    plt.xlabel('UMAP 2')
+    plt.ylabel('UMAP 2')
     return {'umap' : fig}
 
 def create_pc_figure(pc_coords,cluster_coords,labels=None,num_pcs = 5):
     figures = {}
     for i in range(num_pcs):
         for j in range(i+1,num_pcs):
-            fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords,labels)
+            fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels)
             plt.xlabel(f'PC {i}')
-            plt.xlabel(f'PC {j}')
+            plt.ylabel(f'PC {j}')
             figures[f'pc_{i}_{j}'] = fig
 
     return figures
@@ -46,8 +52,11 @@ def analyze(result_data,output_dir,analyze_with_gt=False,num_clusters=40,skip_re
     with open(result_data,'rb') as f:
         data = pickle.load(f)
 
-    with open(gt_labels,'rb') as f:
-        gt_labels = pickle.load(f)
+    if(gt_labels is not None):
+        with open(gt_labels,'rb') as f:
+            gt_labels = pickle.load(f)
+    else:
+        gt_labels = None
 
     if(output_dir is None):
         output_dir = os.path.join(os.path.split(result_data)[0],'output')
