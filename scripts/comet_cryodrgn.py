@@ -23,7 +23,7 @@ def run_pipeline(name,alg,mrc,zdim,num_epochs,labels,mask,disable_comet):
         analyze_command = f'cryodrgn analyze {output_path} {num_epochs-1}'
     if(alg == 'recovar'):
         command = f'python ~/recovar/pipeline.py {mrc} --poses {poses} --ctf {ctf} --zdim {zdim} -o {output_path} --mask {mask} --correct-contrast --low-memory-option'
-        analyze_command = f'python ~/recovar/analyze.py --zdim {zdim} {output_path}'
+        analyze_command = f'python ~/recovar/analyze.py --zdim {zdim} {output_path} --skip-centers --n-trajectories 0'
     if(not disable_comet):
         run_config  = {'starfile' : starfile, 'zdim' : zdim, 'command' : command, 'analyze_command' : analyze_command}
         exp = comet_ml.Experiment(project_name="3d_cov",parse_args=False)
@@ -41,7 +41,7 @@ def run_pipeline(name,alg,mrc,zdim,num_epochs,labels,mask,disable_comet):
         umap_image = os.path.join(analyze_dir,'umap_labeled.jpg')
         os.system(f'python scripts/umap_figure.py -u {umap_file} -l {labels} -o {umap_image}')
     else:
-        umap_image = os.path.join(analyze_dir,'umap.png')
+        umap_image = os.path.join(analyze_dir,'umap.png') if alg =='cryodrgn' else os.path.join(analyze_dir,'sns.png')
     
     if(not disable_comet):
         exp.log_image(image_data = umap_image,name='umap_coords_est')
