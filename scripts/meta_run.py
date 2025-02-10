@@ -2,6 +2,7 @@ import os
 import itertools
 
 DATASET_PATH = "data/scratch_data"
+RUN_COMMANDS = True
 
 def get_full_path(path_list):
 
@@ -36,7 +37,7 @@ def run_alg(datasets,run_prefix,params,params_description,run_analysis=True):
             for param, param_description in zip(params, params_description):
                 run_name = f'{run_prefix}_L{L}_{param_description}'
                 alg_param = {**param, 'starfile' : data['dataset'], 'mask' : data['mask'], 'name' : f'"{run_name}"'}
-                command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v}' for k, v in alg_param.items()])
+                command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
                 
                 if(run_analysis):
                     command += ' --run-analysis'
@@ -44,7 +45,11 @@ def run_alg(datasets,run_prefix,params,params_description,run_analysis=True):
                         command += f" --gt-latent {data['gt_latent']}"
                     if(data['gt_dir'] is not None):
                         command += f" --gt-dir {data['gt_dir']}"
-                os.system(command)
+                    command += f" --gt-labels {data['gt_labels']}"
+                if(RUN_COMMANDS):
+                    os.system(command)
+                else:
+                    print(command)
 
 
 datasets_L64 = [
@@ -83,14 +88,23 @@ gt_latent = [
     None,
 ]
 
-datasets_L64 = get_full_path(datasets_L64)
-dataset_L128 = [dataset.replace("L64", "L128") for dataset in datasets_L64]
-dataset_masks = get_full_path(dataset_masks)
-gt_dir = get_full_path(gt_dir)
-gt_latent = get_full_path(gt_latent)
-assert_files_exists(datasets_L64 + dataset_L128 + dataset_masks)
-datasets = {#64 : [{'dataset' : dataset, 'mask' : mask,'gt_dir' : gt_dir,'gt_latent' : gt_latent} for dataset, mask, gt_dir, gt_latent in zip(datasets_L64, dataset_masks,gt_dir,gt_latent)],
-            128 : [{'dataset' : dataset, 'mask' : mask,'gt_dir' : gt_dir,'gt_latent' : gt_latent} for dataset, mask, gt_dir, gt_latent in zip(dataset_L128, dataset_masks,gt_dir,gt_latent)]}
+gt_labels = [
+    'igg_1d/gt_latents.pkl',
+    'igg_1d/gt_latents.pkl',
+    'igg_rl/labels.pkl',
+    'Ribosembly/gt_latents.pkl',
+    'Spike-MD/labels.pkl',
+    'Tomotwin-100/gt_latents.pkl'
+]
+datasets_L128 = [dataset.replace("L64", "L128") for dataset in datasets_L64]
+
+dataset_vars = ['dataset','mask','gt_dir','gt_latent','gt_labels']
+dataset_values = [datasets_L64,dataset_masks,gt_dir,gt_latent,gt_labels]
+
+datasets = {}
+#datasets[64] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
+dataset_values[0] = datasets_L128
+datasets[128] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
 
 
 def reg_scheme_experiment():
@@ -125,12 +139,13 @@ def pre_cryobench_analyze():
         'batch-size' : 4096,
         'orthogonal-projection' : False,
         'nufft-disc' : 'bilinear',
-        'use-halfsets' : True,
-        'num-reg-update-iters' : 2
+        'use-halfsets' : False,
+        'num-reg-update-iters' : 2,
+        'debug' : None,
     }
 
     alg_var_params = {}
-    run_prefix = 'pre_cryobench_analyze'
+    run_prefix = 'analysis_refactor_test'
 
     return alg_fixed_params,alg_var_params,run_prefix  
 

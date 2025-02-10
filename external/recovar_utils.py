@@ -5,20 +5,8 @@ import recovar
 from recovar import dataset as recovar_ds
 from recovar import output as recovar_output
 import torch
-#def aspireSource2RecovarDataset():
-'''
-def getRecovarDataset(source,starfile,ctf_file = None):
-    #pixel_size
-    starfile_dir = os.path.split(starfile)[0]
-    #mrcs_file = os.path.join(starfile_dir,'starfilmrcs')
-    mrcs_name = source.get_metadata()[0][0].split('@')[1] #Assuming a single mrcs file is used
-    mrcs_file = os.path.join(starfile_dir,mrcs_name)
-    image_stack = recovar_ds.MRCDataMod(mrcs_file)
+from scipy.ndimage import binary_dilation
 
-    ctf_params = np.array(load_ctf_for_training(dataset.D, ctf_file))
-    dataset = recovar_ds.CryoEMDataset( image_stack, source.pixel_size,
-                            source.rotations, source.offsets, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
-'''
 
 def getRecovarDataset(starfile,split = True,perm = None,uninvert_data = False):
     #TODO: handle ctf and poses pkl files not in the same dir as star and mrcs files
@@ -38,14 +26,24 @@ def getRecovarDataset(starfile,split = True,perm = None,uninvert_data = False):
     else:
         return recovar_ds.load_dataset_from_dict(dataset_dict),None
 
-def recovarReconstruct(inputfile,outputfile,overwrite = True):
+def recovarReconstruct(inputfile,outputfile,overwrite = True,compute_mask=False):
      
     if(overwrite or (not os.path.isfile(outputfile))):
-        dataset = getRecovarDataset(inputfile)
+        dataset,_ = getRecovarDataset(inputfile)
         batch_size = recovar.utils.get_image_batch_size(dataset[0].grid_size, gpu_memory = recovar.utils.get_gpu_memory_total()) 
         noise_variance,_ = recovar.noise.estimate_noise_variance(dataset[0], batch_size)
         mean = recovar.homogeneous.get_mean_conformation_relion(dataset,batch_size=batch_size,noise_variance = noise_variance,use_regularization=True)
         recovar_output.save_volume(mean[0]["combined"],outputfile.replace('.mrc',''),from_ft = True)
+
+        if(compute_mask):
+            volume_mask = recovar.mask.make_mask_from_half_maps_from_means_dict(mean[0], smax = 3 )
+            kernel_size = 3
+            dilation_iterations = np.ceil(6 * dataset[0].volume_shape[0] / 128).astype(int)
+            dilated_volume_mask = binary_dilation(volume_mask,iterations=dilation_iterations)
+            volume_mask = recovar.mask.soften_volume_mask(volume_mask, kernel_size)
+            dilated_volume_mask = recovar.mask.soften_volume_mask(dilated_volume_mask, kernel_size)
+            recovar_output.save_volume(dilated_volume_mask,outputfile.replace('.mrc','_mask'),from_ft = False)
+
 
     #return vol
 

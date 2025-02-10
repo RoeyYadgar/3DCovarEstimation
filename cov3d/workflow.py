@@ -71,7 +71,7 @@ def normalizeRelionVolume(vol,source,batch_size = 512):
 
 def load_mask(mask,L):
     if(mask == 'fuzzy'):
-        mask = aspire.utils.fuzzy_mask((L,)*3,dtype=np.float32)
+        mask = aspire.volume.Volume(aspire.utils.fuzzy_mask((L,)*3,dtype=np.float32))
     elif(path.isfile(mask)):
         mask = aspire.volume.Volume.load(mask)
         if(mask.resolution > L):
@@ -89,7 +89,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',generate_figs = True,save_data = True,skip_processing=False,debug = False,**training_kwargs):
+def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
@@ -98,26 +98,34 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
     if((not debug) or (not os.path.isfile(dataset_path))): 
         if(not path.isdir(result_dir)):
             os.mkdir(result_dir)
-        pixel_size = float(aspire.storage.StarFile(starfile)['optics']['_rlnImagePixelSize'][0])
+        star = aspire.storage.StarFile(starfile)
+        states_in_source = '_rlnClassNumber' in star['particles']
+        pixel_size = float(star['optics']['_rlnImagePixelSize'][0])
         source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
         L = source.L
         
-        mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = True)
+        mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
 
-        if(class_vols is None):
+        if(class_vols is None and states_in_source): #If class_vols was not provided but source has GT states use them to reconstruct GT
             #Estimate ground truth states #TODO : should only be done if ground truth labels exist and some flag is given
             class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
-        elif(class_vols.resolution != L): #Downsample ground truth volumes
-            class_vols = class_vols.downsample(L)
-        #Compute ground truth eigenvectors
-        _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
-        states_dist = counts/np.sum(counts)
-        covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
+        elif(class_vols is not None): #Downsample ground truth volumes
+            if(class_vols.resolution != L):
+                class_vols = class_vols.downsample(L)
+
+        if(class_vols is not None):
+            #Compute ground truth eigenvectors
+            _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
+            states_dist = counts/np.sum(counts)
+            covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
+        else:
+            covar_eigenvecs_gd = None
 
         #Print useful info TODO: use log files
         print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
-        print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
-        print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
+        if(covar_eigenvecs_gd is not None):
+            print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
+            print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
 
 
         noise_est_num_ims = min(source.n,2**12)
@@ -137,11 +145,12 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         mask = load_mask(mask,L)
         invert_data = not check_dataset_sign(mean_est,mask)
         if(invert_data):
+            print('inverting dataset sign')
             (-1 * mean_est).save(path.join(result_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
         dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask,invert_data = invert_data)
-        dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
+        if(states_in_source):
+            dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
         dataset.starfile = starfile
-        dataset.class_vols = class_vols
         
         if(debug):
             with open(dataset_path,'wb') as fid:
@@ -152,143 +161,77 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
             dataset = pickle.load(fid)
         print(f"Dataset loaded successfuly")
 
-    return covar_processing(dataset,rank,result_dir,generate_figs,save_data,skip_processing,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,rank,result_dir,**training_kwargs)
+    torch.cuda.empty_cache()
+    return covar_precoessing_output
 
     
 
-def covar_processing(dataset,covar_rank,result_dir,generate_figs = True,save_data = True,skip_processing = False,**training_kwargs):
+def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
     L = dataset.images.shape[-1]
 
-    if(not skip_processing):
-        #Perform optimization for eigenvectors estimation
-        default_training_kwargs = {'batch_size' : 4096, 'max_epochs' : 20,
-                                'lr' : 1e-1,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
-                                'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
-                                'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
-                                'num_reg_update_iters' : 2, 'use_halfsets' : True}
-        
-        #TODO : change upsampling_factor into a training argument and pass that into Covar's methods instead of at constructor
-        if('fourier_upsampling' in training_kwargs.keys()):
-            upsampling_factor = training_kwargs['fourier_upsampling']
-            del training_kwargs['fourier_upsampling']
-        else:
-            upsampling_factor = 2        
-        default_training_kwargs.update(training_kwargs)
-
-        optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
-        cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
-                    fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
-            
-        if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
-            trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
-                **default_training_kwargs)
-        else:
-            cov = cov.to(get_torch_device())
-            trainCovar(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
-                **default_training_kwargs)
-        
-        
-        #Compute wiener coordinates using estimated and ground truth eigenvectors
-        eigen_est,eigenval_est= cov.eigenvecs
-        eigen_est = eigen_est.to('cuda:0')
-        eigenval_est = eigenval_est.to('cuda:0')
-        coords_est,coords_covar_inv_est = latentMAP(dataset,eigen_est,eigenval_est,return_coords_covar=True)
-
-        eigenvals_GD = torch.norm(dataset.vectorsGD,dim=1) ** 2
-        eigenvectors_GD = (dataset.vectorsGD / torch.sqrt(eigenvals_GD).unsqueeze(1)).reshape((-1,L,L,L))
-        coords_GD,coords_covar_inv_GD = latentMAP(dataset,eigenvectors_GD.to('cuda:0'),eigenvals_GD.to('cuda:0'),return_coords_covar=True)
-        
-        print(f'Eigenvalues of estimated covariance {eigenval_est}')
-
-        #TODO: move all this to analysis script
-        
-        num_states = torch.sum(torch.unique(dataset.states) != -1)
-        cluster_centers = torch.zeros((num_states,covar_rank))
-        state_ind = 0
-        for state in torch.unique(dataset.states):
-            if(state != -1):
-                mean_state_coord = torch.mean(coords_est[dataset.states == state],dim=0) #This uses the actual labels to compute the cluster center, used as a metric for covar reconstruction and not for the actual clustering.
-                cluster_center_ind = torch.argmin(torch.norm(coords_est-mean_state_coord,dim=1))
-                cluster_center = coords_est[cluster_center_ind]
-                cluster_centers[state_ind] = cluster_center.cpu()
-                state_coord_covar = coords_covar_inv_est[cluster_center_ind]
-                index_under_threshold = mahalanobis_threshold(coords_est,cluster_center,state_coord_covar.to('cuda:0'))
-                #class_vols_est[state_ind] = relionReconstruct(dataset.starfile,vol_tmp_file,mrcs_index=index_under_threshold.cpu().numpy())
-                state_ind += 1
-
-
-        reducer = UMAP(n_components=2)
-        umap_est = reducer.fit_transform(coords_est.cpu())
-        cluster_centers_umap = reducer.transform(cluster_centers.cpu())
-        umap_gd = reducer.fit_transform(coords_GD.cpu())
-
-        data_dict = {}
-        if(save_data):
-            data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
-                        'eigenvals_GD' : eigenvals_GD.cpu().numpy(),'eigenvectors_GD' : eigenvectors_GD.cpu().numpy(),
-                        'coords_est' : coords_est.cpu().numpy(),'coords_GD' : coords_GD.cpu().numpy(),
-                        'coords_covar_inv_est' : coords_covar_inv_est.numpy(), 'coords_covar_inv_GD' : coords_covar_inv_GD.numpy(),
-                        'umap_est' : umap_est, 'umap_gd' : umap_gd,
-                        'starfile' : dataset.starfile, 'data_sign_inverted' : dataset.data_inverted}
-            with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
-                pickle.dump(data_dict,fid)
-            aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
+    #Perform optimization for eigenvectors estimation
+    default_training_kwargs = {'batch_size' : 4096, 'max_epochs' : 20,
+                            'lr' : 1e-1,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+                            'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
+                            'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
+                            'num_reg_update_iters' : 2, 'use_halfsets' : True}
+    
+    #TODO : change upsampling_factor into a training argument and pass that into Covar's methods instead of at constructor
+    if('fourier_upsampling' in training_kwargs.keys()):
+        upsampling_factor = training_kwargs['fourier_upsampling']
+        del training_kwargs['fourier_upsampling']
     else:
-        with open(path.join(result_dir,'recorded_data.pkl'),'rb') as fid:
-            data_dict = pickle.load(fid)
-            for key in data_dict.keys(): #Load each variable contained in data_dict
-                exec(f"{key} = data_dict['{key}']") #TODO : load each key dynmaically 
+        upsampling_factor = 2        
+    default_training_kwargs.update(training_kwargs)
+
+    optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
+    cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
+                fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
+        
+    if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
+        trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+            **default_training_kwargs)
+    else:
+        cov = cov.to(get_torch_device())
+        trainCovar(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+            **default_training_kwargs)
+    
+    
+    #Compute wiener coordinates using estimated and ground truth eigenvectors
+    eigen_est,eigenval_est= cov.eigenvecs
+    eigen_est = eigen_est.to('cuda:0')
+    eigenval_est = eigenval_est.to('cuda:0')
+    coords_est,coords_covar_inv_est = latentMAP(dataset,eigen_est,eigenval_est,return_coords_covar=True)
+
+    is_gt_eigenvols = dataset.vectorsGD is not None
+    if(is_gt_eigenvols):
+        eigenvals_GT = torch.norm(dataset.vectorsGD,dim=1) ** 2
+        eigenvectors_GT = (dataset.vectorsGD / torch.sqrt(eigenvals_GT).unsqueeze(1)).reshape((-1,L,L,L))
+        coords_GT,coords_covar_inv_GT = latentMAP(dataset,eigenvectors_GT.to('cuda:0'),eigenvals_GT.to('cuda:0'),return_coords_covar=True)
+    
+    print(f'Eigenvalues of estimated covariance {eigenval_est}')
+
+
+    data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
+                'coords_est' : coords_est.cpu().numpy(), 'coords_covar_inv_est' : coords_covar_inv_est.numpy(),
+                'starfile' : dataset.starfile, 'data_sign_inverted' : dataset.data_inverted}
+    if(is_gt_eigenvols):
+        data_dict = {**data_dict,
+                        'eigenvals_GT' : eigenvals_GT.cpu().numpy(),
+                        'eigenvectors_GT' : eigenvectors_GT.cpu().numpy(),
+                        'coords_GT' : coords_GT.cpu().numpy(),
+                        'coords_covar_inv_GT' : coords_covar_inv_GT.numpy(),
+                        }
+    
+    with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
+        pickle.dump(data_dict,fid)
+    aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
+    #TODO: save eigenvolumes as MRC
 
     training_data = torch.load(path.join(result_dir,'training_results.bin'))
 
-
-    #Generate plots
-    figure_dict = {}
-    if(generate_figs):
-        fig_dir = path.join(result_dir,'result_figures')
-        if(not path.isdir(fig_dir)):
-            os.mkdir(fig_dir)
-        
-        fig,ax = plt.subplots()
-        ax.scatter(coords_est[:,0].cpu(),coords_est[:,1].cpu(),c = dataset.states,s=0.1)
-        for i in range(num_states):
-            ax.annotate(f'{i}',(cluster_centers[i,0],cluster_centers[i,1]),fontweight='bold')
-        figure_dict['wiener_coords_est'] = fig
-        
-        fig,ax = plt.subplots()
-        ax.scatter(coords_GD[:,0].cpu(),coords_GD[:,1].cpu(),c = dataset.states,s=0.1)
-        figure_dict['wiener_coords_gd'] = fig
-        
-        fig,ax = plt.subplots()
-        ax.scatter(umap_est[:,0],umap_est[:,1],c=dataset.states,s=0.1)
-        for i in range(num_states):
-            ax.annotate(f'{i}',(cluster_centers_umap[i,0],cluster_centers_umap[i,1]),fontweight='bold')
-        figure_dict['umap_coords_est'] = fig
-
-        fig,ax = plt.subplots()
-        ax.scatter(umap_gd[:,0],umap_gd[:,1],c=dataset.states,s=0.1)
-        figure_dict['umap_coords_gd'] = fig
-
-        fig,ax = plt.subplots()
-        fsc = vol_fsc(Volume(eigen_est.cpu().numpy()),Volume(eigenvectors_GD.cpu().numpy()))
-        ax.plot(fsc[1].T)
-        ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
-        figure_dict['eigenvec_fsc'] = fig
-
-
-        fig,ax = plt.subplots()
-        ax.plot(training_data['log_epoch_ind'],[np.diag(c) for c in training_data['log_cosine_sim']])
-        ax.legend([f'Eigenvector {i}' for i in range(covar_rank)])
-        figure_dict['training_cosine_sim'] = fig
-
-        fig,ax = plt.subplots()
-        ax.plot(training_data['log_epoch_ind'],training_data['log_fro_err'])
-        figure_dict['frobenius_norm_err'] = fig
-
-        for f_name,f in figure_dict.items():
-            f.savefig(path.join(fig_dir,f'{f_name}.jpg'))
-
-    return data_dict,figure_dict,training_data,default_training_kwargs
+    return data_dict,training_data,default_training_kwargs
 
 
 def workflow_click_decorator(func):
@@ -297,7 +240,6 @@ def workflow_click_decorator(func):
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
-    @click.option('--skip-processing',is_flag = True,default = False,help='whether to disable logging of run to comet')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
     @click.option('--batch-size',type=int,help = 'training batch size')
     @click.option('--max-epochs',type=int,help = 'number of epochs to train')
@@ -317,8 +259,8 @@ def workflow_click_decorator(func):
 
 @click.command()
 @workflow_click_decorator
-def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',skip_processing = False,debug = False,**training_kwargs):
-    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,skip_processing = skip_processing,debug = debug,**training_kwargs)
+def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',debug = False,**training_kwargs):
+    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,debug = debug,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()

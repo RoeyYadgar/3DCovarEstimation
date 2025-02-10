@@ -8,21 +8,21 @@ from sklearn.metrics import auc
 import comet_ml
 from aspire.storage import StarFile
 from cov3d.workflow import covar_workflow,workflow_click_decorator
-from external.cryobench_analyze import analysis_click_decorator,cryobench_analyze
 
 
-def log_analysis_output(exp,result_dir,gt_dir,gt_latent):
+def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent):
+    cryobench_output_dir = os.path.join(result_dir,'cryobench_output')
     if(gt_latent is not None):
-        neighbor_sim_output = np.loadtxt(os.path.join(result_dir,'neighbor_sim_output.txt'))
+        neighbor_sim_output = np.loadtxt(os.path.join(cryobench_output_dir,'neighbor_sim_output.txt'))
         for i in range(neighbor_sim_output.shape[0]):
             exp.log_metric(name='latent_matching_neighbors_ratio',value=neighbor_sim_output[i,1]/neighbor_sim_output[i,0],step=neighbor_sim_output[i,0])
             exp.log_metric(name='latent_matching_neighbors_std',value=neighbor_sim_output[i,2],step=neighbor_sim_output[i,0])
 
-        exp.log_image(image_data = os.path.join(result_dir,'neighbor_sim.png'),name='neighbor_sim')
+        exp.log_image(image_data = os.path.join(cryobench_output_dir,'neighbor_sim.png'),name='neighbor_sim')
 
     if(gt_dir is not None):
         #This is the same code from cryobench's plot_fsc - used to compute FSC AUC. #TODO: log computed AUC in plot_fsc itself?
-        fsc_output_dir = os.path.join(result_dir,'output')
+        fsc_output_dir = cryobench_output_dir
         fsc_dirs = [
             d
             for d in os.listdir(fsc_output_dir)
@@ -51,10 +51,11 @@ def log_analysis_output(exp,result_dir,gt_dir,gt_latent):
 @click.option('--run-analysis',is_flag=True,help='wether to run analysis script after algorithm execution')
 @click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
 @click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
+@click.option('--gt-labels',type=str,help="Path to pkl containing ground truth labels")
 @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
 @workflow_click_decorator
 def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
-                 run_analysis,gt_dir,gt_latent,num_vols=None,
+                 run_analysis,gt_dir=None,gt_latent=None,gt_labels=None,num_vols=None,
                  disable_comet = False,**training_kwargs):
     if(not disable_comet):
         image_size = int(float(StarFile(starfile)['optics']['_rlnImageSize'][0]))
@@ -65,27 +66,36 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
         exp.set_name(name)
         exp.log_parameters(run_config)
     training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
-    data_dict, figure_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
+    data_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
 
     if(run_analysis):
+        #Only import analysis functions when necesseary
+        from cov3d.analyze import analyze
+        from external.cryobench_analyze import cryobench_analyze
+        #TODO: handle disable_comet
         result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
+        #Run analysis
+        analysis_figures = analyze(os.path.join(result_dir,'recorded_data.pkl'),analyze_with_gt=True,skip_reconstruction=True,gt_labels=gt_labels)
+        for fig_name,fig_path in analysis_figures.items():
+            exp.log_image(image_data = fig_path,name=fig_name)
+
+        #Run cryobench analysis (compares to GT latent embedding and volume states)
         cryobench_analyze(result_dir,gt_dir=gt_dir,gt_latent=gt_latent,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
-        log_analysis_output(exp,result_dir,gt_dir,gt_latent)
+        log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent)
 
     if(not disable_comet):
         result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
         exp.log_parameters(training_kwargs)
-        for fig_name,fig in figure_dict.items():
-            exp.log_image(image_data = os.path.join(result_dir,'result_figures',f'{fig_name}.jpg'),name=fig_name)
-            
-        metrics = {"frobenius_norm_error" : training_data['log_fro_err'][-1],
-                   "eigen_vector_cosine_sim" : training_data['log_cosine_sim'][-1],
-                   "eigenvals_GD" : data_dict["eigenvals_GD"],"eigenval_est" : data_dict["eigenval_est"],
-                   }
-        exp.log_metrics(metrics)
+        exp.log_metrics({"eigenval_est" : data_dict["eigenval_est"]})
 
-        fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['log_fro_err'])]
-        epoch_ind_log = [exp.log_metric(name='log_epoch_ind',value=v,step=i) for i,v in enumerate(training_data['log_epoch_ind'])]
+        if('eigenvals_GT' in data_dict.keys()):
+            metrics = {"frobenius_norm_error" : training_data['log_fro_err'][-1],
+                    "eigen_vector_cosine_sim" : training_data['log_cosine_sim'][-1],
+                    "eigenvals_GT" : data_dict["eigenvals_GT"],
+                    }
+            exp.log_metrics(metrics)
+            fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['log_fro_err'])]
+            epoch_ind_log = [exp.log_metric(name='log_epoch_ind',value=v,step=i) for i,v in enumerate(training_data['log_epoch_ind'])]
 
         
         data_artifact = comet_ml.Artifact("produced_data","data")

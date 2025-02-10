@@ -34,11 +34,12 @@ def cryobench_analyze_cli(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vo
 
 def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols = None):
 
-    output_dir = os.path.join(result_dir,'output')
+    output_dir = os.path.join(result_dir,'cryobench_output')
+    os.makedirs(output_dir,exist_ok=True)
     
     if(gt_latent is not None):
         script_path = os.path.join(os.path.dirname(__file__), 'compute_neighbor_sim.py')
-        neighb_sim = f"python {script_path} {result_dir} -o {result_dir} --gt-latent {gt_latent}"
+        neighb_sim = f"python {script_path} {result_dir} -o {output_dir} --gt-latent {gt_latent}"
         run_with_conda_env(neighb_sim)
 
 
@@ -48,8 +49,8 @@ def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols =
             print(f"num-vols was not provided. Using all {num_vols} GT volumes from {gt_dir}")
 
         script_path = os.path.join(os.path.dirname(__file__), 'compute_fsc.py')
-        fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --num-vols {num_vols} --overwrite"
-        run_with_conda_env(fsc_no_mask)
+        fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --num-vols {num_vols}"
+        run_with_conda_env(fsc_no_mask + " --overwrite")
     
         if(mask is not None):
             fsc_mask = fsc_no_mask + f" --mask {mask}"

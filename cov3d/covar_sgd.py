@@ -188,7 +188,7 @@ class CovarDataset(Dataset):
 
         device = get_torch_device()
 
-        self.mask = torch.tensor(mask.asnumpy(),device=device)
+        self.mask = torch.tensor(mask.asnumpy(),device=device) if isinstance(mask,Volume) else torch.tensor(mask,device=device)
 
         softening_kernel = soft_edged_kernel(radius=5,L=self.resolution,dim=2)
         softening_kernel = torch.tensor(softening_kernel,device=device)
@@ -298,6 +298,7 @@ class CovarTrainer():
                     vectors = self.covar_vectors()
                     self.log_training()
                     pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
+                    pbar_description += f" , vecs norm : {torch.norm(vectors)}"
                     if(self.vectorsGD is not None):
                         #TODO : update log metrics, use principal angles
                         cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
