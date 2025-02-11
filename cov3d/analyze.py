@@ -5,7 +5,7 @@ from sklearn.cluster import KMeans
 from matplotlib import pyplot as plt
 import pickle
 import click
-from external.recovar_utils import recovarReconstructFromEmbedding
+from cov3d.recovar_utils import recovarReconstructFromEmbedding
 
 
 

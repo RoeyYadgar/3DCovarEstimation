@@ -18,7 +18,7 @@ from recovar import dataset, embedding, output
 sys.path.append(os.path.join(ROOTDIR, "fsc"))
 from CryoBench.metrics.fsc.utils import volumes, conformations, interface
 from CryoBench.metrics.fsc import plot_fsc
-from recovar_utils import recovarReconstructFromEmbedding
+from cov3d.recovar_utils import recovarReconstructFromEmbedding
 
 logging.basicConfig(
     level=logging.INFO,
