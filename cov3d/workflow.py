@@ -215,7 +215,7 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
 
     data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
                 'coords_est' : coords_est.cpu().numpy(), 'coords_covar_inv_est' : coords_covar_inv_est.numpy(),
-                'starfile' : dataset.starfile, 'data_sign_inverted' : dataset.data_inverted}
+                'starfile' : os.path.abspath(dataset.starfile), 'data_sign_inverted' : dataset.data_inverted}
     if(is_gt_eigenvols):
         data_dict = {**data_dict,
                         'eigenvals_GT' : eigenvals_GT.cpu().numpy(),

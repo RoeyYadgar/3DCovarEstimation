@@ -5,6 +5,7 @@ from sklearn.cluster import KMeans
 from matplotlib import pyplot as plt
 import pickle
 import click
+from aspire.volume import Volume
 from cov3d.recovar_utils import recovarReconstructFromEmbedding
 
 
@@ -67,19 +68,21 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,sk
     coords_covar_inv_keys = ['coords_covar_inv_est']
     analysis_output_dir = ['analysis']
     figure_prefix = ['']
+    eigenvols_keys = ['eigen_est']
     if(analyze_with_gt):
         if(data.get('coords_GT') is not None):
             coords_keys.append('coords_GT')
             coords_covar_inv_keys.append('coords_covar_inv_GT')
             analysis_output_dir.append('analysis_gt')
             figure_prefix.append('gt_')
+            eigenvols_keys.append('eigenvectors_GT')
         else:
             print('analyze_with_gt was set to True but coords_GT is not present in result_data - skipping analysis with gt coordinates')
 
     figure_paths = {}
-    for coords_key,coords_covar_inv_key,analysis_dir,fig_prefix in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix):
+    for coords_key,coords_covar_inv_key,analysis_dir,fig_prefix,eigenvols_key in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix,eigenvols_keys):
         analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters,gt_labels)
-        fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures)
+        fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data[eigenvols_key])
         figure_paths.update({fig_prefix+k : v for k,v in fig_path.items()})
         if(not skip_reconstruction):
             #TODO: handle GT reconstruction - right now recovarReconstructomFromEmbedding will still use est embedding
@@ -111,11 +114,16 @@ def analyze_coordinates(coords,num_clusters,gt_labels):
 
     return data,figures
 
-def save_analysis_result(dir,data,figures):
+def save_analysis_result(dir,data,figures,eigenvols = None):
     os.makedirs(dir,exist_ok=True)
 
     with open(os.path.join(dir,'data.pkl'),'wb') as f:
         pickle.dump(data,f)
+
+    if(eigenvols is not None):
+        for i,vol in enumerate(eigenvols):
+            Volume(vol).save(os.path.join(dir, f'eigenvol_pos{i:03d}.mrc'),overwrite=True)
+            Volume(-1 * vol).save(os.path.join(dir, f'eigenvol_neg{i:03d}.mrc'),overwrite=True)
 
     figure_paths = {}
     for fig_name,fig in figures.items():
