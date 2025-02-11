@@ -1,4 +1,4 @@
-cov3d/__pycache__/
+__pycache__/
 cov3d.egg-info/
 .vscode/*
 
@@ -10,5 +10,7 @@ writing/*
 aspire.err.log
 *.asv
 
-
+testing_scripts/
+exp_data/
+bash_runs/
 
