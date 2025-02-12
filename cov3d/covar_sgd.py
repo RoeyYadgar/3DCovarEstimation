@@ -691,7 +691,18 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
         #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
         #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
         trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
-        trainer.train(**kwargs)
+        #trainer.train(**kwargs)
+
+        num_epochs = kwargs.pop('max_epochs')
+        trainer.setup_training(**kwargs)
+        for _ in range(num_reg_update_iters):
+            trainer.train_epochs(num_epochs,restart_optimizer=True)
+            eigenvecs = trainer.covar.eigenvecs
+            eigenvecs = eigenvecs[0] * (eigenvecs[1]**0.5).reshape(-1,1,1,1)
+            trainer.compute_fourier_reg_term(eigenvecs)
+            trainer.covar.orthogonal_projection()
+        trainer.train_epochs(num_epochs,restart_optimizer=True)
+        trainer.complete_training()
 
     else:
         covar_model_copy = copy.deepcopy(covar_model)
