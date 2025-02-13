@@ -17,6 +17,10 @@ def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent):
         for i in range(neighbor_sim_output.shape[0]):
             exp.log_metric(name='latent_matching_neighbors_ratio',value=neighbor_sim_output[i,1]/neighbor_sim_output[i,0],step=neighbor_sim_output[i,0])
             exp.log_metric(name='latent_matching_neighbors_std',value=neighbor_sim_output[i,2],step=neighbor_sim_output[i,0])
+        
+        information_imbalance = np.loadtxt(os.path.join(cryobench_output_dir,'information_imbalance.txt'))
+        exp.log_metric(name='information_imbalance_est_to_gt',value=information_imbalance[0],step=0)
+        exp.log_metric(name='information_imbalance_gt_to_est',value=information_imbalance[1],step=0)
 
         exp.log_image(image_data = os.path.join(cryobench_output_dir,'neighbor_sim.png'),name='neighbor_sim')
 

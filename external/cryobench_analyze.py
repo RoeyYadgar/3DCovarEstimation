@@ -2,11 +2,7 @@ import click
 import os
 import subprocess
 
-CONDA_ENV = 'recovar'
-
 def run_with_conda_env(command):
-    print(f'Running {command}')
-    command = f"conda run -n {CONDA_ENV} " + command
     #TODO : print STDOUT live
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,shell=True)
 
@@ -38,7 +34,7 @@ def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols =
     os.makedirs(output_dir,exist_ok=True)
     
     if(gt_latent is not None):
-        script_path = os.path.join(os.path.dirname(__file__), 'compute_neighbor_sim.py')
+        script_path = os.path.join(os.path.dirname(__file__), 'compute_latent_embedding_metrics.py')
         neighb_sim = f"python {script_path} {result_dir} -o {output_dir} --gt-latent {gt_latent}"
         run_with_conda_env(neighb_sim)
 

@@ -3,6 +3,7 @@ import argparse
 import os
 import jax.numpy as jnp
 from CryoBench.metrics.neighborhood_similarity.cal_neighb_hit_werror import *
+from CryoBench.metrics.information_imbalance.compute_information_imbalance import compute_information_imbalance
 
 
 def add_calc_args() -> argparse.ArgumentParser:
@@ -57,11 +58,16 @@ def main(args: argparse.Namespace) -> None:
     results_dump = os.path.join(args.input_dir, "recorded_data.pkl")
     with open(results_dump,'rb') as f:
         result = pickle.load(f)
-    coords_est = jnp.array(result['coords_est'].copy())
+    coords_est = result['coords_est']
 
     with open(args.gt_latent,'rb') as f:
-        coords_gt = jnp.array(pickle.load(f).copy())
+        coords_gt = pickle.load(f)
+
+    info_imbalance,_ = compute_information_imbalance(coords_est,coords_gt,subset_size=2000)
+    np.savetxt(os.path.join(args.outdir,'information_imbalance.txt'),info_imbalance[:,0])
     
+    coords_est = jnp.array(coords_est.copy())
+    coords_gt = jnp.array(coords_gt.copy())
     num_points = coords_est.shape[0]
     neigh_hit_diff_start_k = []
     decimation_factor = 10
