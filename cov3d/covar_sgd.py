@@ -512,6 +512,7 @@ class Covar(torch.nn.Module):
             self._in_spatial_domain = False
         else:
             self.cost_func = cost
+            #self.cost_func = cost_maximum_liklihood
             self._in_spatial_domain = True
         self._vectors_real = torch.nn.Parameter(vectors,requires_grad=True)
         
@@ -615,6 +616,43 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
 
     return cost_val
 
+def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None):
+    batch_size = images.shape[0]
+    rank = vols.shape[0]
+    L = images.shape[-1]
+
+    eigenvals_sqrt = torch.norm(vols.reshape(rank,-1),dim=1)
+    eigenvecs = vols / eigenvals_sqrt.reshape(rank,1,1,1)
+    projected_eigenvecs = vol_forward(eigenvecs,nufft_plans,filters)
+    eigenvals = eigenvals_sqrt ** 2
+
+    images = images.reshape((batch_size,-1,1))
+    projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
+
+    projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
+    Q_projcted_images = torch.matmul(projected_Q.transpose(1,2),images) #size (batch, rank,1)
+
+    '''
+    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2)) + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)#size (batch,rank,rank)
+    inverted_projected_eigen_covar = torch.inverse(projected_eigen_covar) #size (batch,rank,rank)
+
+    ml_exp_term = torch.matmul(Q_projcted_images.transpose(1,2),torch.matmul(inverted_projected_eigen_covar,Q_projcted_images)).squeeze() #size (batch) #TODO: use linalg.solve instead of inverse
+    '''
+    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2))
+    inverted_projected_eigen_covar = torch.inverse(torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + noise_var * projected_eigen_covar)
+    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images)
+    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed)
+    ml_exp_term = 1/noise_var * torch.norm(images,dim=(1,2)) ** 2 - 1/(noise_var ** 2) * torch.matmul(Q_projcted_images.transpose(1,2),Q_projcted_images_transformed).squeeze()
+    projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
+
+    ml_noise_term = torch.log(torch.det(projected_eigen_covar) * (noise_var ** (L**2 - rank))) #size (batch)
+
+    cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
+
+    return cost_val
+
+
+
 #TODO : merge this into a single function in cost
 def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
     batch_size = images.shape[0]
@@ -691,7 +729,6 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
         #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
         #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
         trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
-        #trainer.train(**kwargs)
 
         num_epochs = kwargs.pop('max_epochs')
         trainer.setup_training(**kwargs)

@@ -7,7 +7,7 @@ from aspire.source import Simulation
 from aspire.noise import WhiteNoiseAdder
 
 from cov3d import nufft_plan
-from cov3d.covar_sgd import Covar,cost,cost_fourier_domain,CovarDataset
+from cov3d.covar_sgd import Covar,cost,cost_fourier_domain,cost_maximum_liklihood,CovarDataset
 from cov3d.utils import volsCovarEigenvec,generateBallVoxel
 from cov3d.projection_funcs import vol_forward,centered_fft3
 from cov3d.fsc_utils import rpsd,expand_fourier_shell
@@ -237,6 +237,43 @@ class TestTorchImpl(unittest.TestCase):
         
 
         torch.testing.assert_close(cost_fourier/cost_spatial,(self.img_size ** 4) * torch.ones_like(cost_fourier), rtol=5e-3,atol=5e-3)
+
+    def test_ml_cost(self):
+        batch_size = 13
+        rank = 4
+        covar = Covar(self.img_size,rank=rank)
+        
+        ims,pts_rot,filter_inds = self.dataset[:batch_size]
+        filters = self.dataset.unique_filters[filter_inds]
+        pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
+
+    
+        plans = nufft_plan.NufftPlan((self.img_size,)*3,batch_size=rank)
+        plans.setpts(pts_rot)
+        efficient_cost = cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var)
+
+        def naive_cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var):
+            batch_size = images.shape[0]
+            rank = vols.shape[0]
+            L = images.shape[-1]
+
+            projected_vols = vol_forward(vols,nufft_plans,filters)
+            images = images.reshape((batch_size,-1,1))
+            projected_vols = projected_vols.reshape((batch_size,rank,-1))
+            projected_eigen_covar = torch.matmul(projected_vols.transpose(1,2),projected_vols) + noise_var * torch.eye(L**2,device=vols.device,dtype=vols.dtype).reshape(1,L**2,L**2)#size (batch,L**2,L**2)
+            inverted_projected_eigen_covar = torch.inverse(projected_eigen_covar) #size (batch,L**2,L**2)
+
+            ml_exp_term = torch.matmul(images.transpose(1,2),torch.matmul(inverted_projected_eigen_covar,images)).squeeze() #size (batch)
+            ml_noise_term = torch.log(torch.det(projected_eigen_covar))#size (batch)
+
+            cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
+            
+
+            return cost_val
+        
+        naive_cost = naive_cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var)
+
+        torch.testing.assert_close(naive_cost,efficient_cost, rtol=5e-3,atol=5e-3)
 
 
 if __name__ == "__main__":
