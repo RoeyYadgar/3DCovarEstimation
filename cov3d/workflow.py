@@ -177,17 +177,18 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
                             'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
                             'num_reg_update_iters' : 2, 'use_halfsets' : True}
     
-    #TODO : change upsampling_factor into a training argument and pass that into Covar's methods instead of at constructor
+    #TODO : change upsampling_factor & objective_func into a training argument and pass that into Covar's methods instead of at constructor
     if('fourier_upsampling' in training_kwargs.keys()):
         upsampling_factor = training_kwargs['fourier_upsampling']
         del training_kwargs['fourier_upsampling']
     else:
-        upsampling_factor = 2        
+        upsampling_factor = 2
+    objective_func = training_kwargs.pop('objective_func')
     default_training_kwargs.update(training_kwargs)
 
     optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
     cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
-                fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
+                fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor,objective_func=objective_func)
         
     if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
         trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
@@ -251,6 +252,7 @@ def workflow_click_decorator(func):
     @click.option('--fourier-upsampling',type=int,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
     @click.option('--num-reg-update-iters',type=int,help='Number of iterations to update regularization')
     @click.option('--use-halfsets',type=bool,help='Whether to split data into halfsets for regularization update')
+    @click.option('--objective-func',type=click.Choice(['ml','ls']),default='ml',help='Which objective function to opimize. Either ml (maximum liklihood) or ls (least squares)')
     def wrapper(*args,**kwargs):
         kwargs = {k : v for k,v in kwargs.items() if v is not None}
         return func(*args,**kwargs)

@@ -491,7 +491,7 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
 
 
 class Covar(torch.nn.Module):
-    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,est_type='ls',vectors = None):
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,objective_func='ls',vectors = None):
         super().__init__()
         self.resolution = resolution
         self.rank = rank
@@ -508,10 +508,10 @@ class Covar(torch.nn.Module):
             #fourier_vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
             #self._vectors_real = torch.nn.Parameter(fourier_vectors.real,requires_grad=True)
             #self._vectors_imag = torch.nn.Parameter(fourier_vectors.imag,requires_grad=True)
-            self.cost_func = cost_fourier_domain if est_type == 'ls' else cost_maximum_liklihood_fourier_domain
+            self.cost_func = cost_fourier_domain if objective_func == 'ls' else cost_maximum_liklihood_fourier_domain
             self._in_spatial_domain = False
         else:
-            self.cost_func = cost if est_type == 'ls' else cost_maximum_liklihood
+            self.cost_func = cost if objective_func == 'ls' else cost_maximum_liklihood
             self._in_spatial_domain = True
         self._vectors_real = torch.nn.Parameter(vectors,requires_grad=True)
         
