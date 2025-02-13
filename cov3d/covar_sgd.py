@@ -642,6 +642,12 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
 
+    if(fourier_reg is not None and reg_scale != 0):
+        vols_fourier = centered_fft3(vols)
+        vols_fourier*= torch.sqrt(fourier_reg)
+        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
+        cost_val += reg_scale * reg_cost
+
     return cost_val
 
 
@@ -684,7 +690,6 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = images.shape[-1]
-    vol_L = vols.shape[-1]
 
     eigenvals_sqrt = torch.norm(vols.reshape(rank,-1),dim=1) #/ (vol_L ** 1.5) #vols in fourier domain will have their norm scaled by L**1.5
     eigenvecs = vols / eigenvals_sqrt.reshape(rank,1,1,1)
@@ -709,6 +714,12 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     ml_noise_term = torch.logdet(projected_eigen_covar)  #+(L**2 - rank) * torch.log(torch.tensor(noise_var)) term which is constant
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
+
+    if(fourier_reg is not None and reg_scale != 0):
+        us_factor = int(vols.shape[-1]/L)
+        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
+        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
+        cost_val += reg_scale * reg_cost
 
     return cost_val
 
