@@ -491,7 +491,7 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
 
 
 class Covar(torch.nn.Module):
-    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,est_type='ls',vectors = None):
         super().__init__()
         self.resolution = resolution
         self.rank = rank
@@ -508,11 +508,10 @@ class Covar(torch.nn.Module):
             #fourier_vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
             #self._vectors_real = torch.nn.Parameter(fourier_vectors.real,requires_grad=True)
             #self._vectors_imag = torch.nn.Parameter(fourier_vectors.imag,requires_grad=True)
-            self.cost_func = cost_fourier_domain
+            self.cost_func = cost_fourier_domain if est_type == 'ls' else cost_maximum_liklihood_fourier_domain
             self._in_spatial_domain = False
         else:
-            self.cost_func = cost
-            #self.cost_func = cost_maximum_liklihood
+            self.cost_func = cost if est_type == 'ls' else cost_maximum_liklihood
             self._in_spatial_domain = True
         self._vectors_real = torch.nn.Parameter(vectors,requires_grad=True)
         
@@ -632,20 +631,14 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
     projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
     Q_projcted_images = torch.matmul(projected_Q.transpose(1,2),images) #size (batch, rank,1)
 
-    '''
-    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2)) + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)#size (batch,rank,rank)
-    inverted_projected_eigen_covar = torch.inverse(projected_eigen_covar) #size (batch,rank,rank)
-
-    ml_exp_term = torch.matmul(Q_projcted_images.transpose(1,2),torch.matmul(inverted_projected_eigen_covar,Q_projcted_images)).squeeze() #size (batch) #TODO: use linalg.solve instead of inverse
-    '''
-    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2))
-    inverted_projected_eigen_covar = torch.inverse(torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + noise_var * projected_eigen_covar)
-    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images)
-    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed)
-    ml_exp_term = 1/noise_var * torch.norm(images,dim=(1,2)) ** 2 - 1/(noise_var ** 2) * torch.matmul(Q_projcted_images.transpose(1,2),Q_projcted_images_transformed).squeeze()
+    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2)) #size (batch,rank,rank)
+    inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
+    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
+    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
+    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2),Q_projcted_images_transformed).squeeze() # +1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
     projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
 
-    ml_noise_term = torch.log(torch.det(projected_eigen_covar) * (noise_var ** (L**2 - rank))) #size (batch)
+    ml_noise_term = torch.logdet(projected_eigen_covar) # +(L**2 - rank) * torch.log(noise_var) term which is constant
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
 
@@ -686,6 +679,39 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
         cost_val += reg_scale * reg_cost
 
     return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
+
+def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None):
+    batch_size = images.shape[0]
+    rank = vols.shape[0]
+    L = images.shape[-1]
+    vol_L = vols.shape[-1]
+
+    eigenvals_sqrt = torch.norm(vols.reshape(rank,-1),dim=1) #/ (vol_L ** 1.5) #vols in fourier domain will have their norm scaled by L**1.5
+    eigenvecs = vols / eigenvals_sqrt.reshape(rank,1,1,1)
+    projected_eigenvecs = vol_forward(eigenvecs,nufft_plans,filters,fourier_domain=True)
+    eigenvals = eigenvals_sqrt ** 2
+
+    images = images.reshape((batch_size,-1,1))
+    projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
+
+    projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
+    Q_projcted_images = torch.matmul(projected_Q.transpose(1,2).conj(),images) #size (batch, rank,1)
+
+
+    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2).conj()) #size (batch,rank,rank)
+    inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
+    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
+    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
+    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2).conj(),Q_projcted_images_transformed).squeeze()  #+1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
+    #ml_exp_term = ml_exp_term * (L/2)**4 #TODO: for some reason a factor of (L/2)**4 is missing from the computation. figure that out
+    projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
+
+    ml_noise_term = torch.logdet(projected_eigen_covar)  #+(L**2 - rank) * torch.log(torch.tensor(noise_var)) term which is constant
+
+    cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
+
+    return cost_val
+
 
 def frobeniusNorm(vecs):
     #Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
