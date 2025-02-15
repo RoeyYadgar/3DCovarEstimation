@@ -14,6 +14,7 @@ def run_with_conda_env(command):
 def analysis_click_decorator(func):
     @click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
     @click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
+    @click.option('--gt-labels',type=str,help='Path to pkl containing ground truth labels')
     @click.option('--mask',type=str,help="Mask mrc file used for FSC computation")
     @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
     def wrapper(*args,**kwargs):
@@ -25,10 +26,10 @@ def analysis_click_decorator(func):
 @click.command()
 @click.option('-i','--result_dir',type=str,help="Result dir of algorithm's output")
 @analysis_click_decorator
-def cryobench_analyze_cli(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols = None):
-    cryobench_analyze(result_dir,gt_dir=gt_dir,gt_latent=gt_latent,mask=mask)
+def cryobench_analyze_cli(result_dir,**kwargs):
+    cryobench_analyze(result_dir,**kwargs)
 
-def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols = None):
+def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,gt_labels=None,mask=None,num_vols = None):
 
     output_dir = os.path.join(result_dir,'cryobench_output')
     os.makedirs(output_dir,exist_ok=True)
@@ -37,6 +38,11 @@ def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,mask=None,num_vols =
         script_path = os.path.join(os.path.dirname(__file__), 'compute_latent_embedding_metrics.py')
         neighb_sim = f"python {script_path} {result_dir} -o {output_dir} --gt-latent {gt_latent}"
         run_with_conda_env(neighb_sim)
+
+    if(gt_labels is not None):
+        script_path = os.path.join(os.path.dirname(__file__), 'compute_clustering_metrics.py')
+        clustering_metrics = f"python {script_path} {result_dir} -o {output_dir} --gt-labels {gt_labels}"
+        run_with_conda_env(clustering_metrics)
 
 
     if(gt_dir is not None):

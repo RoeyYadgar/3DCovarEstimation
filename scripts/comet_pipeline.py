@@ -10,7 +10,7 @@ from aspire.storage import StarFile
 from cov3d.workflow import covar_workflow,workflow_click_decorator
 
 
-def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent):
+def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent,gt_labels):
     cryobench_output_dir = os.path.join(result_dir,'cryobench_output')
     if(gt_latent is not None):
         neighbor_sim_output = np.loadtxt(os.path.join(cryobench_output_dir,'neighbor_sim_output.txt'))
@@ -23,6 +23,11 @@ def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent):
         exp.log_metric(name='information_imbalance_gt_to_est',value=information_imbalance[1],step=0)
 
         exp.log_image(image_data = os.path.join(cryobench_output_dir,'neighbor_sim.png'),name='neighbor_sim')
+
+    if(gt_labels is not None):
+        clustering_metrics = np.loadtxt(os.path.join(cryobench_output_dir,'clustering_metrics.txt'))
+        exp.log_metric(name='AMI',value=clustering_metrics[0],step=0)
+        exp.log_metric(name='ARI',value=clustering_metrics[1],step=0)
 
     if(gt_dir is not None):
         #This is the same code from cryobench's plot_fsc - used to compute FSC AUC. #TODO: log computed AUC in plot_fsc itself?
@@ -84,8 +89,8 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
             exp.log_image(image_data = fig_path,name=fig_name)
 
         #Run cryobench analysis (compares to GT latent embedding and volume states)
-        cryobench_analyze(result_dir,gt_dir=gt_dir,gt_latent=gt_latent,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
-        log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent)
+        cryobench_analyze(result_dir,gt_dir=gt_dir,gt_latent=gt_latent,gt_labels=gt_labels,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
+        log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent,gt_labels)
 
     if(not disable_comet):
         result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
