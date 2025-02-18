@@ -2,8 +2,8 @@ import pickle
 import numpy as np
 import click
 import os
+from matplotlib import pyplot as plt
 from cov3d.utils import sub_starfile
-from cov3d.wiener_coords import mahalanobis_distance
 
 
 @click.command()
@@ -19,6 +19,8 @@ def create_sub_starfiles_from_embedding(input_star,embedding_path,centers_path,o
     
     with open(centers_path,'rb') as f:
         centers = pickle.load(f)['cluster_coords']
+
+    os.makedirs(output_dir,exist_ok=True)
 
     coords = embedding['coords_est']
     coords_covar_inv = embedding['coords_covar_inv_est']
@@ -41,8 +43,14 @@ def create_sub_starfiles_from_embedding(input_star,embedding_path,centers_path,o
         mean_centered_coords = coords - center
         dist_to_center = np.sum(np.matmul(coords_covar_inv,mean_centered_coords[...,np.newaxis]).squeeze(-1) *  mean_centered_coords,axis=1)
         dist_to_center[np.isnan(dist_to_center)] = np.inf
-        neighbors = np.argsort(dist_to_center)[:num_neighbors]
+        neighbors = np.argsort(dist_to_center)
+        neighbors_dist = dist_to_center[neighbors]
+        neighbors = neighbors[:num_neighbors]
         sub_starfile(input_star,os.path.join(output_dir,f'sub_star{i}.star'),neighbors)
+        fig = plt.figure()
+        plt.plot(neighbors_dist)
+        plt.ylim(0,np.percentile(neighbors_dist,[95]))
+        fig.savefig(os.path.join(output_dir,f'distance_from_center{i}.jpg'))        
 
 
 if __name__ == "__main__":
