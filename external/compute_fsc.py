@@ -2,21 +2,24 @@
 Example usage
 -------------
 $ python compute_fsc.py results/ \
-            -o fsc_output/ --gt-dir IgG-1D/vols/128_org/ \
-            --mask IgG-1D/init_mask/mask.mrc --num-imgs 1000 --num-vols 100
+            -o fsc_output/ --gt-dir IgG-1D/vols/128_org/ --gt-labels IgG-1D/gt_latents.pkl\
+            --mask IgG-1D/init_mask/mask.mrc --num-vols 100
 """
 import os
 import sys
 import argparse
 import logging
 import pickle
+import numpy as np
+from glob import glob
 
 ROOTDIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.append(os.path.join(ROOTDIR, "methods", "recovar"))
 from recovar import dataset, embedding, output
 
 sys.path.append(os.path.join(ROOTDIR, "fsc"))
-from CryoBench.metrics.fsc.utils import volumes, conformations, interface
+from CryoBench.metrics.fsc.utils import volumes, interface
+from CryoBench.metrics.fsc.utils.volumes import numfile_sortkey
 from CryoBench.metrics.fsc import plot_fsc
 from cov3d.recovar_utils import recovarReconstructFromEmbedding
 
@@ -36,7 +39,12 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         dest="n_bins",
         help="number of bins for reweighting",
     )
-    parser.add_argument("--Bfactor", type=float, default=0, help="0")
+    parser.add_argument(
+        "--gt-labels",
+        type=str,
+        dest="gt_labels",
+        help="Path to pkl file containing ground truth labels"        
+    )
 
     return parser
 
@@ -49,10 +57,18 @@ def main(args: argparse.Namespace) -> None:
     with open(results_dump,'rb') as f:
         result = pickle.load(f)
     zs = result['coords_est']
-    num_imgs = int(args.num_imgs) if zs.shape[0] == 100000 else "ribo"
-    nearest_z_array = conformations.get_nearest_z_array(
-        zs, args.num_vols, num_imgs
-    )
+    with open(args.gt_labels,'rb') as f:
+        gt_labels = pickle.load(f)
+    unique_labels = np.unique(gt_labels)
+    indices_per_unique_state = [np.where(gt_labels == v)[0] for v in unique_labels]
+    random_index_per_state = np.array([np.random.choice(index_set) for index_set in indices_per_unique_state])
+    
+    z_array = zs[random_index_per_state]
+    gt_vols = sorted(glob(os.path.join(args.gt_dir, "*.mrc")), key=numfile_sortkey)
+
+    z_array = z_array[:args.num_vols]
+    gt_vols = gt_vols[:args.num_vols]
+
 
     output.mkdir_safe(args.outdir)
     log_file = os.path.join(args.outdir, "run.log")
@@ -62,17 +78,19 @@ def main(args: argparse.Namespace) -> None:
         logger.addHandler(logging.FileHandler(log_file))
         logger.info(args)
 
-        recovarReconstructFromEmbedding(results_dump,args.outdir,nearest_z_array,args.n_bins)
+        recovarReconstructFromEmbedding(results_dump,args.outdir,z_array,args.n_bins)
+        #from cov3d.utils import relionReconstructFromEmbedding
+        #relionReconstructFromEmbedding(results_dump,args.outdir,z_array)
         
 
     # Align output conformation volumes to ground truth volumes using ChimeraX
     if args.align_vols:
-        volumes.align_volumes_multi(args.outdir, args.gt_dir, flip=args.flip_align)
+        volumes.align_volumes_multi(args.outdir, gt_vols, flip=args.flip_align)
 
     if args.calc_fsc_vals:
         volumes.get_fsc_curves(
             args.outdir,
-            args.gt_dir,
+            gt_vols,
             mask_file=args.mask,
             fast=args.fast,
             overwrite=args.overwrite,
@@ -85,7 +103,7 @@ def main(args: argparse.Namespace) -> None:
         if args.align_vols:
             volumes.get_fsc_curves(
                 args.outdir,
-                args.gt_dir,
+                gt_vols,
                 mask_file=args.mask,
                 fast=args.fast,
                 overwrite=args.overwrite,

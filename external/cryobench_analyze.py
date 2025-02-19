@@ -45,14 +45,14 @@ def cryobench_analyze(result_dir,gt_dir=None,gt_latent=None,gt_labels=None,mask=
         run_with_conda_env(clustering_metrics)
 
 
-    if(gt_dir is not None):
+    if(gt_dir is not None and gt_labels is not None):
         if(num_vols is None):
             num_vols = len(os.listdir(gt_dir))
             print(f"num-vols was not provided. Using all {num_vols} GT volumes from {gt_dir}")
 
         script_path = os.path.join(os.path.dirname(__file__), 'compute_fsc.py')
-        fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --num-vols {num_vols}"
-        run_with_conda_env(fsc_no_mask + " --overwrite")
+        fsc_no_mask = f"python {script_path} {result_dir} -o {output_dir} --gt-dir {gt_dir} --gt-labels {gt_labels} --num-vols {num_vols}"
+        run_with_conda_env(fsc_no_mask + " --overwrite") #Should only overwrite the first time
     
         if(mask is not None):
             fsc_mask = fsc_no_mask + f" --mask {mask}"
