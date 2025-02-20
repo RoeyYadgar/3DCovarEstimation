@@ -12,6 +12,9 @@ from aspire.storage.starfile import StarFile
 from aspire.basis import FFBBasis3D
 from aspire.reconstruction import MeanEstimator
 import aspire
+import multiprocessing
+import pickle
+from cov3d.wiener_coords import mahalanobis_threshold
 
 
 def generateBallVoxel(center,radius,L):
@@ -243,7 +246,7 @@ def vol_fsc(vol1,vol2):
 
         return vol1.fsc(vol2)
 
-def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs_index = None):
+def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs_index = None,invert=False):
     if(mrcs_index is not None):
         subfile = f'{inputfile}.sub.tmp'
         sub_starfile(inputfile,subfile,mrcs_index)
@@ -253,16 +256,39 @@ def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs
     #outputfile_rel = os.path.relpath(outputfile,inputfile_path)
     outputfile_abs = os.path.abspath(outputfile)
     if(overwrite or (not os.path.isfile(outputfile))):
-        os.system(f'cd {inputfile_path} && relion_reconstruct --i {inputfile_name} --o {outputfile_abs} --ctf' + classnum_arg)
+        relion_command = f'relion_reconstruct --i {inputfile_name} --o {outputfile_abs} --ctf' + classnum_arg
+        num_cores = multiprocessing.cpu_count()
+        if(num_cores > 1):
+            relion_command = f'mpirun -np {num_cores} {relion_command.replace("relion_reconstruct","relion_reconstruct_mpi")}'
+        os.system(f'cd {inputfile_path} && {relion_command}')
         #compensate for volume sign inversion and normalization by image size in relion
         vol = (-1 * Volume.load(outputfile))
         vol*=vol.shape[-1]
+        if(invert):
+            vol = -1 * vol
         vol.save(outputfile,overwrite=True)
     else:
         vol = Volume.load(outputfile)
     if(mrcs_index is not None):
         os.remove(subfile)
     return vol
+
+def relionReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,q=0.95):
+    with open(inputfile,'rb') as f:
+        result = pickle.load(f)
+    zs = torch.tensor(result['coords_est'])
+    cov_zs = torch.tensor(result['coords_covar_inv_est'])
+    starfile = result['starfile']
+    volumes_dir = os.path.join(outputfolder,'all_volumes_relion')
+    os.makedirs(volumes_dir,exist_ok=True)
+    for i,embedding_position in enumerate(torch.tensor(embedding_positions)):
+        #Find closest point in zs
+        embed_pos_index = torch.argmin(torch.norm(embedding_position - zs,dim=1))
+        #Compute closest neighbors
+        index_under_threshold = mahalanobis_threshold(zs,zs[embed_pos_index],cov_zs[embed_pos_index],q=q)
+        print(f'Reconstructing state {i} with {torch.sum(index_under_threshold)} images')
+        output_file = os.path.join(volumes_dir,f'volume{i:04}.mrc')
+        relionReconstruct(starfile,output_file,overwrite=True,mrcs_index=index_under_threshold.cpu().numpy(),invert=result['data_sign_inverted'])
 
 
 def readVols(volfiles):
