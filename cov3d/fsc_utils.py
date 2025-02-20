@@ -45,7 +45,7 @@ class FourierShell():
         spectrum_signals = self._unsqueeze_batch_dim(spectrum_signals)
         n = spectrum_signals.shape[0]
         #TODO : what should be done with zero freqeuncy component in odd image length?
-        shell_avg = torch.zeros(n, len(self.radial_values), dtype=self.dtype ,device=self.device)
+        shell_avg = torch.zeros(n, len(self.radial_values), dtype=spectrum_signals.dtype ,device=self.device)
         for i in range(shell_avg.shape[1]):
             lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
             shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
@@ -122,3 +122,32 @@ def vol_fsc(signal1,signal2):
 
     return fsc
 
+def covar_rpsd(eigenvectors):
+    eigenvecs_fft = centered_fft3(eigenvectors)
+    return covar_correlate(eigenvecs_fft,eigenvecs_fft).real
+
+def covar_correlate(fourier_eigenvecs1,fourier_eigenvecs2):
+    L = fourier_eigenvecs1.shape[-1]
+    dim = 3
+    dtype = torch.float32 if fourier_eigenvecs1.dtype == torch.complex64 else torch.float64
+    fourier_shell = FourierShell(L,dim,dtype,fourier_eigenvecs1.device)
+    correlate_matrix = torch.zeros((len(fourier_shell.radial_values),len(fourier_shell.radial_values)),dtype=fourier_eigenvecs1.dtype,device=fourier_shell.device)
+    for i in range(fourier_eigenvecs1.shape[0]):
+        s = fourier_shell.avergage_fourier_shell(fourier_eigenvecs1[i] * torch.conj(fourier_eigenvecs2))
+        correlate_matrix += s.T @ s.conj()
+
+    return correlate_matrix
+
+def covar_fsc(eigenvecs1,eigenvecs2):
+    eigenvecs1_fft = centered_fft3(eigenvecs1)
+    eigenvecs2_fft = centered_fft3(eigenvecs2)
+
+    correlation = covar_correlate(eigenvecs1_fft,eigenvecs2_fft).real
+    rpsd1 = covar_correlate(eigenvecs1_fft,eigenvecs1_fft).real
+    rpsd2 = covar_correlate(eigenvecs2_fft,eigenvecs2_fft).real 
+
+    #Float32 precision might not have the dynamic range to compute the product (since they can be very large). So we normalize the rpsd values by the zero frequency component and correct the normalization at the end
+    bottom = torch.sqrt((rpsd1/rpsd1[0,0]) * (rpsd2/rpsd2[0,0])) * torch.sqrt(rpsd1[0,0]) * torch.sqrt(rpsd2[0,0]) 
+    fsc = correlation / bottom
+
+    return fsc
