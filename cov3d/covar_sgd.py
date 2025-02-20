@@ -449,12 +449,12 @@ def update_fourier_reg(trainer1,trainer2):
     eigenvecs2 = trainer2.covar.eigenvecs
     eigenvecs2 = eigenvecs2[0] * (eigenvecs2[1]**0.5).reshape(-1,1,1,1)
 
-    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,trainer1.noise_var)
+    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,trainer1.noise_var,mask=trainer1.dataset.mask)
 
     trainer1.fourier_reg = new_fourier_reg_tensor.to(trainer1.device)
     trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
 
-def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var):
+def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var,mask=None):
 
     if(current_fourier_reg is None):
         current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
@@ -465,6 +465,10 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     #filter_gain_shell_correction[filter_gain_shell_correction < 1e]
 
     #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
+    if(mask is not None):
+        mask = mask.clone().to(eigenvecs1.device)
+        eigenvecs1 = eigenvecs1 * mask
+        eigenvecs2 = eigenvecs2 * mask
     U,_,V = torch.linalg.svd(eigenvecs1.reshape(rank,-1) @ eigenvecs2.reshape(rank,-1).T)
     eigenvecs1 = (U @ (V.T @ eigenvecs1.reshape(rank,-1))).reshape((rank,L,L,L))
 
@@ -475,8 +479,8 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     eigenvecs_fsc[eigenvecs_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
     #eigenvecs_fsc[:,L//2:] = eigenvecs_fsc[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
     
-    #new_fourier_reg = noise_var * filter_gain_shell_correction/torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0) #TODO : shuold filter gain correction be multiplied or divided?
-    new_fourier_reg = noise_var/(torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0)*filter_gain_shell_correction) #TODO : shuold filter gain correction be multiplied or divided?
+    #new_fourier_reg = filter_gain_shell_correction/torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0) #TODO : shuold filter gain correction be multiplied or divided?
+    new_fourier_reg = 1/(torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0)*filter_gain_shell_correction) #TODO : shuold filter gain correction be multiplied or divided?
     new_fourier_reg[new_fourier_reg < 0] = 0
 
     from matplotlib import pyplot as plt #Remove this

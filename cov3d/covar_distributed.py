@@ -71,7 +71,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
             #eigenvecs_list will have the same eigenvecs in each distributed group (i.e. [eigenvecs1,...,eigenvecs1,eigenvesc2,...,eigenvecs2])
             eigenvecs1 = eigenvecs_list[0]
             eigenvecs2 = eigenvecs_list[-1]
-            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.rank,covar_model.module.resolution,trainer.noise_var)
+            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.rank,covar_model.module.resolution,trainer.noise_var,trainer.dataset.mask)
             trainer.fourier_reg = new_fourier_reg_term
 
         #Train a single model on the whole dataset
