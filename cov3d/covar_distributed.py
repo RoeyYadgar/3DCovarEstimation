@@ -4,7 +4,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 from torch import distributed as dist
 import os
-from cov3d.covar_sgd import CovarTrainer,Covar,compute_updated_fourier_reg
+from cov3d.covar_sgd import CovarTrainer,compute_updated_fourier_reg
+from cov3d.covar import Covar
 from cov3d.iterative_covar_sgd import IterativeCovarTrainer,IterativeCovar,IterativeCovarVer2,IterativeCovarTrainerVer2
 import math
 
@@ -35,7 +36,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
         is_group1 = rank in range(world_size//2)
         if not is_group1:
             torch.manual_seed(1) #Reinitalize vectors in group2
-            covar_model._vectors_real.data.copy_(covar_model.init_random_vectors(covar_model.rank))
+            covar_model.vectors.data.copy_(covar_model.init_random_vectors(covar_model.rank))
         covar_model = DDP(covar_model,device_ids=[rank],process_group=group1 if is_group1 else group2)
     else:
         covar_model = DDP(covar_model,device_ids=[rank])
@@ -84,7 +85,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
                     pixel_var_estimate=covar_model.module.pixel_var_estimate,
                     fourier_domain = not covar_model.module._in_spatial_domain,
                     upsampling_factor=covar_model.module.upsampling_factor,
-                    vectors=covar_model.module._vectors_real.clone().detach()).to(device)
+                    vectors=covar_model.module.vectors.clone().detach()).to(device)
         covar_model = DDP(covar_model,device_ids=[rank])
         trainer._covar = covar_model
         trainer.train_epochs(num_epochs,restart_optimizer=True)

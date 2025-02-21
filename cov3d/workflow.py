@@ -8,7 +8,8 @@ from umap import UMAP
 from sklearn.metrics import auc
 import click
 from cov3d.utils import *
-from cov3d.covar_sgd import CovarDataset,Covar,trainCovar
+from cov3d.covar_sgd import CovarDataset,trainCovar
+from cov3d.covar import Covar
 from cov3d.covar_distributed import trainParallel
 from cov3d.wiener_coords import latentMAP,mahalanobis_threshold
 
@@ -175,7 +176,7 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
                             'lr' : 1e-1,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                             'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
                             'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
-                            'num_reg_update_iters' : 2, 'use_halfsets' : True}
+                            'num_reg_update_iters' : 2, 'use_halfsets' : True,'objective_func' : 'ml'}
     
     #TODO : change upsampling_factor & objective_func into a training argument and pass that into Covar's methods instead of at constructor
     if('fourier_upsampling' in training_kwargs.keys()):
@@ -183,12 +184,11 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
         del training_kwargs['fourier_upsampling']
     else:
         upsampling_factor = 2
-    objective_func = training_kwargs.pop('objective_func')
     default_training_kwargs.update(training_kwargs)
 
     optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
     cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
-                fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor,objective_func=objective_func)
+                fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
         
     if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
         trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
