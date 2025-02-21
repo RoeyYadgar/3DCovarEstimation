@@ -445,7 +445,7 @@ def update_fourier_reg(trainer1,trainer2):
     trainer1.fourier_reg = new_fourier_reg_tensor.to(trainer1.device)
     trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
 
-def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var,mask=None):
+def compute_updated_fourier_reg_old(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var,mask=None):
 
     if(current_fourier_reg is None):
         current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
@@ -483,6 +483,36 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     new_fourier_reg_tensor = expand_fourier_shell(new_fourier_reg,L,3)
     return new_fourier_reg_tensor
 
+def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var,mask=None):
+
+    if(current_fourier_reg is None):
+        current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
+
+    averaged_filter_gain = average_fourier_shell(filter_gain)
+    filter_gain_shell_correction = 1 / averaged_filter_gain @ averaged_filter_gain.T
+
+    #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
+    if(mask is not None):
+        mask = mask.clone().to(eigenvecs1.device)
+        eigenvecs1 = eigenvecs1 * mask
+        eigenvecs2 = eigenvecs2 * mask
+
+    from cov3d.fsc_utils import covar_fsc
+
+    eigenvecs_fsc = covar_fsc(eigenvecs1,eigenvecs2)
+    fsc_epsilon = 1e-3
+    eigenvecs_fsc[eigenvecs_fsc < fsc_epsilon] = fsc_epsilon
+    eigenvecs_fsc[eigenvecs_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
+    
+    new_fourier_reg = 1/((eigenvecs_fsc / (1 - eigenvecs_fsc))*filter_gain_shell_correction)
+    new_fourier_reg[new_fourier_reg < 0] = 0
+
+    from matplotlib import pyplot as plt #Remove this
+    fig = plt.figure()
+    plt.imshow((new_fourier_reg.cpu().numpy()))
+    fig.savefig('test.jpg')
+
+    return new_fourier_reg
 
 def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
     batch_size = images.shape[0]
