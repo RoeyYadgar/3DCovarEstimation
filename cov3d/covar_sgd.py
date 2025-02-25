@@ -11,7 +11,7 @@ from aspire.volume import rotated_grids
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
-from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc
+from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc,covar_fsc,covar_rpsd
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask=None,invert_data = False):
@@ -488,16 +488,14 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     if(current_fourier_reg is None):
         current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
 
-    averaged_filter_gain = average_fourier_shell(filter_gain)
-    filter_gain_shell_correction = 1 / averaged_filter_gain @ averaged_filter_gain.T
+    averaged_filter_gain = average_fourier_shell(filter_gain).reshape(-1,1)
+    filter_gain_shell_correction = 1 / (averaged_filter_gain @ averaged_filter_gain.T + 1e-12)
 
     #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
     if(mask is not None):
         mask = mask.clone().to(eigenvecs1.device)
         eigenvecs1 = eigenvecs1 * mask
         eigenvecs2 = eigenvecs2 * mask
-
-    from cov3d.fsc_utils import covar_fsc
 
     eigenvecs_fsc = covar_fsc(eigenvecs1,eigenvecs2)
     fsc_epsilon = 1e-3
@@ -509,7 +507,8 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
 
     from matplotlib import pyplot as plt #Remove this
     fig = plt.figure()
-    plt.imshow((new_fourier_reg.cpu().numpy()))
+    f = plt.imshow(np.log10(new_fourier_reg.cpu().numpy()))
+    fig.colorbar(f)
     fig.savefig('test.jpg')
 
     return new_fourier_reg
@@ -537,12 +536,9 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
     cost_val = torch.mean(cost_val,dim=0)
             
     if(fourier_reg is not None and reg_scale != 0):
-        vols_fourier = centered_fft3(vols)
-        vols_fourier*= torch.sqrt(fourier_reg)
-        vols_fourier = vols_fourier.reshape((rank,-1))
-        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
-        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
-        cost_val += reg_scale * reg_cost 
+        vol_covar_rpsd,shell_size = covar_rpsd(vols)
+        reg_cost = vol_covar_rpsd * torch.sqrt(fourier_reg) * torch.outer(shell_size,shell_size)
+        cost_val += reg_scale * torch.sum(reg_cost)
 
     return cost_val
 
@@ -609,11 +605,10 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
 
     if(fourier_reg is not None and reg_scale != 0):
         us_factor = int(vols.shape[-1]/L)
-        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
-        vols_fourier = vols_fourier.reshape((rank,-1))
-        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
-        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
-        cost_val += reg_scale * reg_cost
+        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor]
+        vol_covar_rpsd,shell_size = covar_rpsd(vols_fourier,from_fourier=True)
+        reg_cost = vol_covar_rpsd * torch.sqrt(fourier_reg) * torch.outer(shell_size,shell_size)
+        cost_val += reg_scale * torch.sum(reg_cost)
 
     return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 

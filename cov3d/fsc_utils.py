@@ -14,7 +14,7 @@ class FourierShell():
             grid_func = grid_3d
         self.grid_radius = torch.tensor(grid_func(L,shifted=False,normalized=False)['r'],dtype=dtype,device=device)
         self.radial_values = torch.arange(0,int(torch.ceil(torch.max(self.grid_radius)).item()))
-        self.shell_size = self.compute_shell_size()
+        self.shell_size,self.shell_inds = self.compute_shell_size()
 
     @staticmethod
     def from_tensor(tensor):
@@ -24,11 +24,13 @@ class FourierShell():
     
     def compute_shell_size(self):
         shell_size = torch.zeros(len(self.radial_values),dtype=self.dtype,device=self.device)
+        shell_inds = []
         for i in range(len(self.radial_values)):
             lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
             shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
             shell_size[i] = torch.sum(shell_ind)
-        return shell_size
+            shell_inds.append(torch.where(shell_ind))
+        return shell_size,shell_inds
 
     def radial_avg_interval(self,radial_index):
         lower_rad_threshold = self.radial_values[radial_index] - 0.5
@@ -51,9 +53,7 @@ class FourierShell():
         #TODO : what should be done with zero freqeuncy component in odd image length?
         shell_avg = torch.zeros(n, len(self.radial_values), dtype=spectrum_signals.dtype ,device=self.device)
         for i in range(shell_avg.shape[1]):
-            lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
-            shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
-            shell_avg[:,i] = torch.sum(spectrum_signals * shell_ind.unsqueeze(0),dim=tuple([-i-1 for i in range(self.dim)])) / torch.sum(shell_ind)
+            shell_avg[:,i] = torch.sum(spectrum_signals[:,*self.shell_inds[i]],dim=-1) / self.shell_size[i]
 
         if(n == 1):
             return shell_avg[0]
@@ -67,15 +67,7 @@ class FourierShell():
     def sum_over_shell(self,shells):
         shells = shells.unsqueeze(0) if shells.ndim == 1 else shells
         n = len(shells)
-        shell_sum = torch.zeros(len(shells),dtype=self.dtype,device=self.device)
-        #TODO: use shell_size to compute the sum
-        for i in range(len(shells[0])):
-            lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
-            shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
-            num_comps_in_shell = torch.sum(shell_ind)
-            for j in range(n):
-                shell_sum[j] += num_comps_in_shell * shells[j][i]
-
+        shell_sum = torch.sum(shells * self.shell_size,dim=-1)
         if(n == 1):
             return shell_sum[0]
         
@@ -87,9 +79,7 @@ class FourierShell():
         n = len(shells)
         fourier_signal = torch.zeros((len(shells),)+(self.L,)*self.dim,dtype=self.dtype,device=self.device)
         for i in range(len(shells[0])):
-            lower_rad_threshold,upper_rad_threshold = self.radial_avg_interval(i)
-            shell_ind = (self.grid_radius > lower_rad_threshold) & (self.grid_radius < upper_rad_threshold)
-            fourier_signal[:,shell_ind] = shells[:,i].unsqueeze(1)
+            fourier_signal[:,*self.shell_inds[i]] = shells[:,i].unsqueeze(1)
 
         if(n == 1):
             return fourier_signal[0]
@@ -144,7 +134,6 @@ def covar_correlate(fourier_eigenvecs1,fourier_eigenvecs2,return_shell_size=Fals
     for i in range(fourier_eigenvecs1.shape[0]):
         s = fourier_shell.avergage_fourier_shell(fourier_eigenvecs1[i] * torch.conj(fourier_eigenvecs2))
         correlate_matrix += s.T @ s.conj()
-
     if(return_shell_size):
         return correlate_matrix,fourier_shell.shell_size
     
@@ -155,11 +144,7 @@ def covar_fsc(eigenvecs1,eigenvecs2):
     eigenvecs2_fft = centered_fft3(eigenvecs2)
 
     correlation = covar_correlate(eigenvecs1_fft,eigenvecs2_fft).real
-    import time
-    s = time.time()
     rpsd1 = covar_correlate(eigenvecs1_fft,eigenvecs1_fft).real
-    s2 = time.time()
-    print(f'COmputing time {s2-s}')
     rpsd2 = covar_correlate(eigenvecs2_fft,eigenvecs2_fft).real 
 
     #Float32 precision might not have the dynamic range to compute the product (since they can be very large). So we normalize the rpsd values by the zero frequency component and correct the normalization at the end

@@ -7,10 +7,11 @@ from aspire.source import Simulation
 from aspire.noise import WhiteNoiseAdder
 
 from cov3d import nufft_plan
-from cov3d.covar_sgd import Covar,cost,cost_fourier_domain,cost_maximum_liklihood,cost_maximum_liklihood_fourier_domain,CovarDataset
+from cov3d.covar_sgd import cost,cost_fourier_domain,cost_maximum_liklihood,cost_maximum_liklihood_fourier_domain,CovarDataset
+from cov3d.covar import Covar
 from cov3d.utils import volsCovarEigenvec,generateBallVoxel
 from cov3d.projection_funcs import vol_forward,centered_fft3
-from cov3d.fsc_utils import rpsd,expand_fourier_shell
+from cov3d.fsc_utils import rpsd,expand_fourier_shell,average_fourier_shell,covar_correlate,FourierShell
 from aspire.operators import RadialCTFFilter,ArrayFilter
 from aspire.utils import Rotation
 
@@ -286,6 +287,23 @@ class TestTorchImpl(unittest.TestCase):
 
         torch.testing.assert_close(naive_cost,efficient_cost, rtol=5e-3,atol=5e-3)
 
+    def test_covar_rpsd(self):
+        eigenvecs1 = self.dataset.vectorsGD.reshape(-1,self.img_size,self.img_size,self.img_size).to(self.device)
+        eigenvecs2 = eigenvecs1 + 0*torch.randn(eigenvecs1.shape,device=self.device)
+
+        eigenvecs1 = centered_fft3(eigenvecs1).reshape(-1,self.img_size**3)
+        eigenvecs2 = centered_fft3(eigenvecs2).reshape(-1,self.img_size**3)
+
+        fourier_covar1 = eigenvecs1.T @ eigenvecs1.conj()
+        fourier_covar2 = eigenvecs2.T @ eigenvecs2.conj()
+
+        s = FourierShell(self.img_size,3,device=self.device)
+        covar_fsc_naive = s.avergage_fourier_shell((fourier_covar1 * fourier_covar2.conj()).reshape(-1,self.img_size,self.img_size,self.img_size))
+        covar_fsc_naive = s.avergage_fourier_shell(covar_fsc_naive.T.reshape(-1,self.img_size,self.img_size,self.img_size))
+
+        covar_fsc_efficient = covar_correlate(eigenvecs1.reshape(-1,self.img_size,self.img_size,self.img_size),eigenvecs2.reshape(-1,self.img_size,self.img_size,self.img_size))
+
+        torch.testing.assert_close(covar_fsc_naive,covar_fsc_efficient,rtol=1e-4,atol=1e-4)
 
 if __name__ == "__main__":
     
