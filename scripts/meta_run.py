@@ -1,5 +1,8 @@
 import os
 import itertools
+import click
+from typing import Any, Dict, List, Union
+from dataclasses import dataclass
 
 DATASET_PATH = "data/scratch_data"
 RUN_COMMANDS = True
@@ -51,6 +54,8 @@ def run_alg(datasets,run_prefix,params,params_description,run_analysis=True):
                 else:
                     print(command)
 
+def filter_datasets(datasets,dataset_names):
+    return {k: [d for d in v if any(name in d['dataset'] for name in dataset_names)] for k, v in datasets.items()}
 
 datasets_L64 = [
     "igg_1d/images/snr0.01/downsample_L64/snr0.01.star",
@@ -82,10 +87,10 @@ gt_dir = [
 gt_latent = [
     "igg_1d/igg_1d_gt_latents.pkl",
     "igg_1d/igg_1d_gt_latents.pkl",
-    None,#TODO: figure out igg_rl latent
+    "igg_rl/igg_rl_gt_latents.pkl",
     None,#TODO: is there GT latent for ribosembly?
     "Spike-MD/gt_latents.pkl",
-    None,
+    None,#TODO: is tehre GT latent for tomotwin
 ]
 
 gt_labels = [
@@ -98,59 +103,94 @@ gt_labels = [
 ]
 datasets_L128 = [dataset.replace("L64", "L128") for dataset in datasets_L64]
 
-dataset_vars = ['dataset','mask','gt_dir','gt_latent','gt_labels']
-dataset_values = [datasets_L64,dataset_masks,gt_dir,gt_latent,gt_labels]
 
-datasets = {}
-#datasets[64] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
-dataset_values[0] = datasets_L128
-datasets[128] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
+@dataclass
+class Experiment:
+    alg_fixed_params: Dict[str, Any]
+    alg_var_params: Union[List[Dict[str, Any]], Dict[str, List[Any]]]
+    run_prefix: str
+    datasets: List[str] = None
 
-
-def reg_scheme_experiment():
-    alg_fixed_params = {
-        'rank' : 15,
-        'lr' : 1e-1,
-        'reg' : 1,
-        'max-epochs' : 20,
-        'batch-size' : 4096,
-        'orthogonal-projection' : False,
-        'nufft-disc' : 'bilinear',
-    }
-
-    alg_var_params = [{
-            'use-halfsets' : [False],
-            'num-reg-update-iters' : [0,2],
+reg_scheme_experiment = Experiment(
+        alg_fixed_params = {
+            'rank' : 15,
+            'lr' : 1e-1,
+            'reg' : 1,
+            'max-epochs' : 20,
+            'batch-size' : 4096,
+            'orthogonal-projection' : False,
+            'nufft-disc' : 'bilinear',
         },
-        {
-            'use-halfsets' : [True],
-            'num-reg-update-iters' : [2],
-        }]
-    run_prefix = 'test_reg_scheme'
+        alg_var_params = [{
+                'use-halfsets' : [False],
+                'num-reg-update-iters' : [0,2],
+            },
+            {
+                'use-halfsets' : [True],
+                'num-reg-update-iters' : [2],
+            }],
+        run_prefix = 'test_reg_scheme'
+    )
 
-    return alg_fixed_params,alg_var_params,run_prefix    
-
-def pre_cryobench_analyze():
+pre_cryobench_analyze = Experiment(
     alg_fixed_params = {
-        'rank' : 15,
+        'rank' : 10,
         'lr' : 1e-1,
         'reg' : 1,
-        'max-epochs' : 20,
+        'max-epochs' : 10,
         'batch-size' : 4096,
         'orthogonal-projection' : False,
         'nufft-disc' : 'bilinear',
         'use-halfsets' : False,
         'num-reg-update-iters' : 2,
         'debug' : None,
-    }
+    },
+    alg_var_params = {
+        'objective-func' : ['ml','ls']
+    },
+    run_prefix = 'obj_func_comparison'
+)
 
-    alg_var_params = {}
-    run_prefix = 'analysis_refactor_test'
+cost_func_reg_experiment = Experiment(
+    alg_fixed_params = {
+        'rank' : 10,
+        'reg' : 1,
+        'max-epochs' : 10,
+        'use-halfsets' : False,
+        'debug' : None,
+    },
+    alg_var_params = {
+        'objective-func' : ['ml','ls'],
+        'reg' : [1,10,100,0.1,1e-2,1e-3],
+        'lr' : [1e-1,1e-2,1e0,1e1],
+    },
+    run_prefix = 'obj_func_reg_experiment',
+    datasets = ['igg_1d/images/snr0.01']
+)
 
-    return alg_fixed_params,alg_var_params,run_prefix  
+@click.command()
+@click.option('--skip-reconstruction',is_flag=True,help='Skip reconstruction step')
+@click.option('--print-run',is_flag=True,help='Print run command instead of running')
+def main(skip_reconstruction,print_run):
+    global RUN_COMMANDS,gt_dir
+    if(print_run):
+        RUN_COMMANDS = False
+
+    if(skip_reconstruction):
+        gt_dir = [None for _ in gt_dir]
+
+    dataset_vars = ['dataset','mask','gt_dir','gt_latent','gt_labels']
+    dataset_values = [datasets_L64,dataset_masks,gt_dir,gt_latent,gt_labels]
+    datasets = {}
+    #datasets[64] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
+    dataset_values[0] = datasets_L128
+    datasets[128] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
+
+    exp = cost_func_reg_experiment
+    alg_params_list,alg_param_description = generate_alg_params(exp.alg_fixed_params, exp.alg_var_params)
+    datasets_to_run = datasets if exp.datasets is None else filter_datasets(datasets,exp.datasets)
+    run_alg(datasets_to_run, exp.run_prefix, alg_params_list,alg_param_description)
 
 
-alg_fixed_params,alg_var_params,run_prefix = pre_cryobench_analyze()
-alg_params_list,alg_param_description = generate_alg_params(alg_fixed_params, alg_var_params)
-run_alg(datasets, run_prefix, alg_params_list,alg_param_description)
-
+if __name__ == "__main__":
+    main()
