@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 import os
 from umap import UMAP
 from sklearn.cluster import KMeans
@@ -7,7 +8,7 @@ import pickle
 import click
 from aspire.volume import Volume
 from cov3d.recovar_utils import recovarReconstructFromEmbedding
-
+from cov3d.fsc_utils import covar_fsc
 
 
 def create_scatter_figure(coords,cluster_coords,labels):
@@ -39,6 +40,23 @@ def create_pc_figure(pc_coords,cluster_coords,labels=None,num_pcs = 5):
             figures[f'pc_{i}_{j}'] = fig
 
     return figures
+
+def create_covar_fsc_figure(fsc):
+    fig,axs = plt.subplots(1,2,figsize=(12,6))
+    im1 = axs[0].imshow(fsc,vmin=0,vmax=1)
+    fsc_mean = np.mean(fsc)
+    axs[0].set_title('Covar FSC - entry mean: {:.3f}'.format(fsc_mean))
+    axs[0].set_xlabel('Resolution index')
+    axs[0].set_ylabel('Resolution index')
+    fig.colorbar(im1, ax=axs[0])
+
+    fsc_diag = np.diag(fsc)
+    fsc_diag_mean = np.mean(fsc_diag)
+    axs[1].plot(fsc_diag)
+    axs[1].set_title('Covar FSC diagonal - mean: {:.3f}'.format(fsc_diag_mean))
+    axs[1].set_xlabel('Resolution index')
+    axs[1].set_ylabel('FSC')
+    return fig
 
 @click.command()
 @click.option('-i','--result-data',type=str,help='path to pkl output of the algorithm')
@@ -87,6 +105,20 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,sk
         if(not skip_reconstruction):
             #TODO: handle GT reconstruction - right now recovarReconstructomFromEmbedding will still use est embedding
             recovarReconstructFromEmbedding(result_data,os.path.join(output_dir,analysis_dir),analysis_data['cluster_coords'])
+
+    if(analyze_with_gt and data.get('eigenvectors_GT') is not None):
+        #Compare covariance FSC between ground truth and estimated eigenvectors
+        torch_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        eigenvecs_est = data['eigen_est'] * (data['eigenval_est']**0.5).reshape(-1,1,1,1)
+        eigenvecs_GT = data['eigenvectors_GT'] * (data['eigenvals_GT']**0.5).reshape(-1,1,1,1)
+        fsc_result = covar_fsc(torch.tensor(eigenvecs_est,device=torch_device),torch.tensor(eigenvecs_GT,device=torch_device))
+
+        L = eigenvecs_est.shape[-1]
+        fsc_result = fsc_result.cpu().numpy()[:L//2,:L//2] 
+        covar_fsc_figure = create_covar_fsc_figure(fsc_result)
+        figure_path = os.path.join(output_dir,analysis_output_dir[0],f'covar_GT_fsc.jpg')
+        covar_fsc_figure.savefig(figure_path)
+        figure_paths['covar_GT_fsc'] = figure_path
 
     return figure_paths
 
