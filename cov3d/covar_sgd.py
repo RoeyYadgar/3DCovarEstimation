@@ -259,9 +259,6 @@ class CovarTrainer():
     def noise_var(self):
         return self.dataset.noise_var
     
-    def covar_vectors(self):
-        return self.covar.get_vectors()
-
     def run_batch(self,images,nufft_plans,filters):
         self.optimizer.zero_grad()
         cost_val = self.cost_func(self._covar(dummy_var=None),images,nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
@@ -294,10 +291,9 @@ class CovarTrainer():
 
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
-                    vectors = self.covar_vectors()
                     self.log_training()
                     pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
-                    pbar_description += f" , vecs norm : {torch.norm(vectors)}"
+                    pbar_description += f" , vecs norm : {torch.norm(self.covar.get_vectors())}"
                     if(self.vectorsGD is not None):
                         #TODO : update log metrics, use principal angles
                         cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
