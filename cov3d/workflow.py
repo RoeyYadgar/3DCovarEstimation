@@ -32,6 +32,9 @@ def reconstructClass(starfile_path,vol_path,overwrite = False):
     '''
     starfile = aspire.storage.StarFile(starfile_path)
     classes = np.unique(starfile['particles']['_rlnClassNumber'])
+    if(len(classes) == 1):
+        print("Warning : rlnClassNumber contains only one class")
+        return None
     classes = classes[np.where(classes.astype(np.float32)!=-1)] #unindentified images are labeled with class = -1 
     img_size = int(float(starfile['optics']['_rlnImageSize'][0]))
     
@@ -108,7 +111,7 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
 
         if(class_vols is None and states_in_source): #If class_vols was not provided but source has GT states use them to reconstruct GT
-            #Estimate ground truth states #TODO : should only be done if ground truth labels exist and some flag is given
+            #Estimate ground truth states
             class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
         elif(class_vols is not None): #Downsample ground truth volumes
             if(class_vols.resolution != L):
@@ -176,7 +179,7 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
                             'lr' : 1e-1,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                             'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
                             'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
-                            'num_reg_update_iters' : 2, 'use_halfsets' : True,'objective_func' : 'ml'}
+                            'num_reg_update_iters' : 2, 'use_halfsets' : False,'objective_func' : 'ml'}
     
     #TODO : change upsampling_factor & objective_func into a training argument and pass that into Covar's methods instead of at constructor
     if('fourier_upsampling' in training_kwargs.keys()):
