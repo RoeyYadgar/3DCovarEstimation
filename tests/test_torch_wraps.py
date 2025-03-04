@@ -7,12 +7,12 @@ from aspire.volume import Volume,LegacyVolume,rotated_grids
 from aspire.utils import Rotation
 from aspire.source import Simulation
 from aspire.operators import RadialCTFFilter
-from aspire.utils import Rotation
 from aspire.nufft import nufft as aspire_nufft
 from aspire.nufft import anufft as aspire_anufft
 
 from cov3d import nufft_plan
 from cov3d import projection_funcs
+from cov3d.poses import PoseModule
 
 class TestTorchWraps(unittest.TestCase):
     
@@ -241,6 +241,15 @@ class TestTorchWraps(unittest.TestCase):
         torch.testing.assert_close(vol_forward_grad,batch_vol_forward_grad,rtol=5e-3,atol=5e-3)
 
 
+    def test_pose_module(self):
+        rotations = self.sim.rotations
+        init_rotvec = torch.tensor(Rotation.from_matrix(rotations).as_rotvec(),dtype=torch.float32)
+        pose_module = PoseModule(init_rotvec,self.img_size)
+        pose_module = pose_module.to(self.device)
+        index = torch.tensor([5,13,192,153])
+        pts_rot = torch.tensor(self.pts_rot.copy(),device=self.device).reshape(3,-1,self.img_size**2)[:,index].transpose(0,1)
+        module_pts_rot = pose_module(index)
+        torch.testing.assert_close(pts_rot,module_pts_rot,rtol=1e-3,atol=1e-3)
 
 if __name__ == "__main__":
     
