@@ -30,7 +30,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 1024,start_ind = None
 
     pbar = tqdm(total=math.ceil(coords.shape[0]/batch_size), desc=f'Computing latent coordinates')
     for i in range(0,coords.shape[0],batch_size):
-        images,pts_rot,filter_indices = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
+        images,pts_rot,filter_indices,_ = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
         num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)
@@ -87,7 +87,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
 
     pbar = tqdm(total=math.ceil(coords.shape[0]/batch_size), desc=f'Computing latent coordinates')
     for i in range(0,coords.shape[0],batch_size):
-        images,pts_rot,filter_indices = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
+        images,pts_rot,filter_indices,_ = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
         num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)

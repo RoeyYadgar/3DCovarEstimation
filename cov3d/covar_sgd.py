@@ -6,8 +6,8 @@ from aspire.utils import support_mask,fuzzy_mask
 import numpy as np
 from tqdm import tqdm
 import copy
-from aspire.volume import Volume
-from aspire.volume import rotated_grids
+from aspire.volume import Volume,rotated_grids
+from aspire.utils import Rotation
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
@@ -16,6 +16,7 @@ from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fou
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask=None,invert_data = False):
         self.resolution = src.L
+        self.rot_vecs = torch.tensor(Rotation(src.rotations).as_rotvec().astype(src.rotations.dtype))
         self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,src.n,self.resolution**2)) #TODO : replace this with torch affine_grid with size (N,1,L,L,1)
         self.pts_rot = self.pts_rot.transpose(0,1) 
         self.pts_rot = (torch.remainder(self.pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
@@ -30,7 +31,10 @@ class CovarDataset(Dataset):
         for i in range(num_filters):
             self.unique_filters[i] = torch.tensor(src.unique_filters[i].evaluate_grid(src.L))
    
-        self.images = torch.tensor(self.preprocess_images(src,mean_volume))
+        if(mean_volume is not None):
+            self.images = torch.tensor(self.preprocess_images(src,mean_volume))
+        else:
+            self.images = torch.tensor(src.images[:].asnumpy())
         self.estimate_filters_gain()
         self.estimate_signal_var()
         self.mask_images(mask)
@@ -45,7 +49,7 @@ class CovarDataset(Dataset):
         return len(self.images)
     
     def __getitem__(self,idx):
-        return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx]
+        return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx],idx
     
     def preprocess_images(self,src,mean_volume,batch_size=512):
         device = get_torch_device()
@@ -123,7 +127,7 @@ class CovarDataset(Dataset):
         nufft_plan = NufftPlan((self.resolution,)*3,batch_size=num_vols,dtype=vol.dtype,device = device)
 
         for i in range(len(dataset)):
-            _,pts_rot,filter_ind = dataset[i]
+            _,pts_rot,filter_ind,_ = dataset[i]
             pts_rot = pts_rot.to(device)
             filt = dataset.unique_filters[filter_ind].to(device)
             nufft_plan.setpts(pts_rot)
@@ -197,7 +201,7 @@ class CovarDataset(Dataset):
         nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=self.mask.dtype,device=device)
 
         for i in range(0,len(self.images),batch_size):
-            _,pts_rot,_ = self[i:(i+batch_size)]
+            _,pts_rot,_,_ = self[i:(i+batch_size)]
             pts_rot = pts_rot.to(device)
             nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
             projected_mask = vol_forward(self.mask,nufft_plan).squeeze(1)
@@ -259,9 +263,10 @@ class CovarTrainer():
     def noise_var(self):
         return self.dataset.noise_var
     
-    def run_batch(self,images,nufft_plans,filters):
+    def run_batch(self,images,pts_rot,filters):
+        self.nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
         self.optimizer.zero_grad()
-        cost_val = self.cost_func(self._covar(dummy_var=None),images,nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
+        cost_val = self.cost_func(self._covar(dummy_var=None),images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
         cost_val.backward()
         #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
         self.optimizer.step()
@@ -271,6 +276,13 @@ class CovarTrainer():
 
         return cost_val
 
+    def prepare_batch(self,batch):
+        images,pts_rot,filter_indices,_ = batch
+        images = images.to(self.device)
+        pts_rot = pts_rot.to(self.device)
+        filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
+        return images,pts_rot,filters
+
     def run_epoch(self,epoch):
         if(self.isDDP):
             self.train_data.sampler.set_epoch(epoch)
@@ -279,13 +291,8 @@ class CovarTrainer():
 
         self.cost_in_epoch = torch.tensor(0,device=self.device,dtype=torch.float32)
         for batch_ind,data in enumerate(self.train_data):
-            images,pts_rot,filter_indices = data
-            num_ims = images.shape[0]
-            pts_rot = pts_rot.to(self.device)
-            images = images.to(self.device)
-            filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
-            self.nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-            cost_val = self.run_batch(images,self.nufft_plans,filters)
+            images,pts_rot,filters = self.prepare_batch(data)
+            cost_val = self.run_batch(images,pts_rot,filters)
             with torch.no_grad():
                 self.cost_in_epoch += cost_val * self.batch_size
 
@@ -309,7 +316,9 @@ class CovarTrainer():
 
         if(self.logTraining):
             print("Total cost value in epoch : {:.2e}".format(self.cost_in_epoch.item()))
-            
+
+    def get_trainable_parameters(self,lr,**kwargs):
+        return [{'params' : self.covar.parameters() , 'lr' : lr,**kwargs}]
     
     def train(self,max_epochs,**training_kwargs):
         self.setup_training(**training_kwargs)
@@ -336,9 +345,9 @@ class CovarTrainer():
                 #TODO : expirmantation suggests that normalizng lr by resolution is not needed. why?
                 #lr /= self.covar.resolution #gradient of cost function scales linearly with L
                 #TODO : should lr scale by L^2.5 when performing optimization in fourier domain? since gradient scales with L^4 and volume scales with L^1.5
-            self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
+            self.optimizer = torch.optim.SGD(self.get_trainable_parameters(lr,momentum=momentum))
         elif(optim_type == 'Adam'):
-            self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
+            self.optimizer = torch.optim.Adam(self.get_trainable_parameters(lr))
         self.lr = lr
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
 
@@ -422,6 +431,61 @@ class CovarTrainer():
         os.makedirs(savedir,exist_ok=True)
         ckp = self.results_dict()
         torch.save(ckp,self.save_path)
+
+
+class CovarPoseTrainer(CovarTrainer):
+    def __init__(self,covar,train_data,device,mean,pose,save_path = None,training_log_freq = 50):
+        super().__init__(covar,train_data,device,save_path,training_log_freq)
+        self.mean = mean.to(self.device)
+        self.pose = pose.to(self.device)
+        self.pose_lr_ratio = 1e-2
+
+
+    
+    def get_trainable_parameters(self,lr,**kwargs):
+        trainable_params =  super().get_trainable_parameters(lr,**kwargs) + [
+            {'params' : self.mean.parameters(),'lr' : lr,**kwargs},
+            {'params' : self.pose.parameters(),'lr' : lr * self.pose_lr_ratio,**kwargs}
+        ]
+        return trainable_params
+
+    def restart_optimizer(self):
+        for i,param_group in enumerate(self.optimizer.param_groups):
+            param_group['lr'] = self.lr if i != 2 else self.lr * self.pose_lr_ratio
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
+
+    def prepare_batch(self,batch):
+        images,_,filter_indices,idx = batch
+        images = images.to(self.device)
+        filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
+        return images,idx,filters
+
+    def run_batch(self,images,idx,filters):
+        self.optimizer.zero_grad()
+        self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
+        images -= vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain).squeeze(1)
+        #images -= vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters).squeeze(1)
+        cost_val = self.cost_func(self._covar(dummy_var=None),images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
+        cost_val.backward()
+        self.optimizer.step()
+
+        if(self.use_orthogonal_projection):
+            self.covar.orthogonal_projection()
+
+        return cost_val
+
+    def setup_training(self, **kwargs):
+        super().setup_training(**kwargs)
+        if(self.isDDP):
+            self.mean.module.init_grid_correction(kwargs.get('nufft_disc'))
+        else:
+            self.mean.init_grid_correction(kwargs.get('nufft_disc'))
+
+    def results_dict(self):
+        ckp = super().results_dict()
+        ckp['mean'] = self.mean.state_dict()
+        ckp['pose'] = self.pose.state_dict()
+        return ckp
 
 
 def update_fourier_reg(trainer1,trainer2):
@@ -642,7 +706,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
     nufft_plans = NufftPlan(batch_size,(L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device)
     cost_val = 0
     for i in range(0,len(dataset),batch_size):
-        images,pts_rot,filter_indices = dataset[i:i+batch_size]
+        images,pts_rot,filter_indices,_ = dataset[i:i+batch_size]
         pts_rot = pts_rot.to(device)
         images = images.to(device)
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
@@ -653,16 +717,21 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
     return cost_val/len(dataset)
 
 
-def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
+def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = None,pose=None,savepath = None,**kwargs):
     num_workers = min(4,os.cpu_count()-1)
     use_halfsets = kwargs.pop('use_halfsets')
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
+    if(optimize_pose and use_halfsets):
+        raise ValueError('Optimizing pose while using halfsets regularization scheme is not supported yet')
     if(not use_halfsets):
         dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
         #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
-        trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
+        if(not optimize_pose):
+            trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath)
+        else:            
+            trainer = CovarPoseTrainer(covar_model,dataloader,covar_model.device,mean_model,pose,savepath)
 
         num_epochs = kwargs.pop('max_epochs')
         trainer.setup_training(**kwargs)

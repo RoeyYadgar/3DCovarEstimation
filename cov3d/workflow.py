@@ -9,7 +9,8 @@ from sklearn.metrics import auc
 import click
 from cov3d.utils import *
 from cov3d.covar_sgd import CovarDataset,trainCovar
-from cov3d.covar import Covar
+from cov3d.covar import Covar,Mean
+from cov3d.poses import PoseModule
 from cov3d.covar_distributed import trainParallel
 from cov3d.wiener_coords import latentMAP,mahalanobis_threshold
 
@@ -93,7 +94,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',debug = False,**training_kwargs):
+def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
@@ -151,7 +152,8 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         if(invert_data):
             print('inverting dataset sign')
             (-1 * mean_est).save(path.join(result_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
-        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask,invert_data = invert_data)
+        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est if (not optimize_pose) else None, #When optimizing pose is set to true mean volume should not be substracted from images
+                                mask=mask,invert_data = invert_data)
         if(states_in_source):
             dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
         dataset.starfile = starfile
@@ -163,15 +165,16 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         print(f"Reading pickled dataset from {dataset_path}")
         with open(dataset_path,'rb') as fid:
             dataset = pickle.load(fid)
+        mean_est = Volume.load(path.join(result_dir,'mean_est.mrc'))
         print(f"Dataset loaded successfuly")
 
-    covar_precoessing_output = covar_processing(dataset,rank,result_dir,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,rank,result_dir,mean_est,optimize_pose,**training_kwargs)
     torch.cuda.empty_cache()
     return covar_precoessing_output
 
     
 
-def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
+def covar_processing(dataset,covar_rank,result_dir,mean_volume_est,optimize_pose=False,**training_kwargs):
     L = dataset.images.shape[-1]
 
     #Perform optimization for eigenvectors estimation
@@ -192,13 +195,23 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
     optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
     cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
                 fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
+    if(optimize_pose):
+        mean = Mean(torch.tensor(mean_volume_est.asnumpy()),L,
+                    fourier_domain=optimize_in_fourier_domain,
+                    upsampling_factor=upsampling_factor)
+        pose = PoseModule(dataset.rot_vecs,L)
+    else:
+        mean = None
+        pose = None
         
     if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
         trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+            mean_model=mean,pose=pose,optimize_pose=optimize_pose,
             **default_training_kwargs)
     else:
         cov = cov.to(get_torch_device())
         trainCovar(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+            mean_model=mean,pose=pose,optimize_pose=optimize_pose,
             **default_training_kwargs)
     
     
