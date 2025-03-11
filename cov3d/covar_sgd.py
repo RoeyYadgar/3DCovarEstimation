@@ -85,6 +85,7 @@ class CovarDataset(Dataset):
         subset.images = subset.images[idx]
         subset.pts_rot = subset.pts_rot[idx]
         subset.filter_indices = subset.filter_indices[idx]
+        subset.rot_vecs = subset.rot_vecs[idx]
 
         return subset
     
@@ -438,10 +439,20 @@ class CovarPoseTrainer(CovarTrainer):
         super().__init__(covar,train_data,device,save_path,training_log_freq)
         self.mean = mean.to(self.device)
         self.pose = pose.to(self.device)
-        self.pose_lr_ratio = 1e-2
+        self.pose_lr_ratio = 1e-1
+        self.set_pose_grad_req(False)
 
-
+    def get_mean_module(self):
+        return self.mean if not self.isDDP else self.mean.module
     
+    def get_pose_module(self):
+        return self.pose if not self.isDDP else self.pose.module
+    
+    def set_pose_grad_req(self,grad):
+        self.get_mean_module().volume.requires_grad = grad
+        self.get_pose_module().rotvec.requires_grad = grad
+        
+
     def get_trainable_parameters(self,lr,**kwargs):
         trainable_params =  super().get_trainable_parameters(lr,**kwargs) + [
             {'params' : self.mean.parameters(),'lr' : lr,**kwargs},
@@ -463,9 +474,8 @@ class CovarPoseTrainer(CovarTrainer):
     def run_batch(self,images,idx,filters):
         self.optimizer.zero_grad()
         self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
-        images -= vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain).squeeze(1)
-        #images -= vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters).squeeze(1)
-        cost_val = self.cost_func(self._covar(dummy_var=None),images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
+        images_zero_mean = images - vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain).squeeze(1)
+        cost_val = self.cost_func(self._covar(dummy_var=None),images_zero_mean,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
         cost_val.backward()
         self.optimizer.step()
 
@@ -476,15 +486,12 @@ class CovarPoseTrainer(CovarTrainer):
 
     def setup_training(self, **kwargs):
         super().setup_training(**kwargs)
-        if(self.isDDP):
-            self.mean.module.init_grid_correction(kwargs.get('nufft_disc'))
-        else:
-            self.mean.init_grid_correction(kwargs.get('nufft_disc'))
+        self.get_mean_module().init_grid_correction(kwargs.get('nufft_disc'))
 
     def results_dict(self):
         ckp = super().results_dict()
-        ckp['mean'] = self.mean.state_dict()
-        ckp['pose'] = self.pose.state_dict()
+        ckp['mean'] = self.get_mean_module().state_dict()
+        ckp['pose'] = self.get_pose_module().state_dict()
         return ckp
 
 
@@ -544,7 +551,7 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     return new_fourier_reg_tensor
 
 
-def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
+def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = vols.shape[-1]
@@ -553,17 +560,22 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
     images = images.reshape((batch_size,1,-1))
     projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
-    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2) #This term is constant with respect to volumes
+    
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2))
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2))
     
     cost_val = (- 2 * torch.sum(torch.pow(images_projvols_term,2),dim=(1,2))
-                + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2))) # +torch.pow(norm_squared_images,2) term is constant
+                + torch.sum(torch.pow(projvols_prod_term,2),dim=(1,2)))
     
     #Add noise cost terms
     norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2)
-    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)) #-2*noise_var*norm_squared_images+(noise_var * L) ** 2 #Term is constant
-    
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)) 
+
+    if(apply_mean_const_term):
+        norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
+        cost_val += torch.pow(norm_squared_images,2)
+        cost_val -= 2*noise_var*norm_squared_images+(noise_var * L) ** 2
+
     cost_val = torch.mean(cost_val,dim=0)
             
     if(fourier_reg is not None and reg_scale != 0):
@@ -576,7 +588,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
 
     return cost_val
 
-def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None):
+def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = images.shape[-1]
@@ -596,10 +608,14 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
     inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
     Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
     Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
-    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2),Q_projcted_images_transformed).squeeze() # +1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
+    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2),Q_projcted_images_transformed).squeeze()
     projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
 
-    ml_noise_term = torch.logdet(projected_eigen_covar) # +(L**2 - rank) * torch.log(noise_var) term which is constant
+    ml_noise_term = torch.logdet(projected_eigen_covar)
+
+    if(apply_mean_const_term):
+        ml_exp_term += 1/noise_var * torch.norm(images,dim=(1,2)) ** 2
+        #ml_noise_term += (L**2 - rank) * torch.log(noise_var)
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
 
@@ -614,7 +630,7 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
 
 
 #TODO : merge this into a single function in cost
-def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None):
+def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False):
     batch_size = images.shape[0]
     #vols can either be a 2-tuple of (real,imag) tensors or a complex tensor
     rank = vols[0].shape[0] if isinstance(vols,tuple) else vols.shape[0]
@@ -625,16 +641,21 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     images = images.reshape((batch_size,1,-1))
     projected_vols = projected_vols.reshape((batch_size,rank,-1))
 
-    #norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2) #This term is constant with respect to volumes
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2).conj())
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2).conj())
     
     cost_val = (- 2 * torch.sum(torch.pow(images_projvols_term.abs(),2),dim=(1,2))
-                + torch.sum(torch.pow(projvols_prod_term.abs(),2),dim=(1,2))) #+torch.pow(norm_squared_images,2) term is constant
+                + torch.sum(torch.pow(projvols_prod_term.abs(),2),dim=(1,2)))
     
     #Add noise cost terms
     norm_squared_projvols = torch.diagonal(projvols_prod_term,dim1=1,dim2=2).real #This should be real already but this ensures the dtype gets actually converted
-    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1)) #-2*noise_var*norm_squared_images+(noise_var * L) ** 2 #Term is constant
+    cost_val += 2 * noise_var * (torch.sum(norm_squared_projvols,dim=1))
+
+    if(apply_mean_const_term):
+        norm_squared_images = torch.pow(torch.norm(images,dim=(1,2)),2)
+        cost_val += torch.pow(norm_squared_images,2)
+        cost_val -= 2*noise_var*norm_squared_images+(noise_var * L) ** 2
+
     cost_val = torch.mean(cost_val,dim=0)
 
     if(fourier_reg is not None and reg_scale != 0):
@@ -647,7 +668,7 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
 
     return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 
-def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None):
+def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = images.shape[-1]
@@ -668,11 +689,14 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
     Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
     Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
-    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2).conj(),Q_projcted_images_transformed).squeeze()  #+1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
-    #ml_exp_term = ml_exp_term * (L/2)**4 #TODO: for some reason a factor of (L/2)**4 is missing from the computation. figure that out
+    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2).conj(),Q_projcted_images_transformed).squeeze()
     projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
 
-    ml_noise_term = torch.logdet(projected_eigen_covar)  #+(L**2 - rank) * torch.log(torch.tensor(noise_var)) term which is constant
+    ml_noise_term = torch.logdet(projected_eigen_covar)
+
+    if(apply_mean_const_term):
+        ml_exp_term += 1/noise_var * torch.norm(images,dim=(1,2)) ** 2
+        #ml_noise_term += (L**2 - rank) * torch.log(noise_var)
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
 
