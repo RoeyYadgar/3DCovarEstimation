@@ -11,7 +11,7 @@ from aspire.volume import rotated_grids
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
-from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc
+from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc,covar_fsc
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask=None,invert_data = False):
@@ -184,6 +184,7 @@ class CovarDataset(Dataset):
 
     def mask_images(self,mask,batch_size=512):
         if(mask is None):
+            self.mask = None
             return
 
         device = get_torch_device()
@@ -235,6 +236,7 @@ class CovarTrainer():
             self.log_epoch_ind = []
             self.log_cosine_sim = []
             self.log_fro_err = []
+            self.covar_fsc_mean = []
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
@@ -298,7 +300,7 @@ class CovarTrainer():
                         #TODO : update log metrics, use principal angles
                         cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
                         fro_err_val = self.log_fro_err[-1]
-                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
+                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val) + ", covar fsc mean : {:.2e}".format(self.covar_fsc_mean[-1])
                         #pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
                     pbar.set_description(pbar_description)
 
@@ -316,12 +318,11 @@ class CovarTrainer():
         self.train_epochs(max_epochs)
         self.complete_training()
 
-    def setup_training(self,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,nufft_disc = None,orthogonal_projection = False,scale_params = True,objective_func='ml'):
+    def setup_training(self,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 1,nufft_disc = 'bilinear',orthogonal_projection = False,scale_params = True,objective_func='ml'):
         self.use_orthogonal_projection = orthogonal_projection
-        self.gamma_reg = gamma_reg
 
         if(lr is None):
-            lr = 1e0 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
+            lr = 1e-1 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
 
         #if(scale_params):
             #reg *= self.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
@@ -370,7 +371,6 @@ class CovarTrainer():
             self.epoch_index = epoch
             self.run_epoch(epoch)
 
-            self.reg_scale *= self.gamma_reg #TODO : remove gamma_reg
             self.scheduler.step(self.cost_in_epoch)
             print(f'New learning rate set to {self.scheduler.get_last_lr()}')
 
@@ -400,11 +400,14 @@ class CovarTrainer():
         if(self.vectorsGD != None):
             with torch.no_grad():
                 #self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.cpu().numpy()))
+                L = self.covar.resolution
                 vectors = self.covar.get_vectors_spatial_domain()
+                self.covar_fsc_mean.append((covar_fsc(self.vectorsGD.reshape((self.vectorsGD.shape[0],L,L,L)),vectors))[:L//2,:L//2].mean().cpu().numpy())
                 vectors = vectors.reshape((vectors.shape[0],-1))
-                self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),self.vectorsGD))
                 vectorsGD = self.vectorsGD.reshape((self.vectorsGD.shape[0],-1))
+                self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),self.vectorsGD))
                 self.log_fro_err.append((frobeniusNormDiff(vectorsGD,vectors)/frobeniusNorm(vectorsGD)).cpu().numpy())
+                
 
 
     def results_dict(self):
@@ -414,6 +417,7 @@ class CovarTrainer():
         ckp['log_epoch_ind'] = self.log_epoch_ind
         ckp['log_cosine_sim'] = self.log_cosine_sim
         ckp['log_fro_err'] = self.log_fro_err
+        ckp['covar_fsc_mean'] = self.covar_fsc_mean
 
         return ckp
 

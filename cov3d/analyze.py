@@ -18,8 +18,9 @@ def create_scatter_figure(coords,cluster_coords,labels):
     x_delta = x_max - x_min
     y_min, y_max = np.percentile(coords[:,1], [0.5, 99.5])
     y_delta = y_max-y_min
-    for i in range(cluster_coords.shape[0]):
-        plt.annotate(str(i),(cluster_coords[i,0],cluster_coords[i,1]),fontweight='bold')
+    if(cluster_coords is not None):
+        for i in range(cluster_coords.shape[0]):
+            plt.annotate(str(i),(cluster_coords[i,0],cluster_coords[i,1]),fontweight='bold')
     plt.xlim(x_min - 0.1 * x_delta, x_max + 0.1 * x_delta)
     plt.ylim(y_min - 0.1 * y_delta, y_max + 0.1 * y_delta)
     return fig
@@ -32,9 +33,13 @@ def create_umap_figure(umap_coords,cluster_coords,labels=None):
 
 def create_pc_figure(pc_coords,cluster_coords,labels=None,num_pcs = 5):
     figures = {}
+    num_pcs = min(num_pcs,pc_coords.shape[1])
     for i in range(num_pcs):
         for j in range(i+1,num_pcs):
-            fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels)
+            if(cluster_coords is not None):
+                fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels)
+            else:
+                fig = create_scatter_figure(pc_coords[:,[i,j]],None,labels)
             plt.xlabel(f'PC {i}')
             plt.ylabel(f'PC {j}')
             figures[f'pc_{i}_{j}'] = fig
@@ -52,8 +57,9 @@ def create_covar_fsc_figure(fsc):
 
     fsc_diag = np.diag(fsc)
     fsc_diag_mean = np.mean(fsc_diag)
+    fsc_cutoff = np.max(np.where(fsc > 0.143))
     axs[1].plot(fsc_diag)
-    axs[1].set_title('Covar FSC diagonal - mean: {:.3f}'.format(fsc_diag_mean))
+    axs[1].set_title('Covar FSC diagonal - mean: {:.3f}, \n Threshold=0.143 cutoff: {:.3f}'.format(fsc_diag_mean, fsc_cutoff))
     axs[1].set_xlabel('Resolution index')
     axs[1].set_ylabel('FSC')
     return fig
@@ -73,8 +79,9 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,sk
         data = pickle.load(f)
 
     if(gt_labels is not None):
-        with open(gt_labels,'rb') as f:
-            gt_labels = pickle.load(f)
+        if(isinstance(gt_labels,str)):
+            with open(gt_labels,'rb') as f:
+                gt_labels = pickle.load(f)
     else:
         gt_labels = None
 
@@ -124,13 +131,18 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,sk
 
 def analyze_coordinates(coords,num_clusters,gt_labels):
 
-    kmeans = KMeans(n_clusters=num_clusters)
-    kmeans.fit(coords)
-    cluster_coords = kmeans.cluster_centers_
-
     reducer = UMAP(n_components=2)
     umap_coords = reducer.fit_transform(coords)
-    umap_cluster_coords = reducer.transform(cluster_coords)
+
+    if(num_clusters != 0):
+        kmeans = KMeans(n_clusters=num_clusters)
+        kmeans.fit(coords)
+        cluster_coords = kmeans.cluster_centers_
+        umap_cluster_coords = reducer.transform(cluster_coords)
+    
+    else:
+        cluster_coords = None
+        umap_cluster_coords = None
 
     figures = {
         **create_umap_figure(umap_coords,umap_cluster_coords,gt_labels),

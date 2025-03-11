@@ -177,7 +177,7 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
     #Perform optimization for eigenvectors estimation
     default_training_kwargs = {'batch_size' : 4096, 'max_epochs' : 20,
                             'lr' : 1e-1,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
-                            'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
+                            'reg' : 1,
                             'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
                             'num_reg_update_iters' : 2, 'use_halfsets' : False,'objective_func' : 'ml'}
     
@@ -230,7 +230,8 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
     
     with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
         pickle.dump(data_dict,fid)
-    aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
+    if(dataset.mask is not None):
+        aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
     #TODO: save eigenvolumes as MRC
 
     training_data = torch.load(path.join(result_dir,'training_results.bin'))
