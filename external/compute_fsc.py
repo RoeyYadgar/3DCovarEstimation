@@ -15,7 +15,6 @@ from glob import glob
 
 ROOTDIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.append(os.path.join(ROOTDIR, "methods", "recovar"))
-from recovar import dataset, embedding, output
 
 sys.path.append(os.path.join(ROOTDIR, "fsc"))
 from CryoBench.metrics.fsc.utils import volumes, interface
@@ -45,32 +44,46 @@ def add_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         dest="gt_labels",
         help="Path to pkl file containing ground truth labels"        
     )
+    parser.add_argument(
+        "--use-gt-dir-as-label",
+        type=bool,
+        dest='use_gt_dir_label',
+        help="Whether to assume GT vols in gt-dir have the same order as images - in this case they will be used instead of gt-labels"
+    )
 
     return parser
 
 
 def main(args: argparse.Namespace) -> None:
     #TODO: get Apix from star file
-    """Running the script to get FSCs across conformations produced by RECOVAR."""
+    """Running the script to get FSCs across conformations."""
 
     results_dump = os.path.join(args.input_dir, "recorded_data.pkl")
     with open(results_dump,'rb') as f:
         result = pickle.load(f)
     zs = result['coords_est']
-    with open(args.gt_labels,'rb') as f:
-        gt_labels = pickle.load(f)
-    unique_labels = np.unique(gt_labels)
-    indices_per_unique_state = [np.where(gt_labels == v)[0] for v in unique_labels]
-    random_index_per_state = np.array([np.random.choice(index_set) for index_set in indices_per_unique_state])
+    gt_vols = sorted(glob(os.path.join(args.gt_dir, "*.mrc")), key=numfile_sortkey)
+
+    if('Spike-MD' in args.gt_dir): #Cryobench's Spike-MD dataset is treated differently -  As each image comes from a unique conformation
+        args.use_gt_dir_label = True 
+
+    if(not args.use_gt_dir_label):
+        with open(args.gt_labels,'rb') as f:
+            gt_labels = pickle.load(f)
+        unique_labels = np.unique(gt_labels)
+        indices_per_unique_state = [np.where(gt_labels == v)[0] for v in unique_labels]
+        random_index_per_state = np.array([np.random.choice(index_set) for index_set in indices_per_unique_state])
+    else:
+        random_index_per_state = np.arange(len(gt_vols))
     
     z_array = zs[random_index_per_state]
-    gt_vols = sorted(glob(os.path.join(args.gt_dir, "*.mrc")), key=numfile_sortkey)
+    
 
     z_array = z_array[:args.num_vols]
     gt_vols = gt_vols[:args.num_vols]
 
 
-    output.mkdir_safe(args.outdir)
+    os.makedirs(args.outdir,exist_ok=True)
     log_file = os.path.join(args.outdir, "run.log")
     if os.path.exists(log_file) and not args.overwrite:
         logger.info("run.log file exists, skipping...")

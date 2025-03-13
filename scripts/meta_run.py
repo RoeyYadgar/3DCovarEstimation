@@ -71,7 +71,7 @@ dataset_masks = [
     "igg_1d/init_mask/mask.mrc",
     "igg_rl/init_mask/mask.mrc",
     "Ribosembly/init_mask/mask.mrc",
-    "Spike-MD/init_mask/mask.mrc",
+    "Spike-MD/init_mask/mask_128.mrc",
     "Tomotwin-100/init_mask/mask.mrc"
 ]
 
@@ -80,7 +80,7 @@ gt_dir = [
     "igg_1d/vols/128_org",
     "igg_rl/vols/128_org",
     "Ribosembly/vols/128_org",
-    None, #Why is there no GT states for spike md?
+    "Spike-MD/all_vols",
     "Tomotwin-100/vols/128_org",
 ]
 
