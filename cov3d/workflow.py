@@ -93,7 +93,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',debug = False,**training_kwargs):
+def covar_workflow(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     result_dir = path.join(data_dir,'result_data')
@@ -113,8 +113,11 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         if(class_vols is None and states_in_source): #If class_vols was not provided but source has GT states use them to reconstruct GT
             #Estimate ground truth states
             class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
-        elif(class_vols is not None): #Downsample ground truth volumes
-            if(class_vols.resolution != L):
+        elif(class_vols is not None): 
+            if(isinstance(class_vols,str)):
+                class_vols = Volume.load(class_vols) if os.path.isfile(class_vols) else readVols(class_vols)
+                class_vols *= L
+            if(class_vols.resolution != L): #Downsample ground truth volumes
                 class_vols = class_vols.downsample(L)
 
         if(class_vols is not None):
@@ -245,6 +248,7 @@ def workflow_click_decorator(func):
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
+    @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. If provided additional metrics are logged while training & GT embedding is computed and logged')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
     @click.option('--batch-size',type=int,help = 'training batch size')
     @click.option('--max-epochs',type=int,help = 'number of epochs to train')
@@ -265,8 +269,8 @@ def workflow_click_decorator(func):
 
 @click.command()
 @workflow_click_decorator
-def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',debug = False,**training_kwargs):
-    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,debug = debug,**training_kwargs)
+def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
+    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,class_vols = class_vols,debug = debug,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()
