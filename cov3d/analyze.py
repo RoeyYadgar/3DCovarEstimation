@@ -107,7 +107,7 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,sk
     figure_paths = {}
     for coords_key,coords_covar_inv_key,analysis_dir,fig_prefix,eigenvols_key in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix,eigenvols_keys):
         analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters,gt_labels)
-        fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data[eigenvols_key])
+        fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data.get(eigenvols_key))
         figure_paths.update({fig_prefix+k : v for k,v in fig_path.items()})
         if(not skip_reconstruction):
             #TODO: handle GT reconstruction - right now recovarReconstructomFromEmbedding will still use est embedding

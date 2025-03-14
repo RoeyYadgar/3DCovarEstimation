@@ -2,6 +2,9 @@ import os
 import subprocess
 import click
 import comet_ml
+from cov3d.analyze import analyze
+from comet_pipeline import log_cryobench_analysis_output
+from external.cryobench_analyze import cryobench_analyze
 
 @click.command()
 @click.option('-n','--name',type=str,help = 'name of comet run')
@@ -9,10 +12,15 @@ import comet_ml
 @click.option('-m','--mrc',type=str, help='path to mrc file')
 @click.option('-z','--zdim',type=int,help='Latent space dimension')
 @click.option('--num-epochs',type=int,help='Number of epochs to train CRYODRGN')
-@click.option('-l','--labels',default=None,type=str,help='path to pkl labels file')
 @click.option('--mask',default='sphere',type=str,help='mask type for recovar')
 @click.option('--disable-comet',is_flag = True,default = False,help='wether to disable logging of run to comet')
-def run_pipeline(name,alg,mrc,zdim,num_epochs,labels,mask,disable_comet):
+@click.option('--run-analysis',is_flag=True,help='wether to run analysis script after algorithm execution')
+@click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
+@click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
+@click.option('--gt-labels',type=str,help="Path to pkl containing ground truth labels")
+@click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
+def run_pipeline(name,alg,mrc,zdim,num_epochs,mask,
+                 run_analysis,gt_dir=None,gt_latent=None,gt_labels=None,num_vols=None,disable_comet=False):
     mrcdir = os.path.split(mrc)[0]
     starfile = mrc.replace('.mrcs','.star')
     poses = os.path.join(mrcdir,'poses.pkl')
@@ -36,13 +44,24 @@ def run_pipeline(name,alg,mrc,zdim,num_epochs,labels,mask,disable_comet):
     
 
     analyze_dir = os.path.join(output_path,f'analyze.{num_epochs-1}') if alg == 'cryodrgn' else os.path.join(output_path,f'output/analysis_{zdim}/umap')
-    if(labels is not None):
+    if(gt_labels is not None):
         umap_file = os.path.join(analyze_dir,'umap.pkl') if alg == 'cryodrgn' else os.path.join(analyze_dir,'embedding.pkl')
         umap_image = os.path.join(analyze_dir,'umap_labeled.jpg')
-        os.system(f'python scripts/umap_figure.py -u {umap_file} -l {labels} -o {umap_image}')
+        os.system(f'python scripts/umap_figure.py -u {umap_file} -l {gt_labels} -o {umap_image}')
     else:
         umap_image = os.path.join(analyze_dir,'umap.png') if alg =='cryodrgn' else os.path.join(analyze_dir,'sns.png')
     
+
+    if(run_analysis and alg == 'recovar'):
+        os.system(f'python scripts/convert_recovar_model.py {output_path}')
+        analysis_figures = analyze(os.path.join(output_path,'recorded_data.pkl'),analyze_with_gt=True,skip_reconstruction=True,gt_labels=gt_labels,num_clusters=0)
+        
+        for fig_name,fig_path in analysis_figures.items():
+            exp.log_image(image_data = fig_path,name=fig_name)
+
+        cryobench_analyze(output_path,gt_dir=gt_dir,gt_latent=gt_latent,gt_labels=gt_labels,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
+        log_cryobench_analysis_output(exp,output_path,gt_dir,gt_latent,gt_labels)
+
     if(not disable_comet):
         exp.log_image(image_data = umap_image,name='umap_coords_est')
         exp.end()
