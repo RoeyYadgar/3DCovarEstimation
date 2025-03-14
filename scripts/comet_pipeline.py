@@ -84,7 +84,7 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
         #TODO: handle disable_comet
         result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
         #Run analysis
-        analysis_figures = analyze(os.path.join(result_dir,'recorded_data.pkl'),analyze_with_gt=True,skip_reconstruction=True,gt_labels=gt_labels)
+        analysis_figures = analyze(os.path.join(result_dir,'recorded_data.pkl'),analyze_with_gt=True,skip_reconstruction=True,gt_labels=gt_labels,num_clusters=0)
         for fig_name,fig_path in analysis_figures.items():
             exp.log_image(image_data = fig_path,name=fig_name)
 
@@ -100,10 +100,12 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
         if('eigenvals_GT' in data_dict.keys()):
             metrics = {"frobenius_norm_error" : training_data['log_fro_err'][-1],
                     "eigen_vector_cosine_sim" : training_data['log_cosine_sim'][-1],
+                    "covar_fsc" : training_data['covar_fsc_mean'][-1],
                     "eigenvals_GT" : data_dict["eigenvals_GT"],
                     }
             exp.log_metrics(metrics)
             fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['log_fro_err'])]
+            fsc_log = [exp.log_metric(name='covar_fsc',value=v,step=i) for i,v in enumerate(training_data['covar_fsc_mean'])]
             epoch_ind_log = [exp.log_metric(name='log_epoch_ind',value=v,step=i) for i,v in enumerate(training_data['log_epoch_ind'])]
 
         
