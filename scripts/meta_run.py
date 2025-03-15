@@ -54,6 +54,26 @@ def run_alg(datasets,run_prefix,params,params_description,run_analysis=True):
                 else:
                     print(command)
 
+def run_recovar_alg(datasets,run_prefix,run_analysis=True,zdim = 10):
+
+    for L, dataset in datasets.items():
+        for i, data in enumerate(dataset):
+            run_name = f'{run_prefix}_L{L}'
+            alg_param = {'mrc' : data['dataset'].replace('.star','.mrcs'), 'mask' : data['mask'], 'name' : f'"{run_name}"','alg' : 'recovar','zdim' : zdim}
+            command = 'python scripts/comet_cryodrgn.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
+            
+            if(run_analysis):
+                command += ' --run-analysis'
+                if(data['gt_latent'] is not None):
+                    command += f" --gt-latent {data['gt_latent']}"
+                if(data['gt_dir'] is not None):
+                    command += f" --gt-dir {data['gt_dir']}"
+                command += f" --gt-labels {data['gt_labels']}"
+            if(RUN_COMMANDS):
+                os.system(command)
+            else:
+                print(command)
+
 def filter_datasets(datasets,dataset_names):
     return {k: [d for d in v if any(name in d['dataset'] for name in dataset_names)] for k, v in datasets.items()}
 
@@ -132,23 +152,22 @@ reg_scheme_experiment = Experiment(
         run_prefix = 'test_reg_scheme'
     )
 
-pre_cryobench_analyze = Experiment(
+cryobench_analysis = Experiment(
     alg_fixed_params = {
         'rank' : 10,
-        'lr' : 1e-1,
         'reg' : 1,
-        'max-epochs' : 10,
-        'batch-size' : 4096,
+        'max-epochs' : 15,
+        'batch-size' : 2048,
         'orthogonal-projection' : False,
         'nufft-disc' : 'bilinear',
         'use-halfsets' : False,
         'num-reg-update-iters' : 2,
         'debug' : None,
     },
-    alg_var_params = {
-        'objective-func' : ['ml','ls']
+    alg_var_params= {
+        'lr' : [1e-1,1e0]
     },
-    run_prefix = 'obj_func_comparison'
+    run_prefix = 'Cryobench_final'
 )
 
 cost_func_reg_experiment = Experiment(
@@ -171,7 +190,8 @@ cost_func_reg_experiment = Experiment(
 @click.command()
 @click.option('--skip-reconstruction',is_flag=True,help='Skip reconstruction step')
 @click.option('--print-run',is_flag=True,help='Print run command instead of running')
-def main(skip_reconstruction,print_run):
+@click.option('--run-recovar',is_flag=True)
+def main(skip_reconstruction,print_run,run_recovar):
     global RUN_COMMANDS,gt_dir
     if(print_run):
         RUN_COMMANDS = False
@@ -186,10 +206,13 @@ def main(skip_reconstruction,print_run):
     dataset_values[0] = datasets_L128
     datasets[128] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
 
-    exp = cost_func_reg_experiment
+    exp = cryobench_analysis
     alg_params_list,alg_param_description = generate_alg_params(exp.alg_fixed_params, exp.alg_var_params)
     datasets_to_run = datasets if exp.datasets is None else filter_datasets(datasets,exp.datasets)
-    run_alg(datasets_to_run, exp.run_prefix, alg_params_list,alg_param_description)
+    if(not run_recovar):
+        run_alg(datasets_to_run, exp.run_prefix, alg_params_list,alg_param_description)
+    else:
+        run_recovar_alg(datasets_to_run,f'RECOVAR_{exp.run_prefix}',zdim=10)
 
 
 if __name__ == "__main__":
