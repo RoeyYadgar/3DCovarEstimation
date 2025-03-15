@@ -1,11 +1,19 @@
 import torch
 import numpy as np
 from aspire.utils import Rotation
-from aspire.volume import rotated_grids
-from aspire.operators import MultiplicativeFilter,ScalarFilter
+from aspire.volume import rotated_grids,LegacyVolume,Volume
+from aspire.operators import MultiplicativeFilter,ScalarFilter,ArrayFilter,RadialCTFFilter
 from cov3d.utils import get_torch_device
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward
+from cov3d.covar_sgd import CovarDataset
+from cov3d.workflow import covar_processing
+from cov3d.analyze import analyze
+from cov3d.utils import volsCovarEigenvec
+from cov3d.fsc_utils import rpsd
+import os
+from matplotlib import pyplot as plt
+from matplotlib.gridspec import GridSpec
 
 class SimulatedSource():
     def __init__(self,n,vols,noise_var,whiten=True,unique_filters = None):
@@ -73,3 +81,82 @@ class SimulatedSource():
         return clean_images
 
 
+def inspect_dataset(dataset,output_path):
+    L = dataset.resolution
+    sample_images = dataset.images[:5].transpose(0,1).reshape(L,-1)
+
+    is_vectors_gd = dataset.vectorsGD is not None
+
+    fig = plt.figure(figsize=(8,6))
+    gs = GridSpec(2,3,figure=fig)
+    ax1 = fig.add_subplot(gs[0,:])
+    ax2 = fig.add_subplot(gs[1,0])
+    ax3 = fig.add_subplot(gs[1,1])
+
+    ax1.imshow(sample_images)
+    cbar = fig.colorbar(ax1.imshow(sample_images), ax=ax1, orientation='vertical')
+    cbar.set_label('Intensity')
+    ax1.set_title('Image samples')
+
+
+    ax2.plot(dataset.signal_rpsd)
+    ax2.set_yscale('log')
+    ax2.set_title('Signal RPSD estimate')
+
+    ax3.plot(dataset.radial_filters_gain)
+    ax3.set_yscale('log')
+    ax3.set_title('Filter radial gain')
+
+    if(is_vectors_gd):
+        ax4 = fig.add_subplot(gs[1,2])
+        ax4.plot(rpsd(*dataset.vectorsGD.reshape(-1,L,L,L)).T)
+        ax4.set_yscale('log')
+        ax4.set_title('Groundtruth eigen volumes RPSD')
+
+    fig.savefig(output_path)
+
+def simulateExp(folder_name = None,no_ctf=False):
+    os.makedirs(folder_name,exist_ok=True)
+
+    L = 64
+    n = 100000
+    r = 5
+    pixel_size = 3 * 128/ L
+
+    if(not no_ctf):
+        filters = [RadialCTFFilter(defocus=d,pixel_size=pixel_size) for d in np.linspace(8e3, 2.5e4, 927)]
+    else:
+        filters = [ArrayFilter(np.ones((L,L)))]
+
+
+    voxels = LegacyVolume(L=int(L*0.7),C=r+1,K=64,dtype=np.float32,pixel_size=pixel_size).generate()
+    padded_voxels = np.zeros((r+1, L, L, L), dtype=np.float32)
+    pad_width = (L - voxels.shape[1]) // 2
+    padded_voxels[:, pad_width:pad_width+voxels.shape[1], pad_width:pad_width+voxels.shape[2], pad_width:pad_width+voxels.shape[3]] = voxels
+    voxels = Volume(padded_voxels)
+    voxels.save(os.path.join(folder_name,'gt_vols.mrc'),overwrite=True) 
+
+    sim = SimulatedSource(n,vols=voxels,unique_filters=filters,noise_var = 0)
+    var = torch.var(sim._clean_images).item()
+    
+   
+    vectorsGD = volsCovarEigenvec(voxels)    
+    snr_vals = 10**np.arange(0,-3.5,-0.5)
+    for snr in snr_vals:
+        noise_var = var / snr
+        print(f'Signal power : {var}. Using noise variance of {noise_var} to achieve SNR of {snr}')
+
+        sim.noise_var = noise_var
+        noise_var = sim.noise_var
+        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=Volume(voxels.asnumpy().mean(axis=0)))
+        dataset.starfile = 'tmp.star'
+
+        dir_name = os.path.join(folder_name,'obj_ls',f'algorithm_output_{snr}')
+        os.makedirs(dir_name,exist_ok=True)  
+        inspect_dataset(dataset,os.path.join(dir_name,'dataset.jpg'))
+        covar_processing(dataset,r,dir_name,max_epochs=20,lr=1e-2,objective_func='ls',num_reg_update_iters=1)
+        analysis_figures = analyze(os.path.join(dir_name,'recorded_data.pkl'),output_dir=dir_name,analyze_with_gt=True,skip_reconstruction=True,gt_labels=sim.states,num_clusters=0)
+
+
+if __name__=="__main__":
+    simulateExp('data/rank5_covar_estimate')
