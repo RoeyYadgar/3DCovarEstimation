@@ -1,7 +1,7 @@
 import torch
 from scipy.stats import chi2
-from cov3d.nufft_plan import NufftPlan
-from cov3d.projection_funcs import vol_forward
+from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
+from cov3d.projection_funcs import vol_forward,centered_fft3
 from tqdm import tqdm
 import math
 
@@ -61,7 +61,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 1024,start_ind = None
 
 
     
-def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_ind = None,return_coords_covar = False):
+def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_ind = None,return_coords_covar = False,nufft_plan=NufftPlan,**nufft_plan_kwargs):
     if(start_ind is None):
         start_ind = 0
     if(end_ind is None):
@@ -80,7 +80,14 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
 
     eigenvals_inv = torch.inverse(eigenvals)
 
-    nufft_plans = NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device)
+    if(nufft_plan == NufftPlan):
+        nufft_plans = NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device,**nufft_plan_kwargs)
+    elif(nufft_plan == NufftPlanDiscretized):
+        default_kwargs = {'upsample_factor' : 2, 'mode' : 'bilinear'}
+        default_kwargs.update(nufft_plan_kwargs)
+        nufft_plans = NufftPlanDiscretized((L,)*3,**default_kwargs)
+        eigenvecs = centered_fft3(eigenvecs,padding_size = (L*default_kwargs['upsample_factor'],)*3)
+
     coords = torch.zeros((end_ind-start_ind,rank),device=device)
     if(return_coords_covar):
         coords_covar_inv = torch.zeros((end_ind-start_ind,rank,rank),dtype=dtype)
@@ -100,13 +107,16 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
 
         m = torch.bmm(eigen_forward,eigen_forward.transpose(-1,-2)) / dataset.noise_var + eigenvals_inv
         im_coor = torch.bmm(eigen_forward,images.unsqueeze(-1)) / dataset.noise_var
-        coord_covar = torch.linalg.inv(m)
-        coords[i:(i+batch_size)] = torch.bmm(coord_covar,im_coor).squeeze(-1)
+        #There can be numerical instability with inverting the matrix m due to small entries - correct it here by normalizing the matrix by trace(m)/size(m) before inversion
+        mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
+        coords[i:(i+batch_size)] = torch.linalg.solve(m/mean_m.reshape(-1,1,1),im_coor).squeeze(-1) / mean_m.reshape(-1,1)
         if(return_coords_covar):
             coords_covar_inv[i:(i+batch_size)] = m.to('cpu')
 
         pbar.update(1)
     pbar.close()
+
+    del nufft_plans
 
     if(not return_coords_covar):
         return coords
