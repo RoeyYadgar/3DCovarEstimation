@@ -11,9 +11,9 @@ from cov3d.recovar_utils import recovarReconstructFromEmbedding
 from cov3d.fsc_utils import covar_fsc
 
 
-def create_scatter_figure(coords,cluster_coords,labels):
+def create_scatter_figure(coords,cluster_coords,labels,scatter_size=0.1):
     fig = plt.figure()
-    plt.scatter(coords[:,0],coords[:,1],s=0.1,c=labels)
+    plt.scatter(coords[:,0],coords[:,1],s=scatter_size,c=labels)
     x_min, x_max = np.percentile(coords[:,0], [0.5, 99.5])
     x_delta = x_max - x_min
     y_min, y_max = np.percentile(coords[:,1], [0.5, 99.5])
@@ -25,21 +25,21 @@ def create_scatter_figure(coords,cluster_coords,labels):
     plt.ylim(y_min - 0.1 * y_delta, y_max + 0.1 * y_delta)
     return fig
 
-def create_umap_figure(umap_coords,cluster_coords,labels=None):
-    fig = create_scatter_figure(umap_coords,cluster_coords,labels)
+def create_umap_figure(umap_coords,cluster_coords=None,labels=None,**scatter_kwargs):
+    fig = create_scatter_figure(umap_coords,cluster_coords,labels,**scatter_kwargs)
     plt.xlabel('UMAP 1')
     plt.ylabel('UMAP 2')
     return {'umap' : fig}
 
-def create_pc_figure(pc_coords,cluster_coords,labels=None,num_pcs = 5):
+def create_pc_figure(pc_coords,cluster_coords=None,labels=None,num_pcs = 5,**scatter_kwargs):
     figures = {}
     num_pcs = min(num_pcs,pc_coords.shape[1])
     for i in range(num_pcs):
         for j in range(i+1,num_pcs):
             if(cluster_coords is not None):
-                fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels)
+                fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels,**scatter_kwargs)
             else:
-                fig = create_scatter_figure(pc_coords[:,[i,j]],None,labels)
+                fig = create_scatter_figure(pc_coords[:,[i,j]],None,labels,**scatter_kwargs)
             plt.xlabel(f'PC {i}')
             plt.ylabel(f'PC {j}')
             figures[f'pc_{i}_{j}'] = fig

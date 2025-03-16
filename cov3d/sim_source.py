@@ -22,7 +22,9 @@ class SimulatedSource():
         self.num_vols = vols.shape[0]
         self.vols = vols
         self.whiten = whiten
-        self.noise_var = noise_var        
+        self.noise_var = noise_var
+        if(unique_filters is None):
+            unique_filters = [ArrayFilter(np.ones((self.L,self.L)))]
         self._unique_filters = unique_filters
         self._clean_images = self._gen_clean_images()
 
@@ -56,7 +58,7 @@ class SimulatedSource():
         self.filter_indices = np.random.choice(len(self._unique_filters),self.n)
         self.rotations = Rotation.generate_random_rotations(self.n).matrices
 
-        unique_filters = torch.tensor(np.array([self._unique_filters[i].evaluate_grid(self.L) for i in range(len(self._unique_filters))]))
+        unique_filters = torch.tensor(np.array([self._unique_filters[i].evaluate_grid(self.L) for i in range(len(self._unique_filters))]),dtype=torch.float32)
         pts_rot = torch.tensor(rotated_grids(self.L,self.rotations).copy()).reshape((3,self.n,self.L**2))
         pts_rot = pts_rot.transpose(0,1) 
         pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi)
