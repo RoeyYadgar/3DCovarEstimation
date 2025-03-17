@@ -93,26 +93,27 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
+def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
-    result_dir = path.join(data_dir,'result_data')
-    dataset_path = os.path.join(result_dir,'dataset.pkl')
+    if(output_dir is None):
+        output_dir = path.join(data_dir,'result_data')
+    dataset_path = os.path.join(output_dir,'dataset.pkl')
     #Only perform this when debug flag is False and there is no dataset pickle file already saved (In order to skip preprocessing when running multiple times for debugging)
     if((not debug) or (not os.path.isfile(dataset_path))): 
-        if(not path.isdir(result_dir)):
-            os.mkdir(result_dir)
+        if(not path.isdir(output_dir)):
+            os.mkdir(output_dir)
         star = aspire.storage.StarFile(starfile)
         states_in_source = '_rlnClassNumber' in star['particles']
         pixel_size = float(star['optics']['_rlnImagePixelSize'][0])
         source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
         L = source.L
         
-        mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
+        mean_est = relionReconstruct(starfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
 
         if(class_vols is None and states_in_source): #If class_vols was not provided but source has GT states use them to reconstruct GT
             #Estimate ground truth states
-            class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
+            class_vols = reconstructClass(starfile,path.join(output_dir,'class_vols.mrc'))
         elif(class_vols is not None): 
             if(isinstance(class_vols,str)):
                 class_vols = Volume.load(class_vols) if os.path.isfile(class_vols) else readVols(class_vols)
@@ -153,7 +154,7 @@ def covar_workflow(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mas
         invert_data = not check_dataset_sign(mean_est,mask)
         if(invert_data):
             print('inverting dataset sign')
-            (-1 * mean_est).save(path.join(result_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
+            (-1 * mean_est).save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
         dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est,mask=mask,invert_data = invert_data)
         if(states_in_source):
             dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
@@ -168,13 +169,13 @@ def covar_workflow(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mas
             dataset = pickle.load(fid)
         print(f"Dataset loaded successfuly")
 
-    covar_precoessing_output = covar_processing(dataset,rank,result_dir,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,rank,output_dir,**training_kwargs)
     torch.cuda.empty_cache()
     return covar_precoessing_output
 
     
 
-def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
+def covar_processing(dataset,covar_rank,output_dir,**training_kwargs):
     L = dataset.images.shape[-1]
 
     #Perform optimization for eigenvectors estimation
@@ -197,11 +198,11 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
                 fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
         
     if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
-        trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+        trainParallel(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             **default_training_kwargs)
     else:
         cov = cov.to(get_torch_device())
-        trainCovar(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+        trainCovar(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             **default_training_kwargs)
     
     
@@ -231,13 +232,13 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
                         'coords_covar_inv_GT' : coords_covar_inv_GT.numpy(),
                         }
     
-    with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
+    with open(path.join(output_dir,'recorded_data.pkl'),'wb') as fid:
         pickle.dump(data_dict,fid)
     if(dataset.mask is not None):
-        aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
+        aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(output_dir,'used_mask.mrc'),overwrite=True)
     #TODO: save eigenvolumes as MRC
 
-    training_data = torch.load(path.join(result_dir,'training_results.bin'))
+    training_data = torch.load(path.join(output_dir,'training_results.bin'))
 
     return data_dict,training_data,default_training_kwargs
 
@@ -245,6 +246,7 @@ def covar_processing(dataset,covar_rank,result_dir,**training_kwargs):
 def workflow_click_decorator(func):
     @click.option('-s','--starfile',type=str, help='path to star file.')
     @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
+    @click.option('-o','--output-dir',type=str,help='path to output directory. when not provided a `result_data` directory will be used with the same path as the provided starfile')
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
@@ -269,8 +271,8 @@ def workflow_click_decorator(func):
 
 @click.command()
 @workflow_click_decorator
-def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
-    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,class_vols = class_vols,debug = debug,**training_kwargs)
+def covar_workflow_cli(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
+    covar_workflow(starfile,rank,output_dir=output_dir,whiten=whiten,noise_estimator=noise_estimator,mask=mask,class_vols = class_vols,debug = debug,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()
