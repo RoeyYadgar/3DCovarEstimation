@@ -91,7 +91,20 @@ def main(args: argparse.Namespace) -> None:
         logger.addHandler(logging.FileHandler(log_file))
         logger.info(args)
 
-        recovarReconstructFromEmbedding(results_dump,args.outdir,z_array,args.n_bins)
+        reconstruction_complete = False
+        max_attempts = np.inf
+        num_attempts = 0
+        while (not reconstruction_complete and num_attempts < max_attempts):
+            try:
+                recovarReconstructFromEmbedding(results_dump,args.outdir,z_array,args.n_bins,overwrite_vols=False)
+                reconstruction_complete = True
+            except Exception as e:
+                print(f'Reconstruction failed with error {e}. Trying again')
+                num_attempts += 1
+                import jax
+                import gc
+                jax.clear_backends()
+                gc.collect()
         #from cov3d.utils import relionReconstructFromEmbedding
         #relionReconstructFromEmbedding(results_dump,args.outdir,z_array)
         

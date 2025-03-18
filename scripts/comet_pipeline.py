@@ -4,6 +4,8 @@ import sys
 import numpy as np
 import pandas as pd
 from glob import glob
+import pickle
+import torch
 from sklearn.metrics import auc
 import comet_ml
 from aspire.storage import StarFile
@@ -61,11 +63,12 @@ def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent,gt_labels):
 @click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
 @click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
 @click.option('--gt-labels',type=str,help="Path to pkl containing ground truth labels")
+@click.option('--skip-computation',is_flag=True,help='Whether to skip covariance estimation computation')
 @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
 @workflow_click_decorator
 def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
                  run_analysis,gt_dir=None,gt_latent=None,gt_labels=None,num_vols=None,
-                 disable_comet = False,**training_kwargs):
+                 disable_comet = False,skip_computation = False,**training_kwargs):
     if(not disable_comet):
         image_size = int(float(StarFile(starfile)['optics']['_rlnImageSize'][0]))
         run_config  = {'image_size' : image_size, 'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
@@ -75,7 +78,18 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
         exp.set_name(name)
         exp.log_parameters(run_config)
     training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
-    data_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
+    if(not skip_computation):
+        data_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
+    else:
+        output_dir = training_kwargs.get('output_dir',None)
+        if(output_dir is None):
+            output_dir = os.path.join(os.path.split(starfile)[0],'result_data')
+
+        with open(os.path.join(output_dir,'recorded_data.pkl'),'rb') as fid:
+            data_dict = pickle.load(fid)
+
+        training_data = torch.load(os.path.join(output_dir,'training_results.bin'))
+
 
     if(run_analysis):
         #Only import analysis functions when necesseary

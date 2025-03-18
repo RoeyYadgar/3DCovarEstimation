@@ -33,12 +33,13 @@ def generate_alg_params(alg_fixed_params, alg_var_params):
     return alg_params,param_description
 
 
-def run_alg(datasets,run_prefix,params,params_description,run_analysis=True):
+def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_analysis=True):
 
     for L, dataset in datasets.items():
         for i, data in enumerate(dataset):
+            dataset_name = dataset_names[i]
             for param, param_description in zip(params, params_description):
-                run_name = f'{run_prefix}_L{L}_{param_description}'
+                run_name = f'{run_prefix}_{dataset_name}_L{L}_{param_description}'
                 alg_param = {**param, 'starfile' : data['dataset'], 'mask' : data['mask'], 'name' : f'"{run_name}"'}
                 command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
                 
@@ -54,11 +55,12 @@ def run_alg(datasets,run_prefix,params,params_description,run_analysis=True):
                 else:
                     print(command)
 
-def run_recovar_alg(datasets,run_prefix,run_analysis=True,zdim = 10):
+def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 10):
 
     for L, dataset in datasets.items():
         for i, data in enumerate(dataset):
-            run_name = f'{run_prefix}_L{L}'
+            dataset_name = dataset_names[i]
+            run_name = f'{run_prefix}_{dataset_name}_L{L}'
             alg_param = {'mrc' : data['dataset'].replace('.star','.mrcs'), 'mask' : data['mask'], 'name' : f'"{run_name}"','alg' : 'recovar','zdim' : zdim}
             command = 'python scripts/comet_cryodrgn.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
             
@@ -76,6 +78,8 @@ def run_recovar_alg(datasets,run_prefix,run_analysis=True,zdim = 10):
 
 def filter_datasets(datasets,dataset_names):
     return {k: [d for d in v if any(name in d['dataset'] for name in dataset_names)] for k, v in datasets.items()}
+
+dataset_names = ['igg_1d','igg_1d_noisiest','igg_rl','Ribosembly','Spike-MD','Tomotwin-100']
 
 datasets_L64 = [
     "igg_1d/images/snr0.01/downsample_L64/snr0.01.star",
@@ -165,7 +169,7 @@ cryobench_analysis = Experiment(
         'debug' : None,
     },
     alg_var_params= {
-        'lr' : [1e-1,1e0]
+        'lr' : [1e0]
     },
     run_prefix = 'Cryobench_final'
 )
@@ -210,9 +214,9 @@ def main(skip_reconstruction,print_run,run_recovar):
     alg_params_list,alg_param_description = generate_alg_params(exp.alg_fixed_params, exp.alg_var_params)
     datasets_to_run = datasets if exp.datasets is None else filter_datasets(datasets,exp.datasets)
     if(not run_recovar):
-        run_alg(datasets_to_run, exp.run_prefix, alg_params_list,alg_param_description)
+        run_alg(datasets_to_run,dataset_names, exp.run_prefix, alg_params_list,alg_param_description)
     else:
-        run_recovar_alg(datasets_to_run,f'RECOVAR_{exp.run_prefix}',zdim=10)
+        run_recovar_alg(datasets_to_run,dataset_names,f'RECOVAR_{exp.run_prefix}',zdim=10)
 
 
 if __name__ == "__main__":
