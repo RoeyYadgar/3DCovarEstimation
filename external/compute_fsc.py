@@ -103,7 +103,7 @@ def main(args: argparse.Namespace) -> None:
                 num_attempts += 1
                 import jax
                 import gc
-                jax.clear_backends()
+                jax.clear_caches()
                 gc.collect()
         #from cov3d.utils import relionReconstructFromEmbedding
         #relionReconstructFromEmbedding(results_dump,args.outdir,z_array)

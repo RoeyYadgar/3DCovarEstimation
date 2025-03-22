@@ -43,6 +43,7 @@ def convert_recovar_model_output(args):
         results['eigenvectors_GT'] = gt_result['eigenvectors_GT']
         results['coords_GT'] = gt_result['coords_GT']
         results['coords_covar_inv_GT'] = gt_result['coords_covar_inv_GT']
+        results['data_sign_inverted'] = gt_result['data_sign_inverted']
     except:
         pass
 

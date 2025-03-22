@@ -18,9 +18,11 @@ from external.cryobench_analyze import cryobench_analyze
 @click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
 @click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
 @click.option('--gt-labels',type=str,help="Path to pkl containing ground truth labels")
+@click.option('--skip-computation',is_flag=True,help='Whether to skip covariance estimation computation')
 @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
 def run_pipeline(name,alg,mrc,zdim,num_epochs,mask,
-                 run_analysis,gt_dir=None,gt_latent=None,gt_labels=None,num_vols=None,disable_comet=False):
+                 run_analysis,gt_dir=None,gt_latent=None,gt_labels=None,num_vols=None,
+                 skip_computation=False,disable_comet=False):
     mrcdir = os.path.split(mrc)[0]
     starfile = mrc.replace('.mrcs','.star')
     poses = os.path.join(mrcdir,'poses.pkl')
@@ -38,9 +40,9 @@ def run_pipeline(name,alg,mrc,zdim,num_epochs,mask,
         exp.set_name(name)
         exp.log_parameters(run_config)
     
-
-    subprocess.run(f"bash -c 'source $(conda info --base)/etc/profile.d/conda.sh && conda activate {alg} && {command}'", shell=True)
-    subprocess.run(f"bash -c 'source $(conda info --base)/etc/profile.d/conda.sh && conda activate {alg} && {analyze_command}'", shell=True)
+    if(not skip_computation):
+        subprocess.run(f"bash -c 'source $(conda info --base)/etc/profile.d/conda.sh && conda activate {alg} && {command}'", shell=True)
+        subprocess.run(f"bash -c 'source $(conda info --base)/etc/profile.d/conda.sh && conda activate {alg} && {analyze_command}'", shell=True)
     
 
     analyze_dir = os.path.join(output_path,f'analyze.{num_epochs-1}') if alg == 'cryodrgn' else os.path.join(output_path,f'output/analysis_{zdim}/umap')

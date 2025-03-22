@@ -40,7 +40,9 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
             dataset_name = dataset_names[i]
             for param, param_description in zip(params, params_description):
                 run_name = f'{run_prefix}_{dataset_name}_L{L}_{param_description}'
-                alg_param = {**param, 'starfile' : data['dataset'], 'mask' : data['mask'], 'name' : f'"{run_name}"'}
+                alg_param = {**param, 'starfile' : data['dataset'], 'name' : f'"{run_name}"'}
+                if(data['mask'] is not None):
+                    alg_param['mask'] = data['mask']
                 command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
                 
                 if(run_analysis):
@@ -61,7 +63,9 @@ def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 1
         for i, data in enumerate(dataset):
             dataset_name = dataset_names[i]
             run_name = f'{run_prefix}_{dataset_name}_L{L}'
-            alg_param = {'mrc' : data['dataset'].replace('.star','.mrcs'), 'mask' : data['mask'], 'name' : f'"{run_name}"','alg' : 'recovar','zdim' : zdim}
+            alg_param = {'mrc' : data['dataset'].replace('.star','.mrcs'), 'name' : f'"{run_name}"','alg' : 'recovar','zdim' : zdim}
+            if(data['mask'] is not None):
+                alg_param['mask'] = data['mask']
             command = 'python scripts/comet_cryodrgn.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
             
             if(run_analysis):
@@ -87,7 +91,8 @@ datasets_L64 = [
     "igg_rl/images/snr0.01/downsample_L64/snr0.01.star",
     "Ribosembly/images/downsample_L64/snr0.01.star",
     "Spike-MD/images/snr0.1/downsample_L64/particles.star",
-    "Tomotwin-100/images/snr0.01/downsample_L64/snr0.01.star"
+    "Tomotwin-100/images/snr0.01/downsample_L64/snr0.01.star",
+    "empiar10076/downsample_L64/L17Combine_weight_local_preprocessed_L64.star",
 ]
 
 dataset_masks = [
@@ -96,7 +101,8 @@ dataset_masks = [
     "igg_rl/init_mask/mask.mrc",
     "Ribosembly/init_mask/mask.mrc",
     "Spike-MD/init_mask/mask_128.mrc",
-    "Tomotwin-100/init_mask/mask.mrc"
+    "Tomotwin-100/init_mask/mask.mrc",
+    None
 ]
 
 gt_dir = [
@@ -106,6 +112,7 @@ gt_dir = [
     "Ribosembly/vols/128_org",
     "Spike-MD/all_vols",
     "Tomotwin-100/vols/128_org",
+    "data/scratch_data/empiar10076/analysis/minor_classes",
 ]
 
 gt_latent = [
@@ -115,6 +122,7 @@ gt_latent = [
     None,#TODO: is there GT latent for ribosembly?
     "Spike-MD/gt_latents.pkl",
     None,#TODO: is tehre GT latent for tomotwin
+    None
 ]
 
 gt_labels = [
@@ -123,7 +131,8 @@ gt_labels = [
     'igg_rl/labels.pkl',
     'Ribosembly/gt_latents.pkl',
     'Spike-MD/labels.pkl',
-    'Tomotwin-100/gt_latents.pkl'
+    'Tomotwin-100/gt_latents.pkl',
+    "empiar10076/downsample_L128/filtered_labels.pkl",
 ]
 datasets_L128 = [dataset.replace("L64", "L128") for dataset in datasets_L64]
 
@@ -191,6 +200,25 @@ cost_func_reg_experiment = Experiment(
     datasets = ['igg_1d/images/snr0.01']
 )
 
+empiar_experiment = Experiment(
+    alg_fixed_params = {
+        'rank' : 10,
+        'reg' : 1,
+        'max-epochs' : 15,
+        'batch-size' : 4096,
+        'orthogonal-projection' : False,
+        'nufft-disc' : 'bilinear',
+        'use-halfsets' : False,
+        'num-reg-update-iters' : 2,
+        'debug' : None,
+    },
+    alg_var_params= {
+        'lr' : [1e-2,1e0,1e-1]
+    },
+    run_prefix = 'Empiar_final',
+    datasets = ['empiar10076']
+)
+
 @click.command()
 @click.option('--skip-reconstruction',is_flag=True,help='Skip reconstruction step')
 @click.option('--print-run',is_flag=True,help='Print run command instead of running')
@@ -210,7 +238,7 @@ def main(skip_reconstruction,print_run,run_recovar):
     dataset_values[0] = datasets_L128
     datasets[128] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
 
-    exp = cryobench_analysis
+    exp = empiar_experiment
     alg_params_list,alg_param_description = generate_alg_params(exp.alg_fixed_params, exp.alg_var_params)
     datasets_to_run = datasets if exp.datasets is None else filter_datasets(datasets,exp.datasets)
     if(not run_recovar):
