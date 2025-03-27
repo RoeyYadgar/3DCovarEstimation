@@ -36,7 +36,7 @@ class NufftPlanDiscretized(BaseNufftPlan):
     Uses pytorch's `grid_sample` function to interpolate from the fourier tranform of the given volume.
     Assumes input volume is already given in frequency domain.
     """
-    def __init__(self,sz,upsample_factor=1,mode='bilinear',use_half_grid = True):
+    def __init__(self,sz,upsample_factor=1,mode='bilinear',use_half_grid = False):
         self.sz = sz
         self.upsample_factor = upsample_factor
         self.mode = mode
