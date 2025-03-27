@@ -12,6 +12,7 @@ from cov3d.analyze import analyze
 from cov3d.utils import volsCovarEigenvec
 from cov3d.fsc_utils import rpsd
 import os
+import pickle
 from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec
 
@@ -83,39 +84,22 @@ class SimulatedSource():
         return clean_images
 
 
-def inspect_dataset(dataset,output_path):
-    L = dataset.resolution
-    sample_images = dataset.images[:5].transpose(0,1).reshape(L,-1)
+def display_source(source,output_path,num_ims = 2,display_clean=False):
+    num_vols = len(np.unique(source.states))
+    fig,axs = plt.subplots(num_ims,num_vols,figsize=(2*num_vols,2*num_ims))
+    fig.subplots_adjust(wspace=0.05, hspace=0.05)
+    im_samples = source._clean_images[:20].numpy() if display_clean else source.images[:20]
+    im_min = im_samples.min()
+    im_max = im_samples.max()
 
-    is_vectors_gd = dataset.vectorsGD is not None
-
-    fig = plt.figure(figsize=(8,6))
-    gs = GridSpec(2,3,figure=fig)
-    ax1 = fig.add_subplot(gs[0,:])
-    ax2 = fig.add_subplot(gs[1,0])
-    ax3 = fig.add_subplot(gs[1,1])
-
-    ax1.imshow(sample_images)
-    cbar = fig.colorbar(ax1.imshow(sample_images), ax=ax1, orientation='vertical')
-    cbar.set_label('Intensity')
-    ax1.set_title('Image samples')
-
-
-    ax2.plot(dataset.signal_rpsd)
-    ax2.set_yscale('log')
-    ax2.set_title('Signal RPSD estimate')
-
-    ax3.plot(dataset.radial_filters_gain)
-    ax3.set_yscale('log')
-    ax3.set_title('Filter radial gain')
-
-    if(is_vectors_gd):
-        ax4 = fig.add_subplot(gs[1,2])
-        ax4.plot(rpsd(*dataset.vectorsGD.reshape(-1,L,L,L)).T)
-        ax4.set_yscale('log')
-        ax4.set_title('Groundtruth eigen volumes RPSD')
-
-    fig.savefig(output_path)
+    for i in range(num_vols):
+        state_inds = np.where(source.states == i)[0][:num_ims]
+        clean_images = source._clean_images[state_inds].numpy() if display_clean else source.images[state_inds]
+        for j in range(num_ims):
+            axs[(j,i)].imshow(clean_images[j],cmap='gray',vmin=im_min,vmax=im_max)
+            axs[(j,i)].set_xticks([])  # Remove x-axis ticks
+            axs[(j,i)].set_yticks([]) 
+    fig.savefig(output_path,bbox_inches='tight', pad_inches=0.1)
 
 def simulateExp(folder_name = None,no_ctf=False):
     os.makedirs(folder_name,exist_ok=True)
@@ -153,11 +137,26 @@ def simulateExp(folder_name = None,no_ctf=False):
         dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=Volume(voxels.asnumpy().mean(axis=0)))
         dataset.starfile = 'tmp.star'
 
-        dir_name = os.path.join(folder_name,'obj_ls',f'algorithm_output_{snr}')
+        dir_name = os.path.join(folder_name,'obj_ml',f'algorithm_output_{snr}')
         os.makedirs(dir_name,exist_ok=True)  
-        inspect_dataset(dataset,os.path.join(dir_name,'dataset.jpg'))
-        covar_processing(dataset,r,dir_name,max_epochs=20,lr=1e-2,objective_func='ls',num_reg_update_iters=1)
-        analysis_figures = analyze(os.path.join(dir_name,'recorded_data.pkl'),output_dir=dir_name,analyze_with_gt=True,skip_reconstruction=True,gt_labels=sim.states,num_clusters=0)
+        display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
+        display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
+        data_dict,_,_ = covar_processing(dataset,r,dir_name,max_epochs=20,lr=1e-2,objective_func='ml',num_reg_update_iters=1)
+
+        coords_est = data_dict['coords_est']
+        state_centers = np.zeros((len(voxels),coords_est.shape[1]))
+        for i in range(len(voxels)):
+            state_centers[i] = coords_est[sim.states == i].mean(axis=0)
+        with open(os.path.join(dir_name,'state_centers.pkl'),'wb') as f:
+            pickle.dump(state_centers,f)
+
+
+        analysis_figures = analyze(os.path.join(dir_name,'recorded_data.pkl'),
+                                   output_dir=dir_name,
+                                   analyze_with_gt=True,
+                                   skip_reconstruction=True,
+                                   gt_labels=sim.states,
+                                   latent_coords=os.path.join(dir_name,'state_centers.pkl'))
 
 
 if __name__=="__main__":
