@@ -14,7 +14,7 @@ from cov3d.fsc_utils import rpsd
 import os
 import pickle
 from matplotlib import pyplot as plt
-from matplotlib.gridspec import GridSpec
+import mrcfile
 
 class SimulatedSource():
     def __init__(self,n,vols,noise_var,whiten=True,unique_filters = None):
@@ -23,11 +23,11 @@ class SimulatedSource():
         self.num_vols = vols.shape[0]
         self.vols = vols
         self.whiten = whiten
-        self.noise_var = noise_var
         if(unique_filters is None):
             unique_filters = [ArrayFilter(np.ones((self.L,self.L)))]
         self._unique_filters = unique_filters
         self._clean_images = self._gen_clean_images()
+        self.noise_var = noise_var
 
     
     @property
@@ -37,10 +37,11 @@ class SimulatedSource():
     @noise_var.setter
     def noise_var(self,noise_var):
         self._noise_var = noise_var
+        self._image_noise = torch.randn((self.n,self.L,self.L),dtype=self._clean_images.dtype,device=self._clean_images.device) * (self._noise_var ** 0.5)
 
     @property
     def images(self):
-        images = self._clean_images + torch.randn((self.n,self.L,self.L),dtype=self._clean_images.dtype,device=self._clean_images.device) * (self._noise_var ** 0.5)
+        images = self._clean_images + self._image_noise
         if(self.whiten):
             images /= (self._noise_var) ** 0.5
 
@@ -82,6 +83,43 @@ class SimulatedSource():
                 clean_images[batch_ind] = projected_volume.cpu()
 
         return clean_images
+    
+    def _ctf_cryodrgn_format(self):
+        ctf = np.zeros((len(self._unique_filters),9))
+        for i,ctf_filter in enumerate(self._unique_filters):
+            ctf[i,0] = self.L
+            ctf[i,1] = ctf_filter.pixel_size
+            ctf[i,2] = ctf_filter.defocus_u
+            ctf[i,3] = ctf_filter.defocus_v
+            ctf[i,4] = ctf_filter.defocus_ang / np.pi * 180
+            ctf[i,5] = ctf_filter.voltage
+            ctf[i,6] = ctf_filter.Cs
+            ctf[i,7] = ctf_filter.alpha
+            ctf[i,8] = 0 #phase shift
+        
+        full_ctf = np.zeros((self.n,9))
+        for i in range(ctf.shape[0]):
+            full_ctf[self.filter_indices == i] = ctf[i]
+
+        return full_ctf
+
+    def save(self,output_dir):
+        mrcs_output = os.path.join(output_dir,'particles.mrcs')
+        poses_output = os.path.join(output_dir,'poses.pkl')
+        ctf_output = os.path.join(output_dir,'ctf.pkl')
+        with mrcfile.new(mrcs_output,overwrite=True) as mrc:
+            mrc.set_data(self.images.astype(np.float32))
+            #mrc.voxel_size = self.vols.pixel_size
+            #mrc.set_spacegroup(1)
+            #mrc.data = np.transpose(mrc.data,(0,2,1))
+            #mrc.update_header()
+        
+        shifts = np.zeros((self.n,2))
+        with open(poses_output,'wb') as f:
+            pickle.dump((np.transpose(self.rotations,axes=(0,2,1)),shifts),f)
+
+        with open(ctf_output,'wb') as f:
+            pickle.dump(self._ctf_cryodrgn_format(),f)
 
 
 def display_source(source,output_path,num_ims = 2,display_clean=False):
@@ -101,7 +139,7 @@ def display_source(source,output_path,num_ims = 2,display_clean=False):
             axs[(j,i)].set_yticks([]) 
     fig.savefig(output_path,bbox_inches='tight', pad_inches=0.1)
 
-def simulateExp(folder_name = None,no_ctf=False):
+def simulateExp(folder_name = None,no_ctf=False,save_source = False,vols = None):
     os.makedirs(folder_name,exist_ok=True)
 
     L = 64
@@ -114,13 +152,15 @@ def simulateExp(folder_name = None,no_ctf=False):
     else:
         filters = [ArrayFilter(np.ones((L,L)))]
 
-
-    voxels = LegacyVolume(L=int(L*0.7),C=r+1,K=64,dtype=np.float32,pixel_size=pixel_size).generate()
-    padded_voxels = np.zeros((r+1, L, L, L), dtype=np.float32)
-    pad_width = (L - voxels.shape[1]) // 2
-    padded_voxels[:, pad_width:pad_width+voxels.shape[1], pad_width:pad_width+voxels.shape[2], pad_width:pad_width+voxels.shape[3]] = voxels
-    voxels = Volume(padded_voxels)
-    voxels.save(os.path.join(folder_name,'gt_vols.mrc'),overwrite=True) 
+    if(vols is None):
+        voxels = LegacyVolume(L=int(L*0.7),C=r+1,K=64,dtype=np.float32,pixel_size=pixel_size).generate()
+        padded_voxels = np.zeros((r+1, L, L, L), dtype=np.float32)
+        pad_width = (L - voxels.shape[1]) // 2
+        padded_voxels[:, pad_width:pad_width+voxels.shape[1], pad_width:pad_width+voxels.shape[2], pad_width:pad_width+voxels.shape[3]] = voxels
+        voxels = Volume(padded_voxels)
+        voxels.save(os.path.join(folder_name,'gt_vols.mrc'),overwrite=True) 
+    else:
+        voxels = Volume.load(vols)
 
     sim = SimulatedSource(n,vols=voxels,unique_filters=filters,noise_var = 0)
     var = torch.var(sim._clean_images).item()
@@ -135,10 +175,14 @@ def simulateExp(folder_name = None,no_ctf=False):
         sim.noise_var = noise_var
         noise_var = sim.noise_var
         dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=Volume(voxels.asnumpy().mean(axis=0)))
-        dataset.starfile = 'tmp.star'
+        
 
         dir_name = os.path.join(folder_name,'obj_ml',f'algorithm_output_{snr}')
         os.makedirs(dir_name,exist_ok=True)  
+        if(save_source):
+            sim.save(dir_name)
+        dataset.starfile = os.path.join(dir_name,'particles.star')
+        
         display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
         display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
         data_dict,_,_ = covar_processing(dataset,r,dir_name,max_epochs=20,lr=1e-2,objective_func='ml',num_reg_update_iters=1)
@@ -160,4 +204,4 @@ def simulateExp(folder_name = None,no_ctf=False):
 
 
 if __name__=="__main__":
-    simulateExp('data/rank5_covar_estimate')
+    simulateExp('data/rank5_covar_estimate',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc')
