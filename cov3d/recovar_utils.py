@@ -63,7 +63,7 @@ def prepareDatasetForReconstruction(result_path):
 
     return dataset,zs,cov_zs,noise_variance,dataset_perm
 
-def recovarReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,n_bins=30):
+def recovarReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,n_bins=30,overwrite_vols=True):
     dataset,zs,cov_zs,noise_variance,dataset_perm = prepareDatasetForReconstruction(inputfile)
     L = dataset[0].grid_size
     B_factor = 0 #TODO: handle B_factor
@@ -71,4 +71,4 @@ def recovarReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,n
         with open(embedding_positions,'rb') as f:
             embedding_positions = pickle.load(f)
     
-    recovar_output.compute_and_save_reweighted(dataset, embedding_positions, zs, cov_zs, noise_variance*np.ones(L//2-1), outputfolder, B_factor, n_bins = n_bins)
+    recovar_output.compute_and_save_reweighted(dataset, embedding_positions, zs, cov_zs, noise_variance*np.ones(L//2-1), outputfolder, B_factor, n_bins = n_bins,overwrite_vols=overwrite_vols)

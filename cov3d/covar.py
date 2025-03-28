@@ -1,5 +1,6 @@
 import torch
 from cov3d.projection_funcs import centered_fft3,centered_ifft3
+from cov3d.fsc_utils import expand_fourier_shell
 
 class Covar(torch.nn.Module):
     def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
@@ -10,7 +11,10 @@ class Covar(torch.nn.Module):
         self.dtype = dtype
         self.upsampling_factor = upsampling_factor
 
-        vectors = self.init_random_vectors(rank) if vectors is None else torch.clone(vectors)
+        if(vectors is None):
+            vectors = self.init_random_vectors(rank) if (not isinstance(pixel_var_estimate,torch.Tensor) or pixel_var_estimate.ndim == 0) else self.init_random_vectors_from_psd(rank,self.pixel_var_estimate) 
+        else:
+            vectors = torch.clone(vectors)
 
         self._in_spatial_domain = not fourier_domain
         self.grid_correction = None
@@ -27,6 +31,8 @@ class Covar(torch.nn.Module):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
     
     def init_random_vectors_from_psd(self,num_vectors,psd):
+        if(psd.ndim == 1):#If psd input is radial
+            psd = expand_fourier_shell(psd,self.resolution,3)
         vectors = (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype))
         vectors_fourier = centered_fft3(vectors) / (self.resolution**1.5)
         vectors_fourier *= torch.sqrt(psd)
