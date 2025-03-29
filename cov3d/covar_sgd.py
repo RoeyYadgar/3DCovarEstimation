@@ -237,6 +237,8 @@ class CovarTrainer():
             self.log_cosine_sim = []
             self.log_fro_err = []
             self.covar_fsc_mean = []
+            self.lr_history = []
+            self.log_cost_val = []
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
@@ -293,7 +295,7 @@ class CovarTrainer():
 
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
-                    self.log_training()
+                    self.log_training(epoch,batch_ind,cost_val)
                     pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
                     pbar_description += f" , vecs norm : {torch.norm(self.covar.get_vectors())}"
                     if(self.vectorsGD is not None):
@@ -323,12 +325,7 @@ class CovarTrainer():
 
         if(lr is None):
             lr = 1e-1 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
-
-        #if(scale_params):
-            #reg *= self.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
-            #reg /= self.covar.resolution ** 2 #gradient of cost function scales linearly with L while regulriaztion scales with L^3
-        
-        
+            
         if(optim_type == 'SGD'):
             if(scale_params):
                 lr /= self.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
@@ -357,6 +354,7 @@ class CovarTrainer():
         self.covar.init_grid_correction(nufft_disc)
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
+        self.epoch_index = 0
 
     def restart_optimizer(self):
         for param_group in self.optimizer.param_groups:
@@ -368,8 +366,10 @@ class CovarTrainer():
             self.restart_optimizer()
 
         for epoch in range(max_epochs):
-            self.epoch_index = epoch
-            self.run_epoch(epoch)
+            epoch_start_time = time.time()
+            self.run_epoch(self.epoch_index)
+            epoch_end_time = time.time()
+            print(f'Epoch runtime: {epoch_end_time - epoch_start_time:.2f} seconds')
 
             self.scheduler.step(self.cost_in_epoch)
             print(f'New learning rate set to {self.scheduler.get_last_lr()}')
@@ -377,6 +377,7 @@ class CovarTrainer():
             if(self.logTraining and self.save_path is not None):
                 self.save_result()
 
+            self.epoch_index += 1
             if self.scheduler.get_last_lr()[0] <= self.lr * (self.scheduler.factor ** self.num_reduced_lr_before_stop):
                 print(f"Learning rate has been reduced {self.num_reduced_lr_before_stop} times. Stopping training.")
                 break
@@ -390,12 +391,10 @@ class CovarTrainer():
         #vectorsGD_rpsd[:,L//2:] = vectorsGD_rpsd[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
         self.fourier_reg = (self.noise_var) / expand_fourier_shell(eigen_rpsd,self.covar.resolution,3) #TODO : validate this regularization term        
 
-    def log_training(self):
-        if(len(self.log_epoch_ind) != 0):
-            self.log_epoch_ind.append(self.log_epoch_ind[-1] + self.training_log_freq / self.dataloader_len)
-        else:
-            self.log_epoch_ind.append(self.training_log_freq / self.dataloader_len)
-        
+    def log_training(self,num_epoch,batch_ind,cost_val):
+        self.log_epoch_ind.append(num_epoch + batch_ind / self.dataloader_len)
+        self.lr_history.append(self.scheduler.get_last_lr()[0])
+        self.log_cost_val.append(cost_val.detach().cpu().numpy())
 
         if(self.vectorsGD != None):
             with torch.no_grad():
@@ -418,6 +417,8 @@ class CovarTrainer():
         ckp['log_cosine_sim'] = self.log_cosine_sim
         ckp['log_fro_err'] = self.log_fro_err
         ckp['covar_fsc_mean'] = self.covar_fsc_mean
+        ckp['lr_history'] = self.lr_history
+        ckp['log_cost_val'] = self.log_cost_val
 
         return ckp
 
@@ -521,10 +522,7 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
     rank = vols.shape[0]
     L = images.shape[-1]
 
-    eigenvals_sqrt = torch.norm(vols.reshape(rank,-1),dim=1)
-    eigenvecs = vols / eigenvals_sqrt.reshape(rank,1,1,1)
-    projected_eigenvecs = vol_forward(eigenvecs,nufft_plans,filters)
-    eigenvals = eigenvals_sqrt ** 2
+    projected_eigenvecs = vol_forward(vols,nufft_plans,filters)
 
     images = images.reshape((batch_size,-1,1))
     projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
@@ -532,7 +530,7 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
     projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
     Q_projcted_images = torch.matmul(projected_Q.transpose(1,2),images) #size (batch, rank,1)
 
-    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2)) #size (batch,rank,rank)
+    projected_eigen_covar = torch.matmul(projected_R ,projected_R.transpose(1,2)) #size (batch,rank,rank)
     inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
     Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
     Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
@@ -592,10 +590,7 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     rank = vols.shape[0]
     L = images.shape[-1]
 
-    eigenvals_sqrt = torch.norm(vols.reshape(rank,-1),dim=1) #/ (vol_L ** 1.5) #vols in fourier domain will have their norm scaled by L**1.5
-    eigenvecs = vols / eigenvals_sqrt.reshape(rank,1,1,1)
-    projected_eigenvecs = vol_forward(eigenvecs,nufft_plans,filters,fourier_domain=True)
-    eigenvals = eigenvals_sqrt ** 2
+    projected_eigenvecs = vol_forward(vols,nufft_plans,filters,fourier_domain=True)
 
     images = images.reshape((batch_size,-1,1))
     projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
@@ -604,16 +599,14 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     Q_projcted_images = torch.matmul(projected_Q.transpose(1,2).conj(),images) #size (batch, rank,1)
 
 
-    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2).conj()) #size (batch,rank,rank)
+    projected_eigen_covar = torch.matmul(projected_R,projected_R.transpose(1,2).conj()) #size (batch,rank,rank)
     inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
     Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
     Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
     ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2).conj(),Q_projcted_images_transformed).squeeze()  #+1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
-    #ml_exp_term = ml_exp_term * (L/2)**4 #TODO: for some reason a factor of (L/2)**4 is missing from the computation. figure that out
     projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
 
     ml_noise_term = torch.logdet(projected_eigen_covar)  #+(L**2 - rank) * torch.log(torch.tensor(noise_var)) term which is constant
-
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
 
     if(fourier_reg is not None and reg_scale != 0):
