@@ -343,7 +343,7 @@ class CovarTrainer():
         rank = self.covar.rank
         dtype = self.covar.dtype
         vol_shape = (self.covar.resolution,)*3
-        self.optimize_in_fourier_domain = nufft_disc is not None #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
+        self.optimize_in_fourier_domain = nufft_disc != 'nufft' #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
         if(self.optimize_in_fourier_domain):
             self.nufft_plans = NufftPlanDiscretized(vol_shape,upsample_factor=self.covar.upsampling_factor,mode=nufft_disc)
             self.dataset.to_fourier_domain()
@@ -520,24 +520,19 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
 def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None):
     batch_size = images.shape[0]
     rank = vols.shape[0]
-    L = images.shape[-1]
 
     projected_eigenvecs = vol_forward(vols,nufft_plans,filters)
 
     images = images.reshape((batch_size,-1,1))
     projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
 
-    projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
-    Q_projcted_images = torch.matmul(projected_Q.transpose(1,2),images) #size (batch, rank,1)
+    projcted_images = torch.matmul(projected_eigenvecs,images) #size (batch, rank,1)
 
-    projected_eigen_covar = torch.matmul(projected_R ,projected_R.transpose(1,2)) #size (batch,rank,rank)
-    inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
-    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
-    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
-    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2),Q_projcted_images_transformed).squeeze() # +1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
-    projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
-
-    ml_noise_term = torch.logdet(projected_eigen_covar) # +(L**2 - rank) * torch.log(noise_var) term which is constant
+    m = torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigenvecs @ projected_eigenvecs.transpose(1,2) / noise_var
+    mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
+    projcted_images_transformed = torch.linalg.solve(m/mean_m.reshape(-1,1,1),projcted_images) / mean_m.reshape(-1,1,1) #size (batch, rank,1)
+    ml_exp_term = - 1/(noise_var**2) * torch.matmul(projcted_images.transpose(1,2).conj(),projcted_images_transformed).squeeze()  #+1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
+    ml_noise_term = torch.logdet(m) #+ (L**2) * torch.log(noise_var) # term which is constant
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
 
@@ -595,18 +590,14 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     images = images.reshape((batch_size,-1,1))
     projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
 
-    projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
-    Q_projcted_images = torch.matmul(projected_Q.transpose(1,2).conj(),images) #size (batch, rank,1)
+    projcted_images = torch.matmul(projected_eigenvecs.conj(),images) #size (batch, rank,1)
 
+    m = torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigenvecs.conj() @ projected_eigenvecs.transpose(1,2) / noise_var
+    mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
+    projcted_images_transformed = torch.linalg.solve(m/mean_m.reshape(-1,1,1),projcted_images) / mean_m.reshape(-1,1,1) #size (batch, rank,1)
+    ml_exp_term = - 1/(noise_var**2) * torch.matmul(projcted_images.transpose(1,2).conj(),projcted_images_transformed).squeeze()  #+1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
 
-    projected_eigen_covar = torch.matmul(projected_R,projected_R.transpose(1,2).conj()) #size (batch,rank,rank)
-    inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
-    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
-    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
-    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2).conj(),Q_projcted_images_transformed).squeeze()  #+1/noise_var * torch.norm(images,dim=(1,2)) ** 2  term which is constant
-    projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
-
-    ml_noise_term = torch.logdet(projected_eigen_covar)  #+(L**2 - rank) * torch.log(torch.tensor(noise_var)) term which is constant
+    ml_noise_term = torch.logdet(m)  #+(L**2) * torch.log(torch.tensor(noise_var)) term which is constant
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
 
     if(fourier_reg is not None and reg_scale != 0):
@@ -636,7 +627,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
     filters = dataset.unique_filters.to(device)
     num_eigs = eigs.shape[0]
     L = eigs.shape[1]
-    nufft_plans = NufftPlan(batch_size,(L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device)
+    nufft_plans = NufftPlan((L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device)
     cost_val = 0
     for i in range(0,len(dataset),batch_size):
         images,pts_rot,filter_indices = dataset[i:i+batch_size]

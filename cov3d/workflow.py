@@ -193,7 +193,7 @@ def covar_processing(dataset,covar_rank,output_dir,**training_kwargs):
         upsampling_factor = 2
     default_training_kwargs.update(training_kwargs)
 
-    optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
+    optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] != 'nufft'
     cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
                 fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
         
@@ -258,7 +258,7 @@ def workflow_click_decorator(func):
     @click.option('--reg',type=float,help='regularization scaling')
     @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
     @click.option('--orthogonal-projection',type=bool,help = "force orthogonality of eigen vectors while training (default True)")
-    @click.option('--nufft-disc',type=click.Choice(['bilinear','nearest']),default=None,help="Discretisation of NUFFT computation") #TODO: fix default values
+    @click.option('--nufft-disc',type=click.Choice(['bilinear','nearest','nufft']),default='bilinear',help="Discretisation of NUFFT computation")
     @click.option('--fourier-upsampling',type=int,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
     @click.option('--num-reg-update-iters',type=int,help='Number of iterations to update regularization')
     @click.option('--use-halfsets',type=bool,help='Whether to split data into halfsets for regularization update')

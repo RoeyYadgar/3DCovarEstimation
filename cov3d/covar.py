@@ -77,7 +77,7 @@ class Covar(torch.nn.Module):
         return
             
     def init_grid_correction(self,nufft_disc):
-        if(nufft_disc is None):
+        if(nufft_disc != 'bilinear' and nufft_disc != 'nearest'):
             self.grid_correction = None
             return
         
