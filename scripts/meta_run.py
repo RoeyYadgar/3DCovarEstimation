@@ -102,7 +102,7 @@ dataset_masks = [
     "Ribosembly/init_mask/mask.mrc",
     "Spike-MD/init_mask/mask_128.mrc",
     "Tomotwin-100/init_mask/mask.mrc",
-    None
+    "empiar10076/mask_full.mrc",
 ]
 
 gt_dir = [
@@ -202,10 +202,10 @@ cost_func_reg_experiment = Experiment(
 
 empiar_experiment = Experiment(
     alg_fixed_params = {
-        'rank' : 10,
+        'rank' : 15,
         'reg' : 1,
         'max-epochs' : 15,
-        'batch-size' : 4096,
+        'batch-size' : 2048,
         'orthogonal-projection' : False,
         'nufft-disc' : 'bilinear',
         'use-halfsets' : False,
@@ -213,7 +213,7 @@ empiar_experiment = Experiment(
         'debug' : None,
     },
     alg_var_params= {
-        'lr' : [1e-2,1e0,1e-1]
+        'lr' : [1e-2]
     },
     run_prefix = 'Empiar_final',
     datasets = ['empiar10076']
