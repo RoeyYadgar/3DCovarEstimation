@@ -25,7 +25,6 @@ dependencies = [
     "dataframe_image==0.2.7",
     "starfile==0.5.1",
     "scikit-fmm==2025.1.29",
-    "prody==2.4.1",
     "jax==0.5.0",
     "jaxlib==0.5.0"
 ]

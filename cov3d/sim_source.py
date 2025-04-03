@@ -139,12 +139,23 @@ def display_source(source,output_path,num_ims = 2,display_clean=False):
             axs[(j,i)].set_yticks([]) 
     fig.savefig(output_path,bbox_inches='tight', pad_inches=0.1)
 
-def simulateExp(folder_name = None,no_ctf=False,save_source = False,vols = None):
+
+def replicate_source(source):
+    source.rotations = np.tile(source.rotations,(2,1,1))
+    source.filter_indices = np.tile(source.filter_indices,(2))
+    source.states = torch.tile(source.states,(2,))
+    source.amplitudes = np.tile(source.amplitudes,(2))
+    source.offsets = torch.tile(source.offsets,(2,1))
+    source._clean_images = torch.tile(source._clean_images,(2,1,1))
+    source._image_noise = torch.tile(source._image_noise,(2,1,1))
+    source.n = source.n * 2
+
+    return source
+
+def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vols = None,mask=None):
     os.makedirs(folder_name,exist_ok=True)
 
-    L = 64
     n = 100000
-    r = 5
     pixel_size = 3 * 128/ L
 
     if(not no_ctf):
@@ -174,15 +185,14 @@ def simulateExp(folder_name = None,no_ctf=False,save_source = False,vols = None)
 
         sim.noise_var = noise_var
         noise_var = sim.noise_var
-        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=Volume(voxels.asnumpy().mean(axis=0)))
+        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=Volume(voxels.asnumpy().mean(axis=0)),mask=Volume.load(mask) if mask is not None else None)
         
-
+    
         dir_name = os.path.join(folder_name,'obj_ml',f'algorithm_output_{snr}')
         os.makedirs(dir_name,exist_ok=True)  
         if(save_source):
             sim.save(dir_name)
-        dataset.starfile = os.path.join(dir_name,'particles.star')
-        
+        dataset.starfile = os.path.join(dir_name,'particles.star')     
         display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
         display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
         data_dict,_,_ = covar_processing(dataset,r,dir_name,max_epochs=20,lr=1e-2,objective_func='ml',num_reg_update_iters=1)
@@ -204,4 +214,4 @@ def simulateExp(folder_name = None,no_ctf=False,save_source = False,vols = None)
 
 
 if __name__=="__main__":
-    simulateExp('data/rank5_covar_estimate',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc')
+    simulateExp('data/rank5_converges_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
