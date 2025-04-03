@@ -1,5 +1,5 @@
 import torch
-from cov3d.projection_funcs import centered_fft3,centered_ifft3
+from cov3d.projection_funcs import centered_fft3,centered_ifft3,crop_tensor
 from cov3d.fsc_utils import expand_fourier_shell
 
 class Covar(torch.nn.Module):
@@ -91,10 +91,48 @@ class Covar(torch.nn.Module):
             sinc_val = sinc_val ** 2
         
         sinc_volume = torch.einsum('i,j,k->ijk', sinc_val, sinc_val, sinc_val)
-        self.grid_correction = sinc_volume.to(self.vectors.device)
+        self.grid_correction = sinc_volume.to(self.device)
 
     def to(self,*args,**kwargs):
         super().to(*args,**kwargs)
         if(self.grid_correction is not None):
             self.grid_correction = self.grid_correction.to(*args,**kwargs)
         return self 
+    
+
+
+class CovarFourier(Covar):
+    ''' Used to optimize the covariance eigenvecs in Fourier domain.
+    In principle this should be faster than using Covar with fourier_domain=True (since it does not require perfoming upsampled FFT at each iteration), but in practice there is no speedup.
+    '''
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,upsampling_factor=2,vectors = None):
+        super().__init__()
+        self.resolution = resolution
+        self.rank = rank
+        self.pixel_var_estimate = pixel_var_estimate
+        self.dtype = dtype
+        self.upsampling_factor = upsampling_factor
+
+        if(vectors is None):
+            vectors = self.init_random_vectors(rank) if (not isinstance(pixel_var_estimate,torch.Tensor) or pixel_var_estimate.ndim == 0) else self.init_random_vectors_from_psd(rank,self.pixel_var_estimate) 
+        else:
+            vectors = torch.clone(vectors)
+        
+        vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
+
+        self.grid_correction = None
+        self._vectors_real = torch.nn.Parameter(vectors.real)
+        self._vectors_imag = torch.nn.Parameter(vectors.imag)
+        self._in_spatial_domain = False
+
+    def get_vectors_spatial_domain(self):
+        spatial_vectors = centered_ifft3(torch.complex(self._vectors_real, self._vectors_imag)).real
+        return crop_tensor(spatial_vectors, (self.resolution,) * 3,dims=[-1,-2,-3]) / (self.grid_correction if self.grid_correction is not None else 1)
+    
+    def get_vectors_fourier_domain(self):
+        return torch.complex(self._vectors_real, self._vectors_imag)
+    
+    @property
+    def device(self):
+        return self._vectors_real.device
+    

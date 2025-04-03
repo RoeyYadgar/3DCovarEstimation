@@ -239,6 +239,7 @@ class CovarTrainer():
             self.covar_fsc_mean = []
             self.lr_history = []
             self.log_cost_val = []
+            self.epoch_run_time = []
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
@@ -375,6 +376,7 @@ class CovarTrainer():
             print(f'New learning rate set to {self.scheduler.get_last_lr()}')
 
             if(self.logTraining and self.save_path is not None):
+                self.epoch_run_time.append(epoch_end_time - epoch_start_time)
                 self.save_result()
 
             self.epoch_index += 1
@@ -419,6 +421,7 @@ class CovarTrainer():
         ckp['covar_fsc_mean'] = self.covar_fsc_mean
         ckp['lr_history'] = self.lr_history
         ckp['log_cost_val'] = self.log_cost_val
+        ckp['epoch_run_time'] = self.epoch_run_time
 
         return ckp
 

@@ -75,7 +75,7 @@ def vol_forward(volume,plan,filters = None,fourier_domain = False):
         return volume_forward
     elif(isinstance(plan,BaseNufftPlan)):
         vol_nufft = nufft_forward(volume,plan)
-        vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,L,L)).transpose(0,1)
+        vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,L,L)).transpose(0,1).clone()
         batch_size = vol_nufft.shape[1]
         
         if(L % 2 == 0):
