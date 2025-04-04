@@ -50,6 +50,10 @@ class Covar(torch.nn.Module):
             eigenvecs = eigenvecs.reshape((self.rank,self.resolution,self.resolution,self.resolution))
             eigenvals = eigenvals ** 2
             return eigenvecs,eigenvals
+
+    @property
+    def grad_scale_factor(self):
+        return (self.pixel_var_estimate ** 0.5)
         
     def get_vectors_fourier_domain(self):
         vectors = self.vectors / self.grid_correction if self.grid_correction is not None else self.vectors
@@ -102,11 +106,11 @@ class Covar(torch.nn.Module):
 
 
 class CovarFourier(Covar):
-    ''' Used to optimize the covariance eigenvecs in Fourier domain.
-    In principle this should be faster than using Covar with fourier_domain=True (since it does not require perfoming upsampled FFT at each iteration), but in practice there is no speedup.
+    ''' Used to optimize the covariance eigenvecs in Fourier domain. 
+    Differs from Covar with `fourier_domain=True` by keeping the underlying vectors in Fourier domain directly.
     '''
-    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,upsampling_factor=2,vectors = None):
-        super().__init__()
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
+        torch.nn.Module.__init__(self)
         self.resolution = resolution
         self.rank = rank
         self.pixel_var_estimate = pixel_var_estimate
@@ -114,7 +118,7 @@ class CovarFourier(Covar):
         self.upsampling_factor = upsampling_factor
 
         if(vectors is None):
-            vectors = self.init_random_vectors(rank) if (not isinstance(pixel_var_estimate,torch.Tensor) or pixel_var_estimate.ndim == 0) else self.init_random_vectors_from_psd(rank,self.pixel_var_estimate) 
+            vectors = self.init_random_vectors(rank) if (not isinstance(pixel_var_estimate,torch.Tensor) or pixel_var_estimate.ndim == 0) else self.init_random_vectors_from_psd(rank,pixel_var_estimate) 
         else:
             vectors = torch.clone(vectors)
         
@@ -136,3 +140,6 @@ class CovarFourier(Covar):
     def device(self):
         return self._vectors_real.device
     
+    @property
+    def grad_scale_factor(self):
+        return (self.pixel_var_estimate * ((self.upsampling_factor *self.resolution) ** 3)) ** 0.5

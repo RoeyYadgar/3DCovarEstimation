@@ -338,6 +338,9 @@ class CovarTrainer():
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
+            if(scale_params):
+                lr *= self.covar.grad_scale_factor
+        lr *= self.batch_size
         self.lr = lr
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
 
