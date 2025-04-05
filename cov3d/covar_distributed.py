@@ -37,7 +37,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
         is_group1 = rank in range(world_size//2)
         if not is_group1:
             torch.manual_seed(1) #Reinitalize vectors in group2
-            covar_model.vectors.data.copy_(covar_model.init_random_vectors(covar_model.rank))
+            covar_model.set_vectors(covar_model.init_random_vectors(covar_model.rank))
         covar_model = DDP(covar_model,device_ids=[rank],process_group=group1 if is_group1 else group2)
     else:
         covar_model = DDP(covar_model,device_ids=[rank])

@@ -26,6 +26,9 @@ class Covar(torch.nn.Module):
     
     def get_vectors(self):
         return self.get_vectors_spatial_domain() if self._in_spatial_domain else self.get_vectors_fourier_domain()
+
+    def set_vectors(self, new_vectors):
+        self.vectors.data.copy_(new_vectors)
     
     def init_random_vectors(self,num_vectors):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
@@ -66,8 +69,8 @@ class Covar(torch.nn.Module):
         with torch.no_grad():
             vectors = self.get_vectors_spatial_domain().reshape(self.rank,-1)
             _,S,V = torch.linalg.svd(vectors,full_matrices = False)
-            orthogonal_vectors  = (S.reshape(-1,1) * V).view_as(self.vectors)
-            self.vectors.data.copy_(orthogonal_vectors)
+            orthogonal_vectors  = (S.reshape(-1,1) * V).reshape(self.rank, self.resolution, self.resolution, self.resolution)
+            self.set_vectors(orthogonal_vectors)
 
     def state_dict(self,*args,**kwargs):
         state_dict = super().state_dict(*args,**kwargs)
@@ -128,6 +131,13 @@ class CovarFourier(Covar):
         self._vectors_real = torch.nn.Parameter(vectors.real)
         self._vectors_imag = torch.nn.Parameter(vectors.imag)
         self._in_spatial_domain = False
+
+    def set_vectors(self,vectors):
+        if(not vectors.is_complex()):
+            vectors = centered_fft3(vectors, padding_size=(self.resolution * self.upsampling_factor,) * 3)
+        # Store real and imaginary parts separately
+        self._vectors_real.data.copy_(vectors.real)
+        self._vectors_imag.data.copy_(vectors.imag)
 
     def get_vectors_spatial_domain(self):
         spatial_vectors = centered_ifft3(torch.complex(self._vectors_real, self._vectors_imag)).real

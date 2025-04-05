@@ -672,7 +672,7 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
     else:
         covar_model_copy = copy.deepcopy(covar_model)
         with torch.no_grad(): #Reinitalize the copied model since having the same initalization will produce unwanted correlation even after training
-            covar_model_copy.vectors.data.copy_(covar_model_copy.init_random_vectors(covar_model.rank))
+            covar_model_copy.set_vectors(covar_model_copy.init_random_vectors(covar_model.rank))
         half1,half2 = dataset.half_split()
 
         num_epochs = kwargs.pop('max_epochs')
