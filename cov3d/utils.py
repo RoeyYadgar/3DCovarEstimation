@@ -246,6 +246,26 @@ def vol_fsc(vol1,vol2):
 
         return vol1.fsc(vol2)
 
+def get_cpu_count():
+
+    # Check for SLURM environment variable first
+    #TODO : handle other job schedulers
+    slurm_cpu_count = os.getenv('SLURM_CPUS_PER_TASK')
+    if slurm_cpu_count is not None:
+        return int(slurm_cpu_count)
+    
+    return multiprocessing.cpu_count()
+
+def get_mpi_cpu_count():
+
+    # Check for SLURM environment variable first
+    #TODO : handle other job schedulers
+    slurm_cpu_count = os.getenv('SLURM_NTASKS')
+    if slurm_cpu_count is not None:
+        return int(slurm_cpu_count)
+    
+    return multiprocessing.cpu_count()
+
 def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs_index = None,invert=False):
     if(mrcs_index is not None):
         subfile = f'{inputfile}.sub.tmp'
@@ -253,11 +273,10 @@ def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs
         inputfile = subfile
     classnum_arg = f' --class {classnum}' if classnum is not None else ''
     inputfile_path,inputfile_name = os.path.split(inputfile)
-    #outputfile_rel = os.path.relpath(outputfile,inputfile_path)
     outputfile_abs = os.path.abspath(outputfile)
     if(overwrite or (not os.path.isfile(outputfile))):
         relion_command = f'relion_reconstruct --i {inputfile_name} --o {outputfile_abs} --ctf' + classnum_arg
-        num_cores = multiprocessing.cpu_count()
+        num_cores = get_mpi_cpu_count()
         if(num_cores > 1):
             relion_command = f'mpirun -np {num_cores} {relion_command.replace("relion_reconstruct","relion_reconstruct_mpi")}'
         os.system(f'cd {inputfile_path} && {relion_command}')

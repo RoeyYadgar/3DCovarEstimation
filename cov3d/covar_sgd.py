@@ -8,7 +8,7 @@ from tqdm import tqdm
 import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
-from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
+from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
 from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc,covar_fsc
@@ -338,6 +338,9 @@ class CovarTrainer():
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = lr,momentum = momentum)
         elif(optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = lr)
+            if(scale_params):
+                lr *= self.covar.grad_scale_factor
+        lr *= self.batch_size
         self.lr = lr
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
 
@@ -645,7 +648,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
 
 
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
-    num_workers = min(4,os.cpu_count()-1)
+    num_workers = min(4,get_cpu_count()-1)
     use_halfsets = kwargs.pop('use_halfsets')
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
     if(not use_halfsets):
@@ -669,7 +672,7 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
     else:
         covar_model_copy = copy.deepcopy(covar_model)
         with torch.no_grad(): #Reinitalize the copied model since having the same initalization will produce unwanted correlation even after training
-            covar_model_copy.vectors.data.copy_(covar_model_copy.init_random_vectors(covar_model.rank))
+            covar_model_copy.set_vectors(covar_model_copy.init_random_vectors(covar_model.rank))
         half1,half2 = dataset.half_split()
 
         num_epochs = kwargs.pop('max_epochs')
