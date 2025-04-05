@@ -6,6 +6,7 @@ from torch import distributed as dist
 import os
 from cov3d.covar_sgd import CovarTrainer,compute_updated_fourier_reg
 from cov3d.covar import Covar
+from cov3d.utils import get_cpu_count
 from cov3d.iterative_covar_sgd import IterativeCovarTrainer,IterativeCovar,IterativeCovarVer2,IterativeCovarTrainerVer2
 import math
 
@@ -25,7 +26,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
     use_halfsets = kwargs.pop('use_halfsets',False)
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
     
-    num_workers = min(4,(os.cpu_count()-1)//world_size)
+    num_workers = min(4,(get_cpu_count()-1)//world_size)
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset),
                                              num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=f'cuda:{rank}')
     
@@ -80,7 +81,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
             for param in covar_model.parameters(): #Update state of group2
                 dist.broadcast(param,src=0)
         #Reset DDP model to include all ranks
-        covar_model = Covar(covar_model.module.resolution,
+        covar_model = covar_model.module.__class__(covar_model.module.resolution,
                     covar_model.module.rank,
                     pixel_var_estimate=covar_model.module.pixel_var_estimate,
                     fourier_domain = not covar_model.module._in_spatial_domain,

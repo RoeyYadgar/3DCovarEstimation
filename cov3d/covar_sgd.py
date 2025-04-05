@@ -8,7 +8,7 @@ from tqdm import tqdm
 import copy
 from aspire.volume import Volume
 from aspire.volume import rotated_grids
-from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
+from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
 from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc,covar_fsc
@@ -648,7 +648,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
 
 
 def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
-    num_workers = min(4,os.cpu_count()-1)
+    num_workers = min(4,get_cpu_count()-1)
     use_halfsets = kwargs.pop('use_halfsets')
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
     if(not use_halfsets):
