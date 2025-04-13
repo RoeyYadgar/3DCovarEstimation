@@ -75,23 +75,23 @@ def vol_forward(volume,plan,filters = None,fourier_domain = False):
         return volume_forward
     elif(isinstance(plan,BaseNufftPlan)):
         vol_nufft = nufft_forward(volume,plan)
-        vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,L,L)).transpose(0,1)
+        vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,L,L)).transpose(0,1).clone()
         batch_size = vol_nufft.shape[1]
         
         if(L % 2 == 0):
-            vol_nufft_clone = vol_nufft.clone()
-            vol_nufft_clone[:,:,0,:] = 0
-            vol_nufft_clone[:,:,:,0] = 0
+            #vol_nufft_clone = vol_nufft.clone()
+            vol_nufft[:,:,0,:] = 0
+            vol_nufft[:,:,:,0] = 0
         else:
-            vol_nufft_clone = vol_nufft
+            vol_nufft = vol_nufft
 
         if(filters is not None):
-            vol_nufft_clone = vol_nufft_clone * filters.unsqueeze(1)
+            vol_nufft = vol_nufft * filters.unsqueeze(1)
 
         if(batch_size == 1):
-            vol_nufft_clone = vol_nufft_clone.squeeze(0)
+            vol_nufft = vol_nufft.squeeze(0)
 
-        volume_forward = centered_ifft2(vol_nufft_clone).real if (not fourier_domain) else vol_nufft_clone
+        volume_forward = centered_ifft2(vol_nufft).real if (not fourier_domain) else vol_nufft
 
         return volume_forward/L
 

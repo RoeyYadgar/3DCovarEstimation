@@ -4,6 +4,8 @@ import sys
 import numpy as np
 import pandas as pd
 from glob import glob
+import pickle
+import torch
 from sklearn.metrics import auc
 import comet_ml
 from aspire.storage import StarFile
@@ -61,11 +63,12 @@ def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent,gt_labels):
 @click.option('--gt-dir',type=str,help="Directory of ground truth volumes")
 @click.option('--gt-latent',type=str,help="Path to pkl containing ground truth embedding")
 @click.option('--gt-labels',type=str,help="Path to pkl containing ground truth labels")
+@click.option('--skip-computation',is_flag=True,help='Whether to skip covariance estimation computation')
 @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
 @workflow_click_decorator
 def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
                  run_analysis,gt_dir=None,gt_latent=None,gt_labels=None,num_vols=None,
-                 disable_comet = False,**training_kwargs):
+                 disable_comet = False,skip_computation = False,**training_kwargs):
     if(not disable_comet):
         image_size = int(float(StarFile(starfile)['optics']['_rlnImageSize'][0]))
         run_config  = {'image_size' : image_size, 'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
@@ -75,43 +78,55 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
         exp.set_name(name)
         exp.log_parameters(run_config)
     training_kwargs = {k : v for k,v in training_kwargs.items() if v is not None}
-    data_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
+
+    output_dir = training_kwargs.get('output_dir',None)
+    if(output_dir is None):
+        output_dir = os.path.join(os.path.split(starfile)[0],'result_data')
+
+    if(not skip_computation):
+        data_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
+    else:
+        with open(os.path.join(output_dir,'recorded_data.pkl'),'rb') as fid:
+            data_dict = pickle.load(fid)
+
+        training_data = torch.load(os.path.join(output_dir,'training_results.bin'))
+
 
     if(run_analysis):
         #Only import analysis functions when necesseary
         from cov3d.analyze import analyze
         from external.cryobench_analyze import cryobench_analyze
         #TODO: handle disable_comet
-        result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
         #Run analysis
-        analysis_figures = analyze(os.path.join(result_dir,'recorded_data.pkl'),analyze_with_gt=True,skip_reconstruction=True,gt_labels=gt_labels)
+        analysis_figures = analyze(os.path.join(output_dir,'recorded_data.pkl'),analyze_with_gt=True,skip_reconstruction=True,gt_labels=gt_labels,num_clusters=0)
         for fig_name,fig_path in analysis_figures.items():
             exp.log_image(image_data = fig_path,name=fig_name)
 
         #Run cryobench analysis (compares to GT latent embedding and volume states)
-        cryobench_analyze(result_dir,gt_dir=gt_dir,gt_latent=gt_latent,gt_labels=gt_labels,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
-        log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent,gt_labels)
+        cryobench_analyze(output_dir,gt_dir=gt_dir,gt_latent=gt_latent,gt_labels=gt_labels,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
+        log_cryobench_analysis_output(exp,output_dir,gt_dir,gt_latent,gt_labels)
 
     if(not disable_comet):
-        result_dir = os.path.join(os.path.split(starfile)[0],'result_data')
         exp.log_parameters(training_kwargs)
         exp.log_metrics({"eigenval_est" : data_dict["eigenval_est"]})
 
         if('eigenvals_GT' in data_dict.keys()):
             metrics = {"frobenius_norm_error" : training_data['log_fro_err'][-1],
                     "eigen_vector_cosine_sim" : training_data['log_cosine_sim'][-1],
+                    "covar_fsc" : training_data['covar_fsc_mean'][-1],
                     "eigenvals_GT" : data_dict["eigenvals_GT"],
                     }
             exp.log_metrics(metrics)
             fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['log_fro_err'])]
+            fsc_log = [exp.log_metric(name='covar_fsc',value=v,step=i) for i,v in enumerate(training_data['covar_fsc_mean'])]
             epoch_ind_log = [exp.log_metric(name='log_epoch_ind',value=v,step=i) for i,v in enumerate(training_data['log_epoch_ind'])]
 
         
         data_artifact = comet_ml.Artifact("produced_data","data")
-        data_artifact.add(os.path.join(result_dir,'recorded_data.pkl'))
+        data_artifact.add(os.path.join(output_dir,'recorded_data.pkl'))
         exp.log_artifact(data_artifact)
         training_artifact = comet_ml.Artifact("training_data","data")
-        training_artifact.add(os.path.join(result_dir,'training_results.bin'))
+        training_artifact.add(os.path.join(output_dir,'training_results.bin'))
         exp.log_artifact(training_artifact)
 
         exp.end()

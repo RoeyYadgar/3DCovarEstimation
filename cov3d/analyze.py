@@ -11,30 +11,35 @@ from cov3d.recovar_utils import recovarReconstructFromEmbedding
 from cov3d.fsc_utils import covar_fsc
 
 
-def create_scatter_figure(coords,cluster_coords,labels):
+def create_scatter_figure(coords,cluster_coords,labels,scatter_size=0.1):
     fig = plt.figure()
-    plt.scatter(coords[:,0],coords[:,1],s=0.1,c=labels)
+    plt.scatter(coords[:,0],coords[:,1],s=scatter_size,c=labels)
     x_min, x_max = np.percentile(coords[:,0], [0.5, 99.5])
     x_delta = x_max - x_min
     y_min, y_max = np.percentile(coords[:,1], [0.5, 99.5])
     y_delta = y_max-y_min
-    for i in range(cluster_coords.shape[0]):
-        plt.annotate(str(i),(cluster_coords[i,0],cluster_coords[i,1]),fontweight='bold')
+    if(cluster_coords is not None):
+        for i in range(cluster_coords.shape[0]):
+            plt.annotate(str(i),(cluster_coords[i,0],cluster_coords[i,1]),fontweight='bold')
     plt.xlim(x_min - 0.1 * x_delta, x_max + 0.1 * x_delta)
     plt.ylim(y_min - 0.1 * y_delta, y_max + 0.1 * y_delta)
     return fig
 
-def create_umap_figure(umap_coords,cluster_coords,labels=None):
-    fig = create_scatter_figure(umap_coords,cluster_coords,labels)
+def create_umap_figure(umap_coords,cluster_coords=None,labels=None,**scatter_kwargs):
+    fig = create_scatter_figure(umap_coords,cluster_coords,labels,**scatter_kwargs)
     plt.xlabel('UMAP 1')
     plt.ylabel('UMAP 2')
     return {'umap' : fig}
 
-def create_pc_figure(pc_coords,cluster_coords,labels=None,num_pcs = 5):
+def create_pc_figure(pc_coords,cluster_coords=None,labels=None,num_pcs = 5,**scatter_kwargs):
     figures = {}
+    num_pcs = min(num_pcs,pc_coords.shape[1])
     for i in range(num_pcs):
         for j in range(i+1,num_pcs):
-            fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels)
+            if(cluster_coords is not None):
+                fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels,**scatter_kwargs)
+            else:
+                fig = create_scatter_figure(pc_coords[:,[i,j]],None,labels,**scatter_kwargs)
             plt.xlabel(f'PC {i}')
             plt.ylabel(f'PC {j}')
             figures[f'pc_{i}_{j}'] = fig
@@ -42,8 +47,8 @@ def create_pc_figure(pc_coords,cluster_coords,labels=None,num_pcs = 5):
     return figures
 
 def create_covar_fsc_figure(fsc):
-    fig,axs = plt.subplots(1,2,figsize=(12,6))
-    im1 = axs[0].imshow(fsc,vmin=0,vmax=1)
+    fig,axs = plt.subplots(1,2,figsize=(12,6),gridspec_kw={'width_ratios': [1, 1]})
+    im1 = axs[0].imshow(fsc,vmin=0,vmax=1,aspect='auto')
     fsc_mean = np.mean(fsc)
     axs[0].set_title('Covar FSC - entry mean: {:.3f}'.format(fsc_mean))
     axs[0].set_xlabel('Resolution index')
@@ -52,8 +57,9 @@ def create_covar_fsc_figure(fsc):
 
     fsc_diag = np.diag(fsc)
     fsc_diag_mean = np.mean(fsc_diag)
+    fsc_cutoff = np.max(np.where(fsc > 0.143))
     axs[1].plot(fsc_diag)
-    axs[1].set_title('Covar FSC diagonal - mean: {:.3f}'.format(fsc_diag_mean))
+    axs[1].set_title('Covar FSC diagonal - mean: {:.3f}, \n Threshold=0.143 cutoff: {:.3f}'.format(fsc_diag_mean, fsc_cutoff))
     axs[1].set_xlabel('Resolution index')
     axs[1].set_ylabel('FSC')
     return fig
@@ -63,20 +69,24 @@ def create_covar_fsc_figure(fsc):
 @click.option('-o','--output-dir',type=str,help='directory to store analysis output (same directory as result_data by default)',default=None)
 @click.option('--analyze-with-gt',is_flag=True,help='whether to also perform analysis with embedding from gt eigenvolumes (if availalbe)')
 @click.option('--num-clusters',type=int,default=40,help='number of k-means clusters used to reconstruct from embedding')
+@click.option('--latent-coords',type=str,default=None,help='path to pkl containing latent coords to be used as cluster centers instead of k-means')
 @click.option('--skip-reconstruction',is_flag=True,help='whether to skip reconstruction of k-means cluster centers')
 @click.option('--gt-labels',default=None,help='path to pkl file containing gt labels. if provided used for coloring embedding figures')
-def analyze_cli(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,skip_reconstruction=False,gt_labels=None):
-    analyze(result_data,output_dir,analyze_with_gt=analyze_with_gt,num_clusters=num_clusters,skip_reconstruction=skip_reconstruction,gt_labels=gt_labels)
+def analyze_cli(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,skip_reconstruction=False,gt_labels=None):
+    analyze(result_data,output_dir,analyze_with_gt=analyze_with_gt,num_clusters=num_clusters,latent_coords=latent_coords,skip_reconstruction=skip_reconstruction,gt_labels=gt_labels)
 
-def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,skip_reconstruction=False,gt_labels=None):
+def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,skip_reconstruction=False,gt_labels=None):
     with open(result_data,'rb') as f:
         data = pickle.load(f)
 
     if(gt_labels is not None):
-        with open(gt_labels,'rb') as f:
-            gt_labels = pickle.load(f)
-    else:
-        gt_labels = None
+        if(isinstance(gt_labels,str)):
+            with open(gt_labels,'rb') as f:
+                gt_labels = pickle.load(f)
+
+    if(latent_coords is not None):
+        with open(latent_coords,'rb') as f:
+            latent_coords = pickle.load(f)
 
     if(output_dir is None):
         output_dir = os.path.join(os.path.split(result_data)[0],'output')
@@ -99,8 +109,8 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,sk
 
     figure_paths = {}
     for coords_key,coords_covar_inv_key,analysis_dir,fig_prefix,eigenvols_key in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix,eigenvols_keys):
-        analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters,gt_labels)
-        fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data[eigenvols_key])
+        analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters if latent_coords is None else latent_coords,gt_labels)
+        fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data.get(eigenvols_key))
         figure_paths.update({fig_prefix+k : v for k,v in fig_path.items()})
         if(not skip_reconstruction):
             #TODO: handle GT reconstruction - right now recovarReconstructomFromEmbedding will still use est embedding
@@ -124,13 +134,20 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,sk
 
 def analyze_coordinates(coords,num_clusters,gt_labels):
 
-    kmeans = KMeans(n_clusters=num_clusters)
-    kmeans.fit(coords)
-    cluster_coords = kmeans.cluster_centers_
-
     reducer = UMAP(n_components=2)
     umap_coords = reducer.fit_transform(coords)
-    umap_cluster_coords = reducer.transform(cluster_coords)
+
+    if(isinstance(num_clusters,np.ndarray)): #If num_clusters is already the cluster_coords
+        cluster_coords = num_clusters
+        umap_cluster_coords = reducer.transform(cluster_coords)
+    elif(num_clusters != 0):
+        kmeans = KMeans(n_clusters=num_clusters)
+        kmeans.fit(coords)
+        cluster_coords = kmeans.cluster_centers_
+        umap_cluster_coords = reducer.transform(cluster_coords)
+    else:
+        cluster_coords = None
+        umap_cluster_coords = None
 
     figures = {
         **create_umap_figure(umap_coords,umap_cluster_coords,gt_labels),

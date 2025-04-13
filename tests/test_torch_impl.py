@@ -255,7 +255,7 @@ class TestTorchImpl(unittest.TestCase):
             inverted_projected_eigen_covar = torch.inverse(projected_eigen_covar) #size (batch,L**2,L**2)
 
             ml_exp_term = torch.matmul(images.transpose(1,2).conj(),torch.matmul(inverted_projected_eigen_covar,images)).squeeze() - 1/noise_var * torch.norm(images,dim=(1,2)) ** 2 #remove constant term that is not being taked into account in cost_maximum_liklihood_fourier_domain
-            ml_noise_term = torch.logdet(projected_eigen_covar) - (L**2 - rank) * torch.log(torch.tensor(noise_var)) #remove constant term that is not being taked into account in cost_maximum_liklihood_fourier_domain
+            ml_noise_term = torch.logdet(projected_eigen_covar) - (L**2) * torch.log(torch.tensor(noise_var)) #remove constant term that is not being taked into account in cost_maximum_liklihood_fourier_domain
 
             cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
             
@@ -271,9 +271,15 @@ class TestTorchImpl(unittest.TestCase):
         pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
         plans = nufft_plan.NufftPlan((self.img_size,)*3,batch_size=rank)
         plans.setpts(pts_rot)
-        efficient_cost = cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var)
-        naive_cost = naive_cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var)
+        efficient_cost = cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var*100)
+        efficient_cost.backward()
+        grad_efficient = covar.vectors.grad.clone()
+        covar.vectors.grad.zero_()
+        naive_cost = naive_cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var*100)
+        naive_cost.backward()
+        grad_naive = covar.vectors.grad.clone()
         torch.testing.assert_close(naive_cost,efficient_cost, rtol=5e-3,atol=5e-3)
+        torch.testing.assert_close(grad_efficient,grad_naive, rtol=5e-3,atol=5e-3)
 
     
         self.dataset.to_fourier_domain()

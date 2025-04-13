@@ -246,6 +246,26 @@ def vol_fsc(vol1,vol2):
 
         return vol1.fsc(vol2)
 
+def get_cpu_count():
+
+    # Check for SLURM environment variable first
+    #TODO : handle other job schedulers
+    slurm_cpu_count = os.getenv('SLURM_CPUS_PER_TASK')
+    if slurm_cpu_count is not None:
+        return int(slurm_cpu_count)
+    
+    return multiprocessing.cpu_count()
+
+def get_mpi_cpu_count():
+
+    # Check for SLURM environment variable first
+    #TODO : handle other job schedulers
+    slurm_cpu_count = os.getenv('SLURM_NTASKS')
+    if slurm_cpu_count is not None:
+        return int(slurm_cpu_count)
+    
+    return multiprocessing.cpu_count()
+
 def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs_index = None,invert=False):
     if(mrcs_index is not None):
         subfile = f'{inputfile}.sub.tmp'
@@ -253,11 +273,10 @@ def relionReconstruct(inputfile,outputfile,classnum = None,overwrite = True,mrcs
         inputfile = subfile
     classnum_arg = f' --class {classnum}' if classnum is not None else ''
     inputfile_path,inputfile_name = os.path.split(inputfile)
-    #outputfile_rel = os.path.relpath(outputfile,inputfile_path)
     outputfile_abs = os.path.abspath(outputfile)
     if(overwrite or (not os.path.isfile(outputfile))):
         relion_command = f'relion_reconstruct --i {inputfile_name} --o {outputfile_abs} --ctf' + classnum_arg
-        num_cores = multiprocessing.cpu_count()
+        num_cores = get_mpi_cpu_count()
         if(num_cores > 1):
             relion_command = f'mpirun -np {num_cores} {relion_command.replace("relion_reconstruct","relion_reconstruct_mpi")}'
         os.system(f'cd {inputfile_path} && {relion_command}')
@@ -291,13 +310,17 @@ def relionReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,q=
         relionReconstruct(starfile,output_file,overwrite=True,mrcs_index=index_under_threshold.cpu().numpy(),invert=result['data_sign_inverted'])
 
 
-def readVols(volfiles):
+def readVols(directory,in_list=True):
+    volfiles = [os.path.join(directory,v) for v in os.listdir(directory) if '.mrc' in v]
     numvols = len(volfiles)
     vol_size = Volume.load(volfiles[0]).shape[-1]
     volumes = Volume(np.zeros((numvols,vol_size,vol_size,vol_size),dtype=np.float32))
 
     for i,volfile in enumerate(volfiles):
         volumes[i] = Volume.load(volfile)
+
+    if(not in_list):
+        return Volume(np.concatenate(volumes))
 
     return volumes
     
