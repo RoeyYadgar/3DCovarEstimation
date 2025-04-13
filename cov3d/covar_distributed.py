@@ -72,7 +72,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
             #eigenvecs_list will have the same eigenvecs in each distributed group (i.e. [eigenvecs1,...,eigenvecs1,eigenvesc2,...,eigenvecs2])
             eigenvecs1 = eigenvecs_list[0]
             eigenvecs2 = eigenvecs_list[-1]
-            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.rank,covar_model.module.resolution,trainer.noise_var,trainer.dataset.mask)
+            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.resolution,trainer.optimize_in_fourier_domain,trainer.dataset.mask)
             trainer.fourier_reg = new_fourier_reg_term
 
         #Train a single model on the whole dataset
@@ -87,9 +87,10 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
                     upsampling_factor=covar_model.module.upsampling_factor,
                     vectors=covar_model.module.vectors.clone().detach()).to(device)
         covar_model = DDP(covar_model,device_ids=[rank])
-        trainer._covar = covar_model
-        trainer.train_epochs(num_epochs,restart_optimizer=True)
-        trainer.complete_training()
+        final_fourier_reg = trainer.fourier_reg
+        trainer = CovarTrainer(covar_model,dataloader,device,savepath)
+        trainer.fourier_reg = final_fourier_reg
+        trainer.train(max_epochs=num_epochs,**kwargs)
 
     if(rank == 0):
         torch.save(covar_model.module.state_dict(),TMP_STATE_DICT_FILE)

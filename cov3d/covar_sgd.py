@@ -275,8 +275,8 @@ class CovarTrainer():
         return cost_val
 
     def run_epoch(self,epoch):
-        if(self.isDDP):
-            self.train_data.sampler.set_epoch(epoch)
+        #if(self.isDDP): #TODO: this shuffles the data in DDP which is not wanted when using halfsets regularization scheme
+            #self.train_data.sampler.set_epoch(epoch) 
         if(self.logTraining):
             pbar = tqdm(total=self.dataloader_len, desc=f'Epoch {epoch} , ',position=0,leave=True)
 
@@ -391,8 +391,7 @@ class CovarTrainer():
 
     def compute_fourier_reg_term(self,eigenvecs):
         eigen_rpsd = rpsd(*eigenvecs)
-        #vectorsGD_rpsd[:,L//2:] = vectorsGD_rpsd[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
-        self.fourier_reg = (self.noise_var) / expand_fourier_shell(eigen_rpsd,self.covar.resolution,3) #TODO : validate this regularization term        
+        self.fourier_reg = (self.noise_var) / expand_fourier_shell(eigen_rpsd,self.covar.resolution,3)      
 
     def log_training(self):
         if(len(self.log_epoch_ind) != 0):
@@ -440,56 +439,22 @@ def update_fourier_reg(trainer1,trainer2):
     eigenvecs2 = trainer2.covar.eigenvecs
     eigenvecs2 = eigenvecs2[0] * (eigenvecs2[1]**0.5).reshape(-1,1,1,1)
 
-    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,trainer1.noise_var,mask=trainer1.dataset.mask)
+    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,trainer1.optimize_in_fourier_domain,mask=trainer1.dataset.mask)
 
     trainer1.fourier_reg = new_fourier_reg_tensor.to(trainer1.device)
     trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
 
-def compute_updated_fourier_reg_old(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var,mask=None):
+def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,optimize_in_fourier_domain,mask=None):
 
     if(current_fourier_reg is None):
         current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
 
-    filter_gain_shell_correction = average_fourier_shell(filter_gain / (filter_gain + current_fourier_reg+1e-12)**2) / average_fourier_shell(filter_gain**2 / (filter_gain + current_fourier_reg+1e-12)**2)
-    #filter_gain_shell_correction = 1/average_fourier_shell(filter_gain)
-    filter_gain_shell_correction[L//2:] = filter_gain_shell_correction[L//2]
-    #filter_gain_shell_correction[filter_gain_shell_correction < 1e]
-
-    #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
-    if(mask is not None):
-        mask = mask.clone().to(eigenvecs1.device)
-        eigenvecs1 = eigenvecs1 * mask
-        eigenvecs2 = eigenvecs2 * mask
-    U,_,V = torch.linalg.svd(eigenvecs1.reshape(rank,-1) @ eigenvecs2.reshape(rank,-1).T)
-    eigenvecs1 = (U @ (V.T @ eigenvecs1.reshape(rank,-1))).reshape((rank,L,L,L))
-
-    eigenvecs_fsc = concat_tensor_tuple([vol_fsc(eigenvecs1[i],eigenvecs2[i]) for i in range(rank)])
-    fsc_epsilon = 1e-3
-    eigenvecs_fsc[:,0] = 1
-    eigenvecs_fsc[eigenvecs_fsc < fsc_epsilon] = fsc_epsilon
-    eigenvecs_fsc[eigenvecs_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
-    #eigenvecs_fsc[:,L//2:] = eigenvecs_fsc[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
-    
-    #new_fourier_reg = filter_gain_shell_correction/torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0) #TODO : shuold filter gain correction be multiplied or divided?
-    new_fourier_reg = 1/(torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0)*filter_gain_shell_correction) #TODO : shuold filter gain correction be multiplied or divided?
-    new_fourier_reg[new_fourier_reg < 0] = 0
-
-    from matplotlib import pyplot as plt #Remove this
-    fig = plt.figure()
-    plt.plot((new_fourier_reg.cpu().numpy()).T)
-    plt.yscale('log')
-    fig.savefig('test.jpg')
-
-    new_fourier_reg_tensor = expand_fourier_shell(new_fourier_reg,L,3)
-    return new_fourier_reg_tensor
-
-def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var,mask=None):
-
-    if(current_fourier_reg is None):
-        current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
-
-    averaged_filter_gain = average_fourier_shell(filter_gain).reshape(-1,1)
-    filter_gain_shell_correction = 1 / (averaged_filter_gain @ averaged_filter_gain.T + 1e-12)
+    averaged_filter_gain = average_fourier_shell(1/filter_gain).reshape(-1,1)
+    averaged_filter_gain = (averaged_filter_gain @ averaged_filter_gain.T)
+    averaged_filter_gain[:,L//2+1:] = averaged_filter_gain[L//2,L//2]
+    averaged_filter_gain[L//2+1:,:] = averaged_filter_gain[L//2,L//2]
+    #averaged_filter_gain += 1e-12
+    filter_gain_shell_correction = averaged_filter_gain
 
     #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
     if(mask is not None):
@@ -498,18 +463,20 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
         eigenvecs2 = eigenvecs2 * mask
 
     eigenvecs_fsc = covar_fsc(eigenvecs1,eigenvecs2)
-    fsc_epsilon = 1e-3
+    fsc_epsilon = 1e-6
     eigenvecs_fsc[eigenvecs_fsc < fsc_epsilon] = fsc_epsilon
     eigenvecs_fsc[eigenvecs_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
     
     new_fourier_reg = 1/((eigenvecs_fsc / (1 - eigenvecs_fsc))*filter_gain_shell_correction)
     new_fourier_reg[new_fourier_reg < 0] = 0
+    new_fourier_reg /= L ** 4 # This term comes from the normalization by L in projection operator which scales to the power of 4 through the filter gain
 
-    from matplotlib import pyplot as plt #Remove this
-    fig = plt.figure()
-    f = plt.imshow(np.log10(new_fourier_reg.cpu().numpy()))
-    fig.colorbar(f)
-    fig.savefig('test.jpg')
+    #This is a heuristic approach to get a rank 1 approx of the 'regulariztaion matrix' which allows much faster computation of the regularizaiton term
+    new_fourier_reg = expand_fourier_shell(new_fourier_reg.diag().sqrt().unsqueeze(0),L,3)
+
+    if(not optimize_in_fourier_domain):
+        #When optimizing in spatial domain regularization needs to be scaled by L^2
+        new_fourier_reg /= L ** 2
 
     return new_fourier_reg
 
@@ -536,9 +503,12 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
     cost_val = torch.mean(cost_val,dim=0)
             
     if(fourier_reg is not None and reg_scale != 0):
-        vol_covar_rpsd,shell_size = covar_rpsd(vols)
-        reg_cost = vol_covar_rpsd * torch.sqrt(fourier_reg) * torch.outer(shell_size,shell_size)
-        cost_val += reg_scale * torch.sum(reg_cost)
+        vols_fourier = centered_fft3(vols)
+        vols_fourier*= torch.sqrt(fourier_reg)
+        vols_fourier = vols_fourier.reshape((rank,-1))
+        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
+        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
+        cost_val += reg_scale * reg_cost
 
     return cost_val
 
@@ -604,11 +574,14 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     cost_val = torch.mean(cost_val,dim=0)
 
     if(fourier_reg is not None and reg_scale != 0):
+        #TODO: vols should get Covar's grid_correction reversed here
         us_factor = int(vols.shape[-1]/L)
-        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor]
-        vol_covar_rpsd,shell_size = covar_rpsd(vols_fourier,from_fourier=True)
-        reg_cost = vol_covar_rpsd * torch.sqrt(fourier_reg) * torch.outer(shell_size,shell_size)
-        cost_val += reg_scale * torch.sum(reg_cost)
+        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
+        vols_fourier = vols_fourier.reshape((rank,-1))
+        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
+        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
+        cost_val += reg_scale * reg_cost
+        
 
     return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 
@@ -735,6 +708,7 @@ def trainCovar(covar_model,dataset,batch_size,savepath = None,**kwargs):
         full_dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath)
+        trainer_final.fourier_reg = trainer1.fourier_reg
         trainer_final.train(max_epochs=num_epochs,**kwargs)
         
 
