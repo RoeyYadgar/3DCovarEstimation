@@ -11,7 +11,7 @@ from cov3d.covar_sgd import cost,cost_fourier_domain,cost_maximum_liklihood,cost
 from cov3d.covar import Covar
 from cov3d.utils import volsCovarEigenvec,generateBallVoxel
 from cov3d.projection_funcs import vol_forward,centered_fft3
-from cov3d.fsc_utils import rpsd,expand_fourier_shell,average_fourier_shell,covar_correlate,FourierShell
+from cov3d.fsc_utils import rpsd,expand_fourier_shell,average_fourier_shell,covar_correlate,FourierShell,upsample_and_expand_fourier_shell
 from aspire.operators import RadialCTFFilter,ArrayFilter
 from aspire.utils import Rotation
 
@@ -222,7 +222,11 @@ class TestTorchImpl(unittest.TestCase):
         ims,pts_rot,filter_inds = fourier_data[:batch_size]
         filters = fourier_data.unique_filters[filter_inds]
         pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
+
         fourier_reg = (fourier_data.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,self.img_size,3),dim=0))
+        fourier_reg_radial = average_fourier_shell(fourier_reg) / (upsampling_factor ** 3)
+        fourier_reg = upsample_and_expand_fourier_shell(fourier_reg_radial,covar.resolution * covar.upsampling_factor,3)
+
         covar.init_grid_correction('bilinear') 
         plans = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=upsampling_factor,mode='bilinear',use_half_grid=False)
         plans.setpts(pts_rot)

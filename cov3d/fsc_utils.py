@@ -99,6 +99,16 @@ def rpsd(*signals):
 def expand_fourier_shell(shells,L,dim):
     return FourierShell(L,dim,shells.dtype,shells.device).expand_fourier_shell(shells)
 
+def upsample_and_expand_fourier_shell(shell,L,dim):
+    fourier_shell =  FourierShell(L,dim,shell.dtype,shell.device)
+    fourier_shell_upsampled = torch.nn.functional.interpolate(
+        shell.unsqueeze(0).unsqueeze(0), 
+        size= len(fourier_shell.shell_size), 
+        mode='linear', 
+        align_corners=False
+    ).squeeze()
+    return fourier_shell.expand_fourier_shell(fourier_shell_upsampled)
+
 def sum_over_shell(shell,L,dim):
     return FourierShell(L,dim,shell.dtype,shell.device).sum_over_shell(shell)
 

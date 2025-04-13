@@ -10,8 +10,8 @@ from aspire.volume import Volume
 from aspire.volume import rotated_grids
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
-from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc,covar_fsc,covar_rpsd
+from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3
+from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask=None,invert_data = False):
@@ -349,6 +349,7 @@ class CovarTrainer():
         dtype = self.covar.dtype
         vol_shape = (self.covar.resolution,)*3
         self.optimize_in_fourier_domain = nufft_disc != 'nufft' #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
+        self.objective_func = objective_func
         if(self.optimize_in_fourier_domain):
             self.nufft_plans = NufftPlanDiscretized(vol_shape,upsample_factor=self.covar.upsampling_factor,mode=nufft_disc)
             self.dataset.to_fourier_domain()
@@ -394,7 +395,19 @@ class CovarTrainer():
 
     def compute_fourier_reg_term(self,eigenvecs):
         eigen_rpsd = rpsd(*eigenvecs)
-        self.fourier_reg = (self.noise_var) / expand_fourier_shell(eigen_rpsd,self.covar.resolution,3)      
+        self.fourier_reg = (self.noise_var) / expand_fourier_shell(eigen_rpsd,self.covar.resolution,3)
+
+    def update_fourier_reg_halfsets(self,fourier_reg):
+        fourier_reg = fourier_reg.to(self.device)
+        if(self.objective_func == 'ls'):
+            fourier_reg = fourier_reg / self.covar.resolution ** 1.5 #TODO: figure out where this factor comes from
+
+        if(self.optimize_in_fourier_domain):
+            #This ensures that the fourier_reg term is in the same as the upsampled size of covar
+            fourier_reg_radial = average_fourier_shell(fourier_reg) / (self.covar.upsampling_factor ** 3)
+            fourier_reg = upsample_and_expand_fourier_shell(fourier_reg_radial,self.covar.resolution * self.covar.upsampling_factor,3)
+
+        self.fourier_reg = fourier_reg
 
     def log_training(self,num_epoch,batch_ind,cost_val):
         self.log_epoch_ind.append(num_epoch + batch_ind / self.dataloader_len)
@@ -449,8 +462,8 @@ def update_fourier_reg(trainer1,trainer2):
 
     new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,trainer1.optimize_in_fourier_domain,mask=trainer1.dataset.mask)
 
-    trainer1.fourier_reg = new_fourier_reg_tensor.to(trainer1.device)
-    trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
+    trainer1.update_fourier_reg_halfsets(new_fourier_reg_tensor)
+    trainer2.update_fourier_reg_halfsets(new_fourier_reg_tensor)
 
 def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,optimize_in_fourier_domain,mask=None):
 
@@ -575,8 +588,7 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
 
     if(fourier_reg is not None and reg_scale != 0):
         #TODO: vols should get Covar's grid_correction reversed here
-        us_factor = int(vols.shape[-1]/L)
-        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
+        vols_fourier = vols * torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
         vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
         reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
@@ -606,8 +618,7 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
 
     if(fourier_reg is not None and reg_scale != 0):
-        us_factor = int(vols.shape[-1]/L)
-        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
+        vols_fourier = vols * torch.sqrt(fourier_reg)
         reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
         cost_val += reg_scale * reg_cost
 
