@@ -86,10 +86,12 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
                     upsampling_factor=covar_model.module.upsampling_factor,
                     vectors=vectors).to(device)
         covar_model = DDP(covar_model,device_ids=[rank])
-        final_fourier_reg = trainer.fourier_reg
-        trainer = CovarTrainer(covar_model,dataloader,device,savepath)
-        trainer.fourier_reg = final_fourier_reg
-        trainer.train(max_epochs=num_epochs,**kwargs)
+        covar_model.module.init_grid_correction(kwargs.get('nufft_disc',None))
+        #Set the optimizer to the new model and retrain
+        trainer._covar = covar_model
+        trainer.restart_optimizer()
+        trainer.train_epochs(num_epochs,restart_optimizer=True)
+        trainer.complete_training()
 
     if(rank == 0):
         torch.save(covar_model.module.state_dict(),TMP_STATE_DICT_FILE)
