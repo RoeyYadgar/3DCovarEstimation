@@ -99,15 +99,15 @@ def rpsd(*signals):
 def expand_fourier_shell(shells,L,dim):
     return FourierShell(L,dim,shells.dtype,shells.device).expand_fourier_shell(shells)
 
-def upsample_and_expand_fourier_shell(shell,L,dim):
-    fourier_shell =  FourierShell(L,dim,shell.dtype,shell.device)
-    fourier_shell_upsampled = torch.nn.functional.interpolate(
-        shell.unsqueeze(0).unsqueeze(0), 
+def upsample_and_expand_fourier_shell(shells,L,dim):
+    fourier_shell =  FourierShell(L,dim,shells.dtype,shells.device)
+    fourier_shells_upsampled = torch.nn.functional.interpolate(
+        shells.unsqueeze(0).unsqueeze(0) if shells.ndim == 1 else shells.unsqueeze(0),
         size= len(fourier_shell.shell_size), 
         mode='linear', 
         align_corners=False
     ).squeeze()
-    return fourier_shell.expand_fourier_shell(fourier_shell_upsampled)
+    return fourier_shell.expand_fourier_shell(fourier_shells_upsampled)
 
 def sum_over_shell(shell,L,dim):
     return FourierShell(L,dim,shell.dtype,shell.device).sum_over_shell(shell)
@@ -133,7 +133,7 @@ def covar_rpsd(eigenvectors,from_fourier=False):
     else:
         eigenvecs_fft = eigenvectors
     rpsd,shell_size = covar_correlate(eigenvecs_fft,eigenvecs_fft,return_shell_size=True)
-    return rpsd.real,shell_size
+    return rpsd.real * torch.outer(shell_size,shell_size)
 
 def covar_correlate(fourier_eigenvecs1,fourier_eigenvecs2,return_shell_size=False):
     L = fourier_eigenvecs1.shape[-1]

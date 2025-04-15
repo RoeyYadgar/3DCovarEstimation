@@ -268,7 +268,7 @@ class CovarTrainer():
         self.optimizer.zero_grad()
         cost_val = self.cost_func(self._covar(dummy_var=None),images,nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
         cost_val.backward()
-        #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
+        #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1e-3 * self.covar.grad_scale_factor) #TODO : check for effect of gradient clipping
         self.optimizer.step()
 
         if(self.use_orthogonal_projection):
@@ -368,7 +368,7 @@ class CovarTrainer():
             self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = self.lr,momentum = self.momentum)
         elif(self.optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = self.lr)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=0)
 
     def train_epochs(self,max_epochs,restart_optimizer = False):
         if(restart_optimizer):

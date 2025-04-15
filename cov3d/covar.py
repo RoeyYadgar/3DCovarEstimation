@@ -128,6 +128,7 @@ class CovarFourier(Covar):
         vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
 
         self.grid_correction = None
+        #Params are split into real and imaginary parts since DDP does not support complex params for some reason.
         self._vectors_real = torch.nn.Parameter(vectors.real)
         self._vectors_imag = torch.nn.Parameter(vectors.imag)
         self._in_spatial_domain = False
@@ -152,4 +153,4 @@ class CovarFourier(Covar):
     
     @property
     def grad_scale_factor(self):
-        return (self.pixel_var_estimate * ((self.upsampling_factor *self.resolution) ** 3)) ** 0.5
+        return (self.pixel_var_estimate * (self.resolution ** 3)) ** 0.5
