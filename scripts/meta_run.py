@@ -43,6 +43,8 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
                 alg_param = {**param, 'starfile' : data['dataset'], 'name' : f'"{run_name}"'}
                 if(data['mask'] is not None):
                     alg_param['mask'] = data['mask']
+                if('output-dir' in alg_param.keys()):
+                    alg_param['output-dir'] = os.path.join(os.path.split(alg_param['starfile'])[0],alg_param['output-dir'])
                 command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
                 
                 if(run_analysis):
@@ -83,7 +85,7 @@ def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 1
 def filter_datasets(datasets,dataset_names):
     return {k: [d for d in v if any(name in d['dataset'] for name in dataset_names)] for k, v in datasets.items()}
 
-dataset_names = ['igg_1d','igg_1d_noisiest','igg_rl','Ribosembly','Spike-MD','Tomotwin-100']
+dataset_names = ['igg_1d','igg_1d_noisiest','igg_rl','Ribosembly','Spike-MD','Tomotwin-100','Empiar10076']
 
 datasets_L64 = [
     "igg_1d/images/snr0.01/downsample_L64/snr0.01.star",
@@ -169,16 +171,14 @@ cryobench_analysis = Experiment(
     alg_fixed_params = {
         'rank' : 10,
         'reg' : 1,
-        'max-epochs' : 15,
-        'batch-size' : 2048,
-        'orthogonal-projection' : False,
-        'nufft-disc' : 'bilinear',
-        'use-halfsets' : False,
-        'num-reg-update-iters' : 2,
+        'max-epochs' : 20,
+        'use-halfsets' : True,
+        'num-reg-update-iters' : 1,
+        'output-dir' : 'reg_refactor_results',
         'debug' : None,
     },
     alg_var_params= {
-        'lr' : [1e0]
+        'objective-func' : ['ml','ls'],
     },
     run_prefix = 'Cryobench_final'
 )
@@ -238,7 +238,7 @@ def main(skip_reconstruction,print_run,run_recovar):
     dataset_values[0] = datasets_L128
     datasets[128] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
 
-    exp = empiar_experiment
+    exp = cryobench_analysis
     alg_params_list,alg_param_description = generate_alg_params(exp.alg_fixed_params, exp.alg_var_params)
     datasets_to_run = datasets if exp.datasets is None else filter_datasets(datasets,exp.datasets)
     if(not run_recovar):

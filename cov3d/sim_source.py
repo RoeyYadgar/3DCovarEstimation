@@ -179,6 +179,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
    
     vectorsGD = volsCovarEigenvec(voxels)    
     snr_vals = 10**np.arange(0,-3.5,-0.5)
+    objs = ['ml','ls']
     for snr in snr_vals:
         noise_var = var / snr
         print(f'Signal power : {var}. Using noise variance of {noise_var} to achieve SNR of {snr}')
@@ -187,30 +188,30 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
         noise_var = sim.noise_var
         dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=Volume(voxels.asnumpy().mean(axis=0)),mask=Volume.load(mask) if mask is not None else None)
         
-    
-        dir_name = os.path.join(folder_name,'obj_ml',f'algorithm_output_{snr}')
-        os.makedirs(dir_name,exist_ok=True)  
-        if(save_source):
-            sim.save(dir_name)
-        dataset.starfile = os.path.join(dir_name,'particles.star')     
-        display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
-        display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
-        data_dict,_,_ = covar_processing(dataset,r,dir_name,max_epochs=20,lr=1e-2,objective_func='ml',num_reg_update_iters=1)
+        for obj in objs:
+            dir_name = os.path.join(folder_name,f'obj_{obj}',f'algorithm_output_{snr}')
+            os.makedirs(dir_name,exist_ok=True)  
+            if(save_source):
+                sim.save(dir_name)
+            dataset.starfile = os.path.join(dir_name,'particles.star')     
+            display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
+            display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
+            data_dict,_,_ = covar_processing(dataset,r,dir_name,max_epochs=20,objective_func=obj,num_reg_update_iters=1)
 
-        coords_est = data_dict['coords_est']
-        state_centers = np.zeros((len(voxels),coords_est.shape[1]))
-        for i in range(len(voxels)):
-            state_centers[i] = coords_est[sim.states == i].mean(axis=0)
-        with open(os.path.join(dir_name,'state_centers.pkl'),'wb') as f:
-            pickle.dump(state_centers,f)
+            coords_est = data_dict['coords_est']
+            state_centers = np.zeros((len(voxels),coords_est.shape[1]))
+            for i in range(len(voxels)):
+                state_centers[i] = coords_est[sim.states == i].mean(axis=0)
+            with open(os.path.join(dir_name,'state_centers.pkl'),'wb') as f:
+                pickle.dump(state_centers,f)
 
 
-        analysis_figures = analyze(os.path.join(dir_name,'recorded_data.pkl'),
-                                   output_dir=dir_name,
-                                   analyze_with_gt=True,
-                                   skip_reconstruction=True,
-                                   gt_labels=sim.states,
-                                   latent_coords=os.path.join(dir_name,'state_centers.pkl'))
+            analysis_figures = analyze(os.path.join(dir_name,'recorded_data.pkl'),
+                                    output_dir=dir_name,
+                                    analyze_with_gt=True,
+                                    skip_reconstruction=True,
+                                    gt_labels=sim.states,
+                                    latent_coords=os.path.join(dir_name,'state_centers.pkl'))
 
 
 if __name__=="__main__":
