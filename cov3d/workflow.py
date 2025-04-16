@@ -180,10 +180,10 @@ def covar_processing(dataset,covar_rank,output_dir,**training_kwargs):
 
     #Perform optimization for eigenvectors estimation
     default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 20,
-                            'lr' : 1e-4,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+                            'lr' : 1e-5,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                             'reg' : 1,
                             'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
-                            'num_reg_update_iters' : 2, 'use_halfsets' : False,'objective_func' : 'ml'}
+                            'num_reg_update_iters' : 1, 'use_halfsets' : True,'objective_func' : 'ml'}
     
     #TODO : change upsampling_factor & objective_func into a training argument and pass that into Covar's methods instead of at constructor
     if('fourier_upsampling' in training_kwargs.keys()):
@@ -194,7 +194,7 @@ def covar_processing(dataset,covar_rank,output_dir,**training_kwargs):
     default_training_kwargs.update(training_kwargs)
 
     optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] != 'nufft'
-    covar_cls = CovarFourier if optimize_in_fourier_domain else Covar
+    covar_cls = Covar
     cov = covar_cls(L,covar_rank,pixel_var_estimate=dataset.signal_var,
                 fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
         

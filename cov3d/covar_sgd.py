@@ -328,17 +328,6 @@ class CovarTrainer():
             lr = 1e-1 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
             
         lr *= self.batch_size
-        if(scale_params):
-            if(optim_type == 'SGD'):
-                lr /= self.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
-                lr /= self.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
-                lr *= self.batch_size #Scale learning rate with batch size
-                #TODO : expirmantation suggests that normalizng lr by resolution is not needed. why?
-                #lr /= self.covar.resolution #gradient of cost function scales linearly with L
-                #TODO : should lr scale by L^2.5 when performing optimization in fourier domain? since gradient scales with L^4 and volume scales with L^1.5
-            elif(optim_type == 'Adam'):
-                lr *= self.covar.grad_scale_factor  
-
         self.lr = lr
         self.optim_type = optim_type
         self.scale_params = scale_params
@@ -364,10 +353,14 @@ class CovarTrainer():
         self.epoch_index = 0
 
     def restart_optimizer(self):
+        params_lr = self.covar.grad_lr_factor()
+        for i in range(len(params_lr)):
+            params_lr[i]['lr'] *= self.lr
+
         if(self.optim_type == 'SGD'):
-            self.optimizer = torch.optim.SGD(self.covar.parameters(),lr = self.lr,momentum = self.momentum)
+            self.optimizer = torch.optim.SGD(params_lr,momentum = self.momentum)
         elif(self.optim_type == 'Adam'):
-            self.optimizer = torch.optim.Adam(self.covar.parameters(),lr = self.lr)
+            self.optimizer = torch.optim.Adam(params_lr)
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=0)
 
     def train_epochs(self,max_epochs,restart_optimizer = False):

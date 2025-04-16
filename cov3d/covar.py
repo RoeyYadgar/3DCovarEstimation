@@ -18,7 +18,15 @@ class Covar(torch.nn.Module):
 
         self._in_spatial_domain = not fourier_domain
         self.grid_correction = None
+        vectors,log_sqrt_eigenvals = self._get_eigenvecs_representation(vectors)
         self.vectors = torch.nn.Parameter(vectors)
+        self.log_sqrt_eigenvals = torch.nn.Parameter(log_sqrt_eigenvals)
+
+
+    def _get_eigenvecs_representation(self,vectors):
+        sqrt_eigenvals = vectors.reshape(vectors.shape[0],-1).norm(dim=1)
+
+        return vectors/sqrt_eigenvals.reshape(-1,1,1,1), torch.log(sqrt_eigenvals)
 
     @property
     def device(self):
@@ -28,7 +36,9 @@ class Covar(torch.nn.Module):
         return self.get_vectors_spatial_domain() if self._in_spatial_domain else self.get_vectors_fourier_domain()
 
     def set_vectors(self, new_vectors):
+        new_vectors,log_sqrt_eigenvals = self._get_eigenvecs_representation(new_vectors)
         self.vectors.data.copy_(new_vectors)
+        self.log_sqrt_eigenvals.data.copy_(log_sqrt_eigenvals)
     
     def init_random_vectors(self,num_vectors):
         return (torch.randn((num_vectors,) + (self.resolution,) * 3,dtype=self.dtype)) * (self.pixel_var_estimate ** 0.5)
@@ -54,16 +64,19 @@ class Covar(torch.nn.Module):
             eigenvals = eigenvals ** 2
             return eigenvecs,eigenvals
 
-    @property
-    def grad_scale_factor(self):
-        return (self.pixel_var_estimate ** 0.5)
+    
+    def grad_lr_factor(self):
+        return [
+            {'params' : self.vectors , 'lr' : 1},
+            {'params' : self.log_sqrt_eigenvals , 'lr' : 1}
+        ]
         
     def get_vectors_fourier_domain(self):
-        vectors = self.vectors / self.grid_correction if self.grid_correction is not None else self.vectors
+        vectors = self.get_vectors_spatial_domain() / self.grid_correction if self.grid_correction is not None else self.get_vectors_spatial_domain()
         return centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
 
     def get_vectors_spatial_domain(self):
-        return self.vectors
+        return self.vectors * torch.exp(self.log_sqrt_eigenvals).reshape(-1,1,1,1)
 
     def orthogonal_projection(self):
         with torch.no_grad():
