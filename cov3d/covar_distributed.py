@@ -6,6 +6,7 @@ from torch import distributed as dist
 import os
 from cov3d.covar_sgd import CovarTrainer,CovarPoseTrainer,compute_updated_fourier_reg
 from cov3d.covar import Covar
+from cov3d.utils import get_cpu_count
 import math
 
 TMP_STATE_DICT_FILE = 'tmp_state_dict.pt'
@@ -24,7 +25,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
     use_halfsets = kwargs.pop('use_halfsets',False)
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
     
-    num_workers = min(4,(os.cpu_count()-1)//world_size)
+    num_workers = min(4,(get_cpu_count()-1)//world_size)
     dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size_per_proc,shuffle = False,sampler = DistributedSampler(dataset),
                                              num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=f'cuda:{rank}')
     
@@ -35,7 +36,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
         is_group1 = rank in range(world_size//2)
         if not is_group1:
             torch.manual_seed(1) #Reinitalize vectors in group2
-            covar_model.vectors.data.copy_(covar_model.init_random_vectors(covar_model.rank))
+            covar_model.set_vectors(covar_model.init_random_vectors(covar_model.rank))
         covar_model = DDP(covar_model,device_ids=[rank],process_group=group1 if is_group1 else group2)
     else:
         covar_model = DDP(covar_model,device_ids=[rank])
@@ -74,22 +75,28 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
             #eigenvecs_list will have the same eigenvecs in each distributed group (i.e. [eigenvecs1,...,eigenvecs1,eigenvesc2,...,eigenvecs2])
             eigenvecs1 = eigenvecs_list[0]
             eigenvecs2 = eigenvecs_list[-1]
-            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.rank,covar_model.module.resolution,trainer.noise_var,trainer.dataset.mask)
-            trainer.fourier_reg = new_fourier_reg_term
+            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.resolution,trainer.optimize_in_fourier_domain,trainer.dataset.mask)
+            trainer.update_fourier_reg_halfsets(new_fourier_reg_term)
 
         #Train a single model on the whole dataset
         with torch.no_grad():
             for param in covar_model.parameters(): #Update state of group2
                 dist.broadcast(param,src=0)
         #Reset DDP model to include all ranks
-        covar_model = Covar(covar_model.module.resolution,
+        #Get vectors from covar_model with no grid_correction
+        covar_model.module.grid_correction = None
+        vectors = covar_model.module.get_vectors_spatial_domain().clone().detach()
+        covar_model = covar_model.module.__class__(covar_model.module.resolution,
                     covar_model.module.rank,
                     pixel_var_estimate=covar_model.module.pixel_var_estimate,
                     fourier_domain = not covar_model.module._in_spatial_domain,
                     upsampling_factor=covar_model.module.upsampling_factor,
-                    vectors=covar_model.module.vectors.clone().detach()).to(device)
+                    vectors=vectors).to(device)
         covar_model = DDP(covar_model,device_ids=[rank])
+        covar_model.module.init_grid_correction(kwargs.get('nufft_disc',None))
+        #Set the optimizer to the new model and retrain
         trainer._covar = covar_model
+        trainer.restart_optimizer()
         trainer.train_epochs(num_epochs,restart_optimizer=True)
         trainer.complete_training()
 

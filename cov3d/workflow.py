@@ -9,7 +9,7 @@ from sklearn.metrics import auc
 import click
 from cov3d.utils import *
 from cov3d.covar_sgd import CovarDataset,trainCovar
-from cov3d.covar import Covar,Mean
+from cov3d.covar import Covar,CovarFourier,Mean
 from cov3d.poses import PoseModule
 from cov3d.covar_distributed import trainParallel
 from cov3d.wiener_coords import latentMAP,mahalanobis_threshold
@@ -94,28 +94,32 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,debug = False,**training_kwargs):
+def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,class_vols = None,debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
-    result_dir = path.join(data_dir,'result_data')
-    dataset_path = os.path.join(result_dir,'dataset.pkl')
+    if(output_dir is None):
+        output_dir = path.join(data_dir,'result_data')
+    dataset_path = os.path.join(output_dir,'dataset.pkl')
     #Only perform this when debug flag is False and there is no dataset pickle file already saved (In order to skip preprocessing when running multiple times for debugging)
     if((not debug) or (not os.path.isfile(dataset_path))): 
-        if(not path.isdir(result_dir)):
-            os.mkdir(result_dir)
+        if(not path.isdir(output_dir)):
+            os.mkdir(output_dir)
         star = aspire.storage.StarFile(starfile)
         states_in_source = '_rlnClassNumber' in star['particles']
         pixel_size = float(star['optics']['_rlnImagePixelSize'][0])
         source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
         L = source.L
         
-        mean_est = relionReconstruct(starfile,path.join(result_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
+        mean_est = relionReconstruct(starfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
 
         if(class_vols is None and states_in_source): #If class_vols was not provided but source has GT states use them to reconstruct GT
             #Estimate ground truth states
-            class_vols = reconstructClass(starfile,path.join(result_dir,'class_vols.mrc'))
-        elif(class_vols is not None): #Downsample ground truth volumes
-            if(class_vols.resolution != L):
+            class_vols = reconstructClass(starfile,path.join(output_dir,'class_vols.mrc'))
+        elif(class_vols is not None): 
+            if(isinstance(class_vols,str)):
+                class_vols = Volume.load(class_vols) if os.path.isfile(class_vols) else readVols(class_vols)
+                class_vols *= L
+            if(class_vols.resolution != L): #Downsample ground truth volumes
                 class_vols = class_vols.downsample(L)
 
         if(class_vols is not None):
@@ -151,7 +155,7 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         invert_data = not check_dataset_sign(mean_est,mask)
         if(invert_data):
             print('inverting dataset sign')
-            (-1 * mean_est).save(path.join(result_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
+            (-1 * mean_est).save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
         dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est if (not optimize_pose) else None, #When optimizing pose is set to true mean volume should not be substracted from images
                                 mask=mask,invert_data = invert_data)
         if(states_in_source):
@@ -165,24 +169,24 @@ def covar_workflow(starfile,rank,class_vols = None,whiten=True,noise_estimator =
         print(f"Reading pickled dataset from {dataset_path}")
         with open(dataset_path,'rb') as fid:
             dataset = pickle.load(fid)
-        mean_est = Volume.load(path.join(result_dir,'mean_est.mrc'))
+        mean_est = Volume.load(path.join(output_dir,'mean_est.mrc'))
         print(f"Dataset loaded successfuly")
 
-    covar_precoessing_output = covar_processing(dataset,rank,result_dir,mean_est,optimize_pose,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,optimize_pose,**training_kwargs)
     torch.cuda.empty_cache()
     return covar_precoessing_output
 
     
 
-def covar_processing(dataset,covar_rank,result_dir,mean_volume_est,optimize_pose=False,**training_kwargs):
+def covar_processing(dataset,covar_rank,output_dir,mean_volume_est,optimize_pose=False,**training_kwargs):
     L = dataset.images.shape[-1]
 
     #Perform optimization for eigenvectors estimation
-    default_training_kwargs = {'batch_size' : 4096, 'max_epochs' : 20,
-                            'lr' : 1e-1,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
-                            'reg' : 1,'gamma_lr' : 0.8, 'gamma_reg' : 1,
+    default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 20,
+                            'lr' : 1e-5,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+                            'reg' : 1,
                             'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
-                            'num_reg_update_iters' : 2, 'use_halfsets' : False,'objective_func' : 'ml'}
+                            'num_reg_update_iters' : 1, 'use_halfsets' : True,'objective_func' : 'ml'}
     
     #TODO : change upsampling_factor & objective_func into a training argument and pass that into Covar's methods instead of at constructor
     if('fourier_upsampling' in training_kwargs.keys()):
@@ -192,8 +196,9 @@ def covar_processing(dataset,covar_rank,result_dir,mean_volume_est,optimize_pose
         upsampling_factor = 2
     default_training_kwargs.update(training_kwargs)
 
-    optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] is not None
-    cov = Covar(L,covar_rank,pixel_var_estimate=dataset.signal_var,
+    optimize_in_fourier_domain = default_training_kwargs['nufft_disc'] != 'nufft'
+    covar_cls = Covar
+    cov = covar_cls(L,covar_rank,pixel_var_estimate=dataset.signal_var,
                 fourier_domain=optimize_in_fourier_domain,upsampling_factor=upsampling_factor)
     if(optimize_pose):
         mean = Mean(torch.tensor(mean_volume_est.asnumpy()),L,
@@ -205,12 +210,12 @@ def covar_processing(dataset,covar_rank,result_dir,mean_volume_est,optimize_pose
         pose = None
         
     if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
-        trainParallel(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+        trainParallel(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             mean_model=mean,pose=pose,optimize_pose=optimize_pose,
             **default_training_kwargs)
     else:
         cov = cov.to(get_torch_device())
-        trainCovar(cov,dataset,savepath = path.join(result_dir,'training_results.bin'),
+        trainCovar(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             mean_model=mean,pose=pose,optimize_pose=optimize_pose,
             **default_training_kwargs)
     
@@ -241,12 +246,13 @@ def covar_processing(dataset,covar_rank,result_dir,mean_volume_est,optimize_pose
                         'coords_covar_inv_GT' : coords_covar_inv_GT.numpy(),
                         }
     
-    with open(path.join(result_dir,'recorded_data.pkl'),'wb') as fid:
+    with open(path.join(output_dir,'recorded_data.pkl'),'wb') as fid:
         pickle.dump(data_dict,fid)
-    aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(result_dir,'used_mask.mrc'),overwrite=True)
+    if(dataset.mask is not None):
+        aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(output_dir,'used_mask.mrc'),overwrite=True)
     #TODO: save eigenvolumes as MRC
 
-    training_data = torch.load(path.join(result_dir,'training_results.bin'))
+    training_data = torch.load(path.join(output_dir,'training_results.bin'))
 
     return data_dict,training_data,default_training_kwargs
 
@@ -254,9 +260,11 @@ def covar_processing(dataset,covar_rank,result_dir,mean_volume_est,optimize_pose
 def workflow_click_decorator(func):
     @click.option('-s','--starfile',type=str, help='path to star file.')
     @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
+    @click.option('-o','--output-dir',type=str,help='path to output directory. when not provided a `result_data` directory will be used with the same path as the provided starfile')
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
+    @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. If provided additional metrics are logged while training & GT embedding is computed and logged')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
     @click.option('--batch-size',type=int,help = 'training batch size')
     @click.option('--max-epochs',type=int,help = 'number of epochs to train')
@@ -264,7 +272,7 @@ def workflow_click_decorator(func):
     @click.option('--reg',type=float,help='regularization scaling')
     @click.option('--gamma-lr',type=float,help = 'learning rate decay rate')
     @click.option('--orthogonal-projection',type=bool,help = "force orthogonality of eigen vectors while training (default True)")
-    @click.option('--nufft-disc',type=click.Choice(['bilinear','nearest']),default=None,help="Discretisation of NUFFT computation") #TODO: fix default values
+    @click.option('--nufft-disc',type=click.Choice(['bilinear','nearest','nufft']),default='bilinear',help="Discretisation of NUFFT computation")
     @click.option('--fourier-upsampling',type=int,help='Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)')
     @click.option('--num-reg-update-iters',type=int,help='Number of iterations to update regularization')
     @click.option('--use-halfsets',type=bool,help='Whether to split data into halfsets for regularization update')
@@ -277,8 +285,8 @@ def workflow_click_decorator(func):
 
 @click.command()
 @workflow_click_decorator
-def covar_workflow_cli(starfile,rank,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',debug = False,**training_kwargs):
-    covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,debug = debug,**training_kwargs)
+def covar_workflow_cli(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
+    covar_workflow(starfile,rank,output_dir=output_dir,whiten=whiten,noise_estimator=noise_estimator,mask=mask,class_vols = class_vols,debug = debug,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()

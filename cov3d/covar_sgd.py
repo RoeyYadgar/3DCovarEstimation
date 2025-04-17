@@ -8,10 +8,10 @@ from tqdm import tqdm
 import copy
 from aspire.volume import Volume,rotated_grids
 from aspire.utils import Rotation
-from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype
+from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_torch_device,get_complex_real_dtype,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3,centered_ifft3,pad_tensor
-from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,concat_tensor_tuple,vol_fsc
+from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3
+from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask=None,invert_data = False):
@@ -189,6 +189,7 @@ class CovarDataset(Dataset):
 
     def mask_images(self,mask,batch_size=512):
         if(mask is None):
+            self.mask = None
             return
 
         device = get_torch_device()
@@ -240,6 +241,10 @@ class CovarTrainer():
             self.log_epoch_ind = []
             self.log_cosine_sim = []
             self.log_fro_err = []
+            self.covar_fsc_mean = []
+            self.lr_history = []
+            self.log_cost_val = []
+            self.epoch_run_time = []
             if(self.vectorsGD != None):
                 self.vectorsGD = self.vectorsGD.to(self.device)    
 
@@ -269,7 +274,7 @@ class CovarTrainer():
         self.optimizer.zero_grad()
         cost_val = self.cost_func(self._covar(dummy_var=None),images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
         cost_val.backward()
-        #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 10) #TODO : check for effect of gradient clipping
+        #torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1e-3 * self.covar.grad_scale_factor) #TODO : check for effect of gradient clipping
         self.optimizer.step()
 
         if(self.use_orthogonal_projection):
@@ -285,8 +290,8 @@ class CovarTrainer():
         return images,pts_rot,filters
 
     def run_epoch(self,epoch):
-        if(self.isDDP):
-            self.train_data.sampler.set_epoch(epoch)
+        #if(self.isDDP): #TODO: this shuffles the data in DDP which is not wanted when using halfsets regularization scheme
+            #self.train_data.sampler.set_epoch(epoch) 
         if(self.logTraining):
             pbar = tqdm(total=self.dataloader_len, desc=f'Epoch {epoch} , ',position=0,leave=True)
 
@@ -299,14 +304,14 @@ class CovarTrainer():
 
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
-                    self.log_training()
+                    self.log_training(epoch,batch_ind,cost_val)
                     pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
                     pbar_description += f" , vecs norm : {torch.norm(self.covar.get_vectors())}"
                     if(self.vectorsGD is not None):
                         #TODO : update log metrics, use principal angles
                         cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
                         fro_err_val = self.log_fro_err[-1]
-                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val)
+                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val) + ", covar fsc mean : {:.2e}".format(self.covar_fsc_mean[-1])
                         #pbar_description =  pbar_description +f",  cosine sim : {self.log_cosine_sim[-1]}"
                     pbar.set_description(pbar_description)
 
@@ -326,36 +331,25 @@ class CovarTrainer():
         self.train_epochs(max_epochs)
         self.complete_training()
 
-    def setup_training(self,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 0,gamma_lr = 1,gamma_reg = 1,nufft_disc = None,orthogonal_projection = False,scale_params = True,objective_func='ml'):
+    def setup_training(self,lr = None,momentum = 0.9,optim_type = 'Adam',reg = 1,nufft_disc = 'bilinear',orthogonal_projection = False,scale_params = True,objective_func='ml'):
         self.use_orthogonal_projection = orthogonal_projection
-        self.gamma_reg = gamma_reg
 
         if(lr is None):
-            lr = 1e0 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
-
-        #if(scale_params):
-            #reg *= self.dataset.filters_gain ** 2 #regularization constant should scale the same as cost function 
-            #reg /= self.covar.resolution ** 2 #gradient of cost function scales linearly with L while regulriaztion scales with L^3
-        
-        
-        if(optim_type == 'SGD'):
-            if(scale_params):
-                lr /= self.dataset.signal_var #gradient of cost function scales with amplitude ^ 3 and so learning rate must scale with amplitude ^ 2 (since we want GD steps to scale linearly with amplitude). signal_var is an estimate for amplitude^2
-                lr /= self.dataset.filters_gain ** 2 #gradient of cost function scales with filter_amplitude ^ 4 and so learning rate must scale with filter_amplitude ^ 4 (since we want GD steps to not scale at all). filters_gain is an estimate for filter_amplitude^2
-                lr *= self.batch_size #Scale learning rate with batch size
-                #TODO : expirmantation suggests that normalizng lr by resolution is not needed. why?
-                #lr /= self.covar.resolution #gradient of cost function scales linearly with L
-                #TODO : should lr scale by L^2.5 when performing optimization in fourier domain? since gradient scales with L^4 and volume scales with L^1.5
-            self.optimizer = torch.optim.SGD(self.get_trainable_parameters(lr,momentum=momentum))
-        elif(optim_type == 'Adam'):
-            self.optimizer = torch.optim.Adam(self.get_trainable_parameters(lr))
+            lr = 1e-1 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
+            
+        lr *= self.batch_size
         self.lr = lr
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
+        self.optim_type = optim_type
+        self.scale_params = scale_params
+        self.momentum = momentum
+        self.restart_optimizer()
+        
 
         rank = self.covar.rank
         dtype = self.covar.dtype
         vol_shape = (self.covar.resolution,)*3
-        self.optimize_in_fourier_domain = nufft_disc is not None #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
+        self.optimize_in_fourier_domain = nufft_disc != 'nufft' #When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
+        self.objective_func = objective_func
         if(self.optimize_in_fourier_domain):
             self.nufft_plans = NufftPlanDiscretized(vol_shape,upsample_factor=self.covar.upsampling_factor,mode=nufft_disc)
             self.dataset.to_fourier_domain()
@@ -366,27 +360,37 @@ class CovarTrainer():
         self.covar.init_grid_correction(nufft_disc)
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
+        self.epoch_index = 0
 
     def restart_optimizer(self):
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = self.lr
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
+        params_lr = self.covar.grad_lr_factor()
+        for i in range(len(params_lr)):
+            params_lr[i]['lr'] *= self.lr
+
+        if(self.optim_type == 'SGD'):
+            self.optimizer = torch.optim.SGD(params_lr,momentum = self.momentum)
+        elif(self.optim_type == 'Adam'):
+            self.optimizer = torch.optim.Adam(params_lr)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=0)
 
     def train_epochs(self,max_epochs,restart_optimizer = False):
         if(restart_optimizer):
             self.restart_optimizer()
 
         for epoch in range(max_epochs):
-            self.epoch_index = epoch
-            self.run_epoch(epoch)
+            epoch_start_time = time.time()
+            self.run_epoch(self.epoch_index)
+            epoch_end_time = time.time()
+            print(f'Epoch runtime: {epoch_end_time - epoch_start_time:.2f} seconds')
 
-            self.reg_scale *= self.gamma_reg #TODO : remove gamma_reg
             self.scheduler.step(self.cost_in_epoch)
             print(f'New learning rate set to {self.scheduler.get_last_lr()}')
 
             if(self.logTraining and self.save_path is not None):
+                self.epoch_run_time.append(epoch_end_time - epoch_start_time)
                 self.save_result()
 
+            self.epoch_index += 1
             if self.scheduler.get_last_lr()[0] <= self.lr * (self.scheduler.factor ** self.num_reduced_lr_before_stop):
                 print(f"Learning rate has been reduced {self.num_reduced_lr_before_stop} times. Stopping training.")
                 break
@@ -397,24 +401,36 @@ class CovarTrainer():
 
     def compute_fourier_reg_term(self,eigenvecs):
         eigen_rpsd = rpsd(*eigenvecs)
-        #vectorsGD_rpsd[:,L//2:] = vectorsGD_rpsd[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
-        self.fourier_reg = (self.noise_var) / expand_fourier_shell(eigen_rpsd,self.covar.resolution,3) #TODO : validate this regularization term        
+        self.fourier_reg = (self.noise_var) / upsample_and_expand_fourier_shell(eigen_rpsd,self.covar.resolution * self.covar.upsampling_factor,3)
 
-    def log_training(self):
-        if(len(self.log_epoch_ind) != 0):
-            self.log_epoch_ind.append(self.log_epoch_ind[-1] + self.training_log_freq / self.dataloader_len)
-        else:
-            self.log_epoch_ind.append(self.training_log_freq / self.dataloader_len)
-        
+    def update_fourier_reg_halfsets(self,fourier_reg):
+        fourier_reg = fourier_reg.to(self.device)
+        if(self.objective_func == 'ls'):
+            fourier_reg = fourier_reg / self.covar.resolution ** 1.5 #TODO: figure out where this factor comes from
+
+        if(self.optimize_in_fourier_domain):
+            #This ensures that the fourier_reg term is in the same as the upsampled size of covar
+            fourier_reg_radial = average_fourier_shell(fourier_reg) / (self.covar.upsampling_factor ** 3)
+            fourier_reg = upsample_and_expand_fourier_shell(fourier_reg_radial,self.covar.resolution * self.covar.upsampling_factor,3)
+
+        self.fourier_reg = fourier_reg
+
+    def log_training(self,num_epoch,batch_ind,cost_val):
+        self.log_epoch_ind.append(num_epoch + batch_ind / self.dataloader_len)
+        self.lr_history.append(self.scheduler.get_last_lr()[0])
+        self.log_cost_val.append(cost_val.detach().cpu().numpy())
 
         if(self.vectorsGD != None):
             with torch.no_grad():
                 #self.log_cosine_sim.append(cosineSimilarity(vectors.cpu().detach().numpy(),self.vectorsGD.cpu().numpy()))
+                L = self.covar.resolution
                 vectors = self.covar.get_vectors_spatial_domain()
+                self.covar_fsc_mean.append((covar_fsc(self.vectorsGD.reshape((self.vectorsGD.shape[0],L,L,L)),vectors))[:L//2,:L//2].mean().cpu().numpy())
                 vectors = vectors.reshape((vectors.shape[0],-1))
-                self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),self.vectorsGD))
                 vectorsGD = self.vectorsGD.reshape((self.vectorsGD.shape[0],-1))
+                self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),self.vectorsGD))
                 self.log_fro_err.append((frobeniusNormDiff(vectorsGD,vectors)/frobeniusNorm(vectorsGD)).cpu().numpy())
+                
 
 
     def results_dict(self):
@@ -424,6 +440,10 @@ class CovarTrainer():
         ckp['log_epoch_ind'] = self.log_epoch_ind
         ckp['log_cosine_sim'] = self.log_cosine_sim
         ckp['log_fro_err'] = self.log_fro_err
+        ckp['covar_fsc_mean'] = self.covar_fsc_mean
+        ckp['lr_history'] = self.lr_history
+        ckp['log_cost_val'] = self.log_cost_val
+        ckp['epoch_run_time'] = self.epoch_run_time
 
         return ckp
 
@@ -507,49 +527,46 @@ def update_fourier_reg(trainer1,trainer2):
     eigenvecs2 = trainer2.covar.eigenvecs
     eigenvecs2 = eigenvecs2[0] * (eigenvecs2[1]**0.5).reshape(-1,1,1,1)
 
-    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,trainer1.noise_var,mask=trainer1.dataset.mask)
+    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,trainer1.optimize_in_fourier_domain,mask=trainer1.dataset.mask)
 
-    trainer1.fourier_reg = new_fourier_reg_tensor.to(trainer1.device)
-    trainer2.fourier_reg = new_fourier_reg_tensor.to(trainer2.device)
+    trainer1.update_fourier_reg_halfsets(new_fourier_reg_tensor)
+    trainer2.update_fourier_reg_halfsets(new_fourier_reg_tensor)
 
-def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,rank,L,noise_var,mask=None):
+def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,optimize_in_fourier_domain,mask=None):
 
     if(current_fourier_reg is None):
         current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
 
-    filter_gain_shell_correction = average_fourier_shell(filter_gain / (filter_gain + current_fourier_reg+1e-12)**2) / average_fourier_shell(filter_gain**2 / (filter_gain + current_fourier_reg+1e-12)**2)
-    #filter_gain_shell_correction = 1/average_fourier_shell(filter_gain)
-    filter_gain_shell_correction[L//2:] = filter_gain_shell_correction[L//2]
-    #filter_gain_shell_correction[filter_gain_shell_correction < 1e]
+    averaged_filter_gain = average_fourier_shell(1/filter_gain).reshape(-1,1)
+    averaged_filter_gain = (averaged_filter_gain @ averaged_filter_gain.T)
+    averaged_filter_gain[:,L//2+1:] = averaged_filter_gain[L//2,L//2]
+    averaged_filter_gain[L//2+1:,:] = averaged_filter_gain[L//2,L//2]
+    #averaged_filter_gain += 1e-12
+    filter_gain_shell_correction = averaged_filter_gain
 
     #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
     if(mask is not None):
         mask = mask.clone().to(eigenvecs1.device)
         eigenvecs1 = eigenvecs1 * mask
         eigenvecs2 = eigenvecs2 * mask
-    U,_,V = torch.linalg.svd(eigenvecs1.reshape(rank,-1) @ eigenvecs2.reshape(rank,-1).T)
-    eigenvecs1 = (U @ (V.T @ eigenvecs1.reshape(rank,-1))).reshape((rank,L,L,L))
 
-    eigenvecs_fsc = concat_tensor_tuple([vol_fsc(eigenvecs1[i],eigenvecs2[i]) for i in range(rank)])
-    fsc_epsilon = 1e-3
-    eigenvecs_fsc[:,0] = 1
+    eigenvecs_fsc = covar_fsc(eigenvecs1,eigenvecs2)
+    fsc_epsilon = 1e-6
     eigenvecs_fsc[eigenvecs_fsc < fsc_epsilon] = fsc_epsilon
     eigenvecs_fsc[eigenvecs_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
-    #eigenvecs_fsc[:,L//2:] = eigenvecs_fsc[:,L//2].unsqueeze(1) #TODO : PSD on volume corners are extremly low, validate if this is needed
     
-    #new_fourier_reg = filter_gain_shell_correction/torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0) #TODO : shuold filter gain correction be multiplied or divided?
-    new_fourier_reg = 1/(torch.sum(eigenvecs_fsc / (1 - eigenvecs_fsc),dim=0)*filter_gain_shell_correction) #TODO : shuold filter gain correction be multiplied or divided?
+    new_fourier_reg = 1/((eigenvecs_fsc / (1 - eigenvecs_fsc))*filter_gain_shell_correction)
     new_fourier_reg[new_fourier_reg < 0] = 0
+    new_fourier_reg /= L ** 4 # This term comes from the normalization by L in projection operator which scales to the power of 4 through the filter gain
 
-    from matplotlib import pyplot as plt #Remove this
-    fig = plt.figure()
-    plt.plot((new_fourier_reg.cpu().numpy()).T)
-    plt.yscale('log')
-    fig.savefig('test.jpg')
+    #This is a heuristic approach to get a rank 1 approx of the 'regulariztaion matrix' which allows much faster computation of the regularizaiton term
+    new_fourier_reg = expand_fourier_shell(new_fourier_reg.diag().sqrt().unsqueeze(0),L,3)
 
-    new_fourier_reg_tensor = expand_fourier_shell(new_fourier_reg,L,3)
-    return new_fourier_reg_tensor
+    if(not optimize_in_fourier_domain):
+        #When optimizing in spatial domain regularization needs to be scaled by L^2
+        new_fourier_reg /= L ** 2
 
+    return new_fourier_reg
 
 def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False):
     batch_size = images.shape[0]
@@ -584,38 +601,30 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
         vols_fourier = vols_fourier.reshape((rank,-1))
         vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
         reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
-        cost_val += reg_scale * reg_cost 
+        cost_val += reg_scale * reg_cost
 
     return cost_val
 
 def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False):
     batch_size = images.shape[0]
     rank = vols.shape[0]
-    L = images.shape[-1]
 
-    eigenvals_sqrt = torch.norm(vols.reshape(rank,-1),dim=1)
-    eigenvecs = vols / eigenvals_sqrt.reshape(rank,1,1,1)
-    projected_eigenvecs = vol_forward(eigenvecs,nufft_plans,filters)
-    eigenvals = eigenvals_sqrt ** 2
+    projected_eigenvecs = vol_forward(vols,nufft_plans,filters)
 
     images = images.reshape((batch_size,-1,1))
     projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
 
-    projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
-    Q_projcted_images = torch.matmul(projected_Q.transpose(1,2),images) #size (batch, rank,1)
+    projcted_images = torch.matmul(projected_eigenvecs,images) #size (batch, rank,1)
 
-    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2)) #size (batch,rank,rank)
-    inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
-    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
-    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
-    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2),Q_projcted_images_transformed).squeeze()
-    projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
-
-    ml_noise_term = torch.logdet(projected_eigen_covar)
+    m = torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigenvecs @ projected_eigenvecs.transpose(1,2) / noise_var
+    mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
+    projcted_images_transformed = torch.linalg.solve(m/mean_m.reshape(-1,1,1),projcted_images) / mean_m.reshape(-1,1,1) #size (batch, rank,1)
+    ml_exp_term = - 1/(noise_var**2) * torch.matmul(projcted_images.transpose(1,2).conj(),projcted_images_transformed).squeeze()
+    ml_noise_term = torch.logdet(m)
 
     if(apply_mean_const_term):
         ml_exp_term += 1/noise_var * torch.norm(images,dim=(1,2)) ** 2
-        #ml_noise_term += (L**2 - rank) * torch.log(noise_var)
+        #ml_exp_term += (L**2) * torch.log(noise_var) # constant term
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
 
@@ -659,12 +668,13 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     cost_val = torch.mean(cost_val,dim=0)
 
     if(fourier_reg is not None and reg_scale != 0):
-        us_factor = int(vols.shape[-1]/L)
-        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
+        #TODO: vols should get Covar's grid_correction reversed here
+        vols_fourier = vols * torch.sqrt(fourier_reg)
         vols_fourier = vols_fourier.reshape((rank,-1))
         vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
         reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
         cost_val += reg_scale * reg_cost
+        
 
     return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 
@@ -673,27 +683,19 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     rank = vols.shape[0]
     L = images.shape[-1]
 
-    eigenvals_sqrt = torch.norm(vols.reshape(rank,-1),dim=1) #/ (vol_L ** 1.5) #vols in fourier domain will have their norm scaled by L**1.5
-    eigenvecs = vols / eigenvals_sqrt.reshape(rank,1,1,1)
-    projected_eigenvecs = vol_forward(eigenvecs,nufft_plans,filters,fourier_domain=True)
-    eigenvals = eigenvals_sqrt ** 2
+    projected_eigenvecs = vol_forward(vols,nufft_plans,filters,fourier_domain=True)
 
     images = images.reshape((batch_size,-1,1))
     projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
 
-    projected_Q,projected_R = torch.linalg.qr(projected_eigenvecs.transpose(1,2)) #size (batch,L^2,rank),(batch,rank,rank)
-    Q_projcted_images = torch.matmul(projected_Q.transpose(1,2).conj(),images) #size (batch, rank,1)
+    projcted_images = torch.matmul(projected_eigenvecs.conj(),images) #size (batch, rank,1)
 
+    m = torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigenvecs.conj() @ projected_eigenvecs.transpose(1,2) / noise_var
+    mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
+    projcted_images_transformed = torch.linalg.solve(m/mean_m.reshape(-1,1,1),projcted_images) / mean_m.reshape(-1,1,1) #size (batch, rank,1)
+    ml_exp_term = - 1/(noise_var**2) * torch.matmul(projcted_images.transpose(1,2).conj(),projcted_images_transformed).squeeze()
 
-    projected_eigen_covar = torch.matmul(projected_R * eigenvals.reshape(1,1,rank),projected_R.transpose(1,2).conj()) #size (batch,rank,rank)
-    inverted_projected_eigen_covar = torch.inverse(noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigen_covar) #size (batch,rank,rank)
-    Q_projcted_images_transformed = torch.matmul(projected_eigen_covar,Q_projcted_images) #size (batch, rank,1)
-    Q_projcted_images_transformed = torch.matmul(inverted_projected_eigen_covar,Q_projcted_images_transformed) #size (batch, rank,1)
-    ml_exp_term = - 1/(noise_var) * torch.matmul(Q_projcted_images.transpose(1,2).conj(),Q_projcted_images_transformed).squeeze()
-    projected_eigen_covar = projected_eigen_covar + noise_var * torch.eye(rank,device=vols.device,dtype=vols.dtype).reshape(1,rank,rank)
-
-    ml_noise_term = torch.logdet(projected_eigen_covar)
-
+    ml_noise_term = torch.logdet(m)  #+(L**2) * torch.log(torch.tensor(noise_var)) term which is constant
     if(apply_mean_const_term):
         ml_exp_term += 1/noise_var * torch.norm(images,dim=(1,2)) ** 2
         #ml_noise_term += (L**2 - rank) * torch.log(noise_var)
@@ -701,8 +703,7 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
 
     if(fourier_reg is not None and reg_scale != 0):
-        us_factor = int(vols.shape[-1]/L)
-        vols_fourier = vols[:,::us_factor,::us_factor,::us_factor] * torch.sqrt(fourier_reg)
+        vols_fourier = vols * torch.sqrt(fourier_reg)
         reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
         cost_val += reg_scale * reg_cost
 
@@ -727,7 +728,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
     filters = dataset.unique_filters.to(device)
     num_eigs = eigs.shape[0]
     L = eigs.shape[1]
-    nufft_plans = NufftPlan(batch_size,(L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device)
+    nufft_plans = NufftPlan((L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device)
     cost_val = 0
     for i in range(0,len(dataset),batch_size):
         images,pts_rot,filter_indices,_ = dataset[i:i+batch_size]
@@ -742,7 +743,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
 
 
 def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = None,pose=None,savepath = None,**kwargs):
-    num_workers = min(4,os.cpu_count()-1)
+    num_workers = min(get_cpu_count()-1)
     use_halfsets = kwargs.pop('use_halfsets')
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
     if(optimize_pose and use_halfsets):
@@ -771,7 +772,7 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
     else:
         covar_model_copy = copy.deepcopy(covar_model)
         with torch.no_grad(): #Reinitalize the copied model since having the same initalization will produce unwanted correlation even after training
-            covar_model_copy.vectors.data.copy_(covar_model_copy.init_random_vectors(covar_model.rank))
+            covar_model_copy.set_vectors(covar_model_copy.init_random_vectors(covar_model.rank))
         half1,half2 = dataset.half_split()
 
         num_epochs = kwargs.pop('max_epochs')
@@ -799,6 +800,7 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         full_dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath)
+        trainer_final.fourier_reg = trainer1.fourier_reg
         trainer_final.train(max_epochs=num_epochs,**kwargs)
         
 
