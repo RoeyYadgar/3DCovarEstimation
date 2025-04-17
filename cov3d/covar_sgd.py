@@ -323,8 +323,8 @@ class CovarTrainer():
         if(self.logTraining):
             print("Total cost value in epoch : {:.2e}".format(self.cost_in_epoch.item()))
 
-    def get_trainable_parameters(self,lr,**kwargs):
-        return [{'params' : self.covar.parameters() , 'lr' : lr,**kwargs}]
+    def get_trainable_parameters(self):
+        return self.covar.grad_lr_factor()
     
     def train(self,max_epochs,**training_kwargs):
         self.setup_training(**training_kwargs)
@@ -363,7 +363,7 @@ class CovarTrainer():
         self.epoch_index = 0
 
     def restart_optimizer(self):
-        params_lr = self.covar.grad_lr_factor()
+        params_lr = self.get_trainable_parameters()
         for i in range(len(params_lr)):
             params_lr[i]['lr'] *= self.lr
 
@@ -473,17 +473,12 @@ class CovarPoseTrainer(CovarTrainer):
         self.get_pose_module().rotvec.requires_grad = grad
         
 
-    def get_trainable_parameters(self,lr,**kwargs):
-        trainable_params =  super().get_trainable_parameters(lr,**kwargs) + [
-            {'params' : self.mean.parameters(),'lr' : lr,**kwargs},
-            {'params' : self.pose.parameters(),'lr' : lr * self.pose_lr_ratio,**kwargs}
+    def get_trainable_parameters(self):
+        trainable_params =  super().get_trainable_parameters() + [
+            {'params' : self.mean.parameters(),'lr' : 1},
+            {'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio}
         ]
         return trainable_params
-
-    def restart_optimizer(self):
-        for i,param_group in enumerate(self.optimizer.param_groups):
-            param_group['lr'] = self.lr if i != 2 else self.lr * self.pose_lr_ratio
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=1)
 
     def prepare_batch(self,batch):
         images,_,filter_indices,idx = batch

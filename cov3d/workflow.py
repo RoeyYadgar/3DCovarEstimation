@@ -264,6 +264,7 @@ def workflow_click_decorator(func):
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
+    @click.option('--optimize-pose',is_flag=True,default=False,help = 'Whether to optimize over image pose')
     @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. If provided additional metrics are logged while training & GT embedding is computed and logged')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
     @click.option('--batch-size',type=int,help = 'training batch size')
@@ -285,8 +286,8 @@ def workflow_click_decorator(func):
 
 @click.command()
 @workflow_click_decorator
-def covar_workflow_cli(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',class_vols = None,debug = False,**training_kwargs):
-    covar_workflow(starfile,rank,output_dir=output_dir,whiten=whiten,noise_estimator=noise_estimator,mask=mask,class_vols = class_vols,debug = debug,**training_kwargs)
+def covar_workflow_cli(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,class_vols = None,debug = False,**training_kwargs):
+    covar_workflow(starfile,rank,output_dir=output_dir,whiten=whiten,noise_estimator=noise_estimator,mask=mask,optimize_pose=optimize_pose,class_vols = class_vols,debug = debug,**training_kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()
