@@ -22,41 +22,41 @@ def rodrigues_rotation_matrix(rotvecs):
     return R
 
 class PoseModule(torch.nn.Module):
-    def __init__(self,init_rotvecs,resolution,dtype=torch.float32):
+    def __init__(self, init_rotvecs, resolution, dtype=torch.float32):
         super().__init__()
         self.resolution = resolution
-        self.rotvec = torch.nn.Parameter(init_rotvecs)
-        self._init_grid()
 
-    @property
-    def device(self):
-        return self.rotvec.device
-    
-    @property
-    def dtype(self):
-        return self.rotvec.dtype
+        # convert init_rotvecs to tensor if it's not already
+        init_rotvecs = torch.as_tensor(init_rotvecs, dtype=dtype)
+        n, k = init_rotvecs.shape
 
-    def _init_grid(self):
+        self.rotvec = torch.nn.Embedding(num_embeddings=n, embedding_dim=k, sparse=True)
+        self.rotvec.weight.data.copy_(init_rotvecs)
+
+        self._init_grid(dtype)
+
+    def _init_grid(self, dtype):
         grid2d = grid_2d(self.resolution, indexing="yx")
         num_pts = self.resolution**2
 
-        grid = np.pi * np.vstack(
-            [
-                grid2d["x"].flatten(),
-                grid2d["y"].flatten(),
-                np.zeros(num_pts, dtype=np.float32),
-            ]
-        )
-        grid = torch.tensor(grid.copy(),dtype=self.dtype)
-        self.grid = grid
+        grid = np.pi * np.vstack([
+            grid2d["x"].flatten(),
+            grid2d["y"].flatten(),
+            np.zeros(num_pts, dtype=np.float32),
+        ])
+        self.grid = torch.tensor(grid, dtype=dtype)
 
-    def forward(self,index):
-        rot_mat = rodrigues_rotation_matrix(self.rotvec[index])
-        return torch.flip(torch.matmul(rot_mat.reshape(len(index)*3,3),self.grid).reshape(len(index),3,self.resolution**2),dims=[1])
+    def forward(self, index):
+        rot_mat = rodrigues_rotation_matrix(self.rotvec(index))  # same indexing
+        return torch.flip(torch.matmul(
+            rot_mat.reshape(len(index)*3, 3),
+            self.grid
+        ).reshape(len(index), 3, self.resolution**2), dims=[1])
     
-    def to(self,*args,**kwargs):
-        super().to(*args,**kwargs)
-        self.grid = self.grid.to(*args,**kwargs)
-        return self  
+    def to(self, *args, **kwargs):
+        super().to(*args, **kwargs)
+        self.grid = self.grid.to(*args, **kwargs)
+        return self
+ 
 
         

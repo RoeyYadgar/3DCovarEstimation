@@ -459,8 +459,11 @@ class CovarPoseTrainer(CovarTrainer):
         super().__init__(covar,train_data,device,save_path,training_log_freq)
         self.mean = mean.to(self.device)
         self.pose = pose.to(self.device)
-        self.pose_lr_ratio = 1e-1
-        self.set_pose_grad_req(False)
+        self.pose_lr_ratio = 1
+        self.num_rep = 5
+        self.set_pose_grad_req(True)
+
+        self.get_mean_module().volume.requires_grad = False
 
     def get_mean_module(self):
         return self.mean if not self.isDDP else self.mean.module
@@ -476,23 +479,28 @@ class CovarPoseTrainer(CovarTrainer):
     def get_trainable_parameters(self):
         trainable_params =  super().get_trainable_parameters() + [
             {'params' : self.mean.parameters(),'lr' : 1},
-            {'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio}
         ]
         return trainable_params
 
     def prepare_batch(self,batch):
         images,_,filter_indices,idx = batch
         images = images.to(self.device)
+        idx = idx.to(self.device)
         filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
         return images,idx,filters
 
     def run_batch(self,images,idx,filters):
-        self.optimizer.zero_grad()
-        self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
-        images_zero_mean = images - vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain).squeeze(1)
-        cost_val = self.cost_func(self._covar(dummy_var=None),images_zero_mean,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
-        cost_val.backward()
-        self.optimizer.step()
+        for _ in range(self.num_rep):
+            self.optimizer.zero_grad()
+            self.pose_optimizer.zero_grad()
+            self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
+            images_zero_mean = images - vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain).squeeze(1)
+
+            cost_val = self.cost_func(self._covar(dummy_var=None),images_zero_mean,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
+            cost_val.backward()
+
+            self.optimizer.step()
+            self.pose_optimizer.step()
 
         if(self.use_orthogonal_projection):
             self.covar.orthogonal_projection()
@@ -502,6 +510,10 @@ class CovarPoseTrainer(CovarTrainer):
     def setup_training(self, **kwargs):
         super().setup_training(**kwargs)
         self.get_mean_module().init_grid_correction(kwargs.get('nufft_disc'))
+
+    def restart_optimizer(self):
+        super().restart_optimizer()
+        self.pose_optimizer = torch.optim.SparseAdam([{'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio * self.lr}])
 
     def results_dict(self):
         ckp = super().results_dict()
@@ -738,7 +750,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
 
 
 def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = None,pose=None,savepath = None,**kwargs):
-    num_workers = min(get_cpu_count()-1)
+    num_workers = min(4,get_cpu_count()-1)
     use_halfsets = kwargs.pop('use_halfsets')
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
     if(optimize_pose and use_halfsets):
