@@ -63,7 +63,7 @@ def main(args: argparse.Namespace) -> None:
     with open(args.gt_latent,'rb') as f:
         coords_gt = pickle.load(f)
 
-    info_imbalance,_ = compute_information_imbalance(coords_est,coords_gt,subset_size=2000)
+    info_imbalance,_ = compute_information_imbalance(coords_est,coords_gt + np.random.uniform(-0.1,0.1,size=coords_gt.shape),subset_size=2000)
     np.savetxt(os.path.join(args.outdir,'information_imbalance.txt'),info_imbalance[:,0])
     
     coords_est = jnp.array(coords_est.copy())
