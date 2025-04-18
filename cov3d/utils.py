@@ -310,8 +310,8 @@ def relionReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,q=
         relionReconstruct(starfile,output_file,overwrite=True,mrcs_index=index_under_threshold.cpu().numpy(),invert=result['data_sign_inverted'])
 
 
-def readVols(directory,in_list=True):
-    volfiles = [os.path.join(directory,v) for v in os.listdir(directory) if '.mrc' in v]
+def readVols(vols,in_list=True):
+    volfiles = [os.path.join(vols,v) for v in os.listdir(vols) if '.mrc' in v] if isinstance(vols,str) else vols
     numvols = len(volfiles)
     vol_size = Volume.load(volfiles[0]).shape[-1]
     volumes = Volume(np.zeros((numvols,vol_size,vol_size,vol_size),dtype=np.float32))
