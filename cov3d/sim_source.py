@@ -171,7 +171,7 @@ def replicate_source(source):
 def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vols = None,mask=None):
     os.makedirs(folder_name,exist_ok=True)
 
-    n = 10000
+    n = 100000
     pixel_size = 3 * 128/ L
 
     if(not no_ctf):

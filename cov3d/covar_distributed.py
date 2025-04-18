@@ -115,7 +115,7 @@ def trainParallel(covar_model,dataset,batch_size,num_gpus = 'max',optimize_pose=
         print(f'Batch size is not a multiple of number of GPUs used, increasing batch size to {batch_size}')
     batch_size_per_gpu = int(batch_size / num_gpus)
 
-    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,optimize_pose,mean_model,pose,savepath,gt_data=None,kwargs),nprocs = num_gpus)
+    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,optimize_pose,mean_model,pose,savepath,gt_data,kwargs),nprocs = num_gpus)
 
     covar_model.load_state_dict(torch.load(TMP_STATE_DICT_FILE))
     os.remove(TMP_STATE_DICT_FILE)
