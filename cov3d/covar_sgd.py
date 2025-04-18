@@ -221,6 +221,28 @@ class CovarDataset(Dataset):
 
         self.mask = self.mask.cpu()
         
+
+def preprocess_image_batch(images,nufft_plan,filters,mean_volume,mask,mask_threshold,softening_kernel_fourier,fourier_domain):
+    """
+    Subtracts projected mean volume and applies masking on a batch of images
+    """
+    if(not fourier_domain):
+        images = centered_fft2(images)
+
+    mean_forward = vol_forward(mean_volume,nufft_plan,filters=filters,fourier_domain=True).squeeze(1)
+    images = images - mean_forward
+
+    images = centered_ifft2(images).real
+    mask_forward = vol_forward(mask,nufft_plan,filters=None,fourier_domain=False).squeeze(1).detach() #We don't want to take the gradient with respect to the mask (in case the pose is being optimized)
+    mask_forward = mask_forward > mask_threshold 
+    soft_mask = centered_ifft2(centered_fft2(mask_forward)  * softening_kernel_fourier).real
+    images *= soft_mask
+
+    if(fourier_domain):
+        images = centered_fft2(images)
+
+    return images
+
         
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,training_log_freq = 50):
@@ -494,9 +516,11 @@ class CovarPoseTrainer(CovarTrainer):
             self.optimizer.zero_grad()
             self.pose_optimizer.zero_grad()
             self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
-            images_zero_mean = images - vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain).squeeze(1)
+            preprocessed_images = preprocess_image_batch(images,self.nufft_plans,filters,self.mean(dummy_var=None),
+                                                         self.mask,self.mask_threshold,self.softening_kernel_fourier,
+                                                         fourier_domain=self.optimize_in_fourier_domain)
 
-            cost_val = self.cost_func(self._covar(dummy_var=None),images_zero_mean,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
+            cost_val = self.cost_func(self._covar(dummy_var=None),preprocessed_images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
             cost_val.backward()
 
             self.optimizer.step()
@@ -510,6 +534,18 @@ class CovarPoseTrainer(CovarTrainer):
     def setup_training(self, **kwargs):
         super().setup_training(**kwargs)
         self.get_mean_module().init_grid_correction(kwargs.get('nufft_disc'))
+        self.mask = self.get_mean_module().get_volume_mask()
+        
+        softening_kernel = soft_edged_kernel(radius=5,L=self.get_mean_module().resolution,dim=2)
+        softening_kernel = torch.tensor(softening_kernel,device=self.device)
+        self.softening_kernel_fourier = centered_fft2(softening_kernel)
+
+        with torch.no_grad():
+            idx = torch.arange(self.batch_size,device=self.device)
+            self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
+            projected_mask = vol_forward(self.mask,self.nufft_plans).squeeze(1)
+            vals = projected_mask.reshape(-1).cpu().numpy()
+            self.mask_threshold = np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
 
     def restart_optimizer(self):
         super().restart_optimizer()

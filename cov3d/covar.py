@@ -47,9 +47,10 @@ class VolumeBase(torch.nn.Module):
 
 
 class Mean(VolumeBase):
-    def __init__(self,volume_init,resolution,dtype=torch.float32,fourier_domain=False,upsampling_factor=2):
+    def __init__(self,volume_init,resolution,dtype=torch.float32,fourier_domain=False,volume_mask=None,upsampling_factor=2):
         super().__init__(resolution=resolution,dtype=dtype,fourier_domain=fourier_domain,upsampling_factor=upsampling_factor)
         self.volume = torch.nn.Parameter(volume_init)
+        self.volume_mask = volume_mask
 
     @property
     def device(self):
@@ -64,6 +65,19 @@ class Mean(VolumeBase):
 
     def forward(self,dummy_var = None): #dummy_var is used to make Covar module compatible with DDP - for some reason DDP requires the forward method to have an argument
         return self.get_volume_spatial_domain() if self._in_spatial_domain else self.get_volume_fourier_domain()
+    
+    def get_volume_mask(self):
+        if(not self._in_spatial_domain):
+            return centered_fft3(self.volume_mask / self.grid_correction if self.grid_correction is not None else self.volume_mask,
+                                 padding_size = (self.resolution * self.upsampling_factor,)*3)
+        else:
+            return self.volume_mask
+        
+    def to(self,*args,**kwargs):
+        super().to(*args,**kwargs)
+        self.volume_mask = self.volume_mask.to(*args,**kwargs)
+
+        return self
 
 class Covar(VolumeBase):
     def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
