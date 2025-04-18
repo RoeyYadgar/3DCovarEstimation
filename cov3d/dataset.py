@@ -50,7 +50,7 @@ class CovarDataset(Dataset):
         nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean_volume.dtype,device=device)
 
         images = src.images[:]
-        #images = images.shift(-src.offsets)
+        images = images.shift(-src.offsets)
         images = images/(src.amplitudes[:,np.newaxis,np.newaxis].astype(images.dtype))
         if(mean_volume is not None): #Substracted projected mean from images. Using own implemenation of volume projection since Aspire implemention is too slow
             for i in range(0,src.n,batch_size): #TODO : do this with own wrapper of nufft to improve run time

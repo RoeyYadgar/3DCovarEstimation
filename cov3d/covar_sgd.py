@@ -26,13 +26,19 @@ class CovarTrainer():
         self.training_log_freq = training_log_freq
         self.gt_data = gt_data
         if(self.logTraining):
-            self.log_epoch_ind = []
-            self.log_cosine_sim = []
-            self.log_fro_err = []
-            self.covar_fsc_mean = []
-            self.lr_history = []
-            self.log_cost_val = []
-            self.epoch_run_time = []
+            self.training_log = {
+                "epoch_ind": [],
+                "lr_history": [],
+                "cost_val": [],
+                "epoch_run_time": []
+            }
+            if(self.vectorsGT is not None):
+                self.training_log.update({
+                    "cosine_sim": [],
+                    "fro_err": [],
+                    "covar_fsc_mean": []
+                })
+            
 
         self.filter_gain = self.dataset.get_total_gain().to(self.device)
         self.num_reduced_lr_before_stop = 4
@@ -103,9 +109,9 @@ class CovarTrainer():
                     pbar_description += f" , vecs norm : {torch.norm(self.covar.get_vectors())}"
                     if(self.vectorsGT is not None):
                         #TODO : update log metrics, use principal angles
-                        cosine_sim_val = np.mean(np.sqrt(np.sum(self.log_cosine_sim[-1] ** 2,axis = 0)))
-                        fro_err_val = self.log_fro_err[-1]
-                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val) + ", covar fsc mean : {:.2e}".format(self.covar_fsc_mean[-1])
+                        cosine_sim_val = np.mean(np.sqrt(np.sum(self.training_log['cosine_sim'][-1] ** 2,axis = 0)))
+                        fro_err_val = self.training_log['fro_err'][-1]
+                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val) + ", covar fsc mean : {:.2e}".format(self.training_log['covar_fsc_mean'][-1])
                     pbar.set_description(pbar_description)
 
                 pbar.update(1)
@@ -178,7 +184,7 @@ class CovarTrainer():
             print(f'New learning rate set to {self.scheduler.get_last_lr()}')
 
             if(self.logTraining and self.save_path is not None):
-                self.epoch_run_time.append(epoch_end_time - epoch_start_time)
+                self.training_log['epoch_run_time'].append(epoch_end_time - epoch_start_time)
                 self.save_result()
 
             self.epoch_index += 1
@@ -206,21 +212,25 @@ class CovarTrainer():
 
         self.fourier_reg = fourier_reg
 
-    def log_training(self,num_epoch,batch_ind,cost_val):
-        self.log_epoch_ind.append(num_epoch + batch_ind / self.dataloader_len)
-        self.lr_history.append(self.scheduler.get_last_lr()[0])
-        self.log_cost_val.append(cost_val.detach().cpu().numpy())
+    def log_training(self, num_epoch, batch_ind, cost_val):
+        self.training_log["epoch_ind"].append(num_epoch + batch_ind / self.dataloader_len)
+        self.training_log["lr_history"].append(self.scheduler.get_last_lr()[0])
+        self.training_log["cost_val"].append(cost_val.detach().cpu().numpy())
 
-        if(self.vectorsGT is not None):
+        if self.vectorsGT is not None:
             with torch.no_grad():
                 L = self.covar.resolution
                 vectors = self.covar.get_vectors_spatial_domain()
                 vectorsGT = self.vectorsGT.to(self.device)
-                self.covar_fsc_mean.append((covar_fsc(vectorsGT.reshape((vectorsGT.shape[0],L,L,L)),vectors))[:L//2,:L//2].mean().cpu().numpy())
-                vectors = vectors.reshape((vectors.shape[0],-1))
-                vectorsGT = vectorsGT.reshape((vectorsGT.shape[0],-1))
-                self.log_cosine_sim.append(cosineSimilarity(vectors.detach(),vectorsGT))
-                self.log_fro_err.append((frobeniusNormDiff(vectorsGT,vectors)/frobeniusNorm(vectorsGT)).cpu().numpy())
+                self.training_log["covar_fsc_mean"].append(
+                    (covar_fsc(vectorsGT.reshape((vectorsGT.shape[0], L, L, L)), vectors))[:L // 2, :L // 2].mean().cpu().numpy()
+                )
+                vectors = vectors.reshape((vectors.shape[0], -1))
+                vectorsGT = vectorsGT.reshape((vectorsGT.shape[0], -1))
+                self.training_log["cosine_sim"].append(cosineSimilarity(vectors.detach(), vectorsGT))
+                self.training_log["fro_err"].append(
+                    (frobeniusNormDiff(vectorsGT, vectors) / frobeniusNorm(vectorsGT)).cpu().numpy()
+            )
                 
 
 
@@ -228,13 +238,7 @@ class CovarTrainer():
         ckp = self.covar.state_dict()
         ckp['vectorsGT'] = self.vectorsGT
         ckp['fourier_reg'] = self.fourier_reg
-        ckp['log_epoch_ind'] = self.log_epoch_ind
-        ckp['log_cosine_sim'] = self.log_cosine_sim
-        ckp['log_fro_err'] = self.log_fro_err
-        ckp['covar_fsc_mean'] = self.covar_fsc_mean
-        ckp['lr_history'] = self.lr_history
-        ckp['log_cost_val'] = self.log_cost_val
-        ckp['epoch_run_time'] = self.epoch_run_time
+        ckp.update(self.training_log)
 
         return ckp
 

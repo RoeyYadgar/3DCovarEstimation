@@ -155,7 +155,7 @@ def replicate_source(source):
 def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vols = None,mask=None):
     os.makedirs(folder_name,exist_ok=True)
 
-    n = 10000
+    n = 100000
     pixel_size = 3 * 128/ L
 
     if(not no_ctf):
@@ -216,4 +216,4 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
 
 
 if __name__=="__main__":
-    simulateExp('data/gt_refactor_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
+    simulateExp('data/rank5_converges_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
