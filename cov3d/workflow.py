@@ -222,6 +222,11 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
             mean_model=mean,pose=pose,optimize_pose=optimize_pose,
             **default_training_kwargs)
     
+    if(optimize_pose):
+        #Update dataset with estimated pose
+        #TODO: output pose to file
+        dataset.rot_vecs = pose.get_rotvecs().cpu()
+        dataset.pts_rot = dataset.compute_pts_rot(dataset.rot_vecs)
     
     #Compute wiener coordinates using estimated and ground truth eigenvectors
     eigen_est,eigenval_est= cov.eigenvecs

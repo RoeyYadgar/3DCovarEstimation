@@ -17,9 +17,7 @@ class CovarDataset(Dataset):
     def __init__(self,src,noise_var,vectorsGD = None,mean_volume = None,mask=None,invert_data = False):
         self.resolution = src.L
         self.rot_vecs = torch.tensor(Rotation(src.rotations).as_rotvec().astype(src.rotations.dtype))
-        self.pts_rot = torch.tensor(rotated_grids(self.resolution,src.rotations).copy()).reshape((3,src.n,self.resolution**2)) #TODO : replace this with torch affine_grid with size (N,1,L,L,1)
-        self.pts_rot = self.pts_rot.transpose(0,1) 
-        self.pts_rot = (torch.remainder(self.pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
+        self.pts_rot = self.compute_pts_rot(self.rot_vecs)
         self.noise_var = noise_var
         self.data_inverted = invert_data
 
@@ -50,6 +48,14 @@ class CovarDataset(Dataset):
     
     def __getitem__(self,idx):
         return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx],idx
+    
+    def compute_pts_rot(self,rotvecs):
+        rotations = Rotation.from_rotvec(rotvecs.numpy())
+        pts_rot = torch.tensor(rotated_grids(self.resolution,rotations.matrices).copy()).reshape((3,rotvecs.shape[0],self.resolution**2)) #TODO : replace this with torch affine_grid with size (N,1,L,L,1)
+        pts_rot = pts_rot.transpose(0,1) 
+        pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
+
+        return pts_rot
     
     def preprocess_images(self,src,mean_volume,batch_size=512):
         device = get_torch_device()

@@ -57,6 +57,8 @@ class PoseModule(torch.nn.Module):
         super().to(*args, **kwargs)
         self.grid = self.grid.to(*args, **kwargs)
         return self
- 
+    
+    def get_rotvecs(self):
+        return self.rotvec.weight.data
 
         
