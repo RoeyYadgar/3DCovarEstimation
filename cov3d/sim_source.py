@@ -7,7 +7,7 @@ from aspire.operators import MultiplicativeFilter,ScalarFilter,ArrayFilter,Radia
 from cov3d.utils import get_torch_device
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward
-from cov3d.covar_sgd import CovarDataset
+from cov3d.dataset import CovarDataset,GTData
 from cov3d.workflow import covar_processing
 from cov3d.analyze import analyze
 from cov3d.utils import volsCovarEigenvec,readVols
@@ -171,7 +171,7 @@ def replicate_source(source):
 def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vols = None,mask=None):
     os.makedirs(folder_name,exist_ok=True)
 
-    n = 100000
+    n = 10000
     pixel_size = 3 * 128/ L
 
     if(not no_ctf):
@@ -193,7 +193,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
     var = torch.var(sim._clean_images).item()
     
    
-    vectorsGD = volsCovarEigenvec(voxels)    
+    vectorsGT = volsCovarEigenvec(voxels)    
     snr_vals = 10**np.arange(0,-3.5,-0.5)
     objs = ['ml','ls']
     for snr in snr_vals:
@@ -202,7 +202,8 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
 
         sim.noise_var = noise_var
         noise_var = sim.noise_var
-        dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=Volume(voxels.asnumpy().mean(axis=0)),mask=Volume.load(mask) if mask is not None else None)
+        dataset = CovarDataset(sim,noise_var,mean_volume=Volume(voxels.asnumpy().mean(axis=0)),mask=Volume.load(mask) if mask is not None else None)
+        gt_data = GTData(torch.tensor(vectorsGT))
         
         for obj in objs:
             dir_name = os.path.join(folder_name,f'obj_{obj}',f'algorithm_output_{snr}')
@@ -212,7 +213,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
             dataset.starfile = os.path.join(dir_name,'particles.star')     
             display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
             display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
-            data_dict,_,_ = covar_processing(dataset,r,dir_name,max_epochs=20,objective_func=obj,num_reg_update_iters=1)
+            data_dict,_,_ = covar_processing(dataset,r,dir_name,gt_data=gt_data,max_epochs=20,objective_func=obj,num_reg_update_iters=1)
 
             coords_est = data_dict['coords_est']
             state_centers = np.zeros((len(voxels),coords_est.shape[1]))

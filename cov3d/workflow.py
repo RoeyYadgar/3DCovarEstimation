@@ -8,16 +8,17 @@ from umap import UMAP
 from sklearn.metrics import auc
 import click
 from cov3d.utils import *
-from cov3d.covar_sgd import CovarDataset,trainCovar
+from cov3d.covar_sgd import trainCovar
+from cov3d.dataset import CovarDataset,GTData
 from cov3d.covar import Covar,CovarFourier,Mean
 from cov3d.poses import PoseModule
 from cov3d.covar_distributed import trainParallel
-from cov3d.wiener_coords import latentMAP,mahalanobis_threshold
+from cov3d.wiener_coords import latentMAP
 
 def determineMaxBatchSize(devices,L,rank,dtype):
     devices_memory = [torch.cuda.get_device_properties(d).total_memory for d in devices]
     mem_per_device = min(devices_memory)
-    model_size = L**3*rank*2*dtype.itemsize*3 # factor of 2 for complex numbers. factor of 3 comes from additional fourier reg tensor & vectorsGD (if exists)
+    model_size = L**3*rank*2*dtype.itemsize*3 # factor of 2 for complex numbers. factor of 3 comes from additional fourier reg tensor & vectorsGT (if exists)
 
     mem_for_batch = mem_per_device - model_size
     maximal_batch_size_per_device = mem_for_batch // (L**2*6*dtype.itemsize) # factor of 6 comes from complex number of images, 3d fourier points, and CTF filter 
@@ -126,15 +127,15 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
             #Compute ground truth eigenvectors
             _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
             states_dist = counts/np.sum(counts)
-            covar_eigenvecs_gd = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
+            covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
         else:
-            covar_eigenvecs_gd = None
+            covar_eigenvecs_gt = None
 
         #Print useful info TODO: use log files
         print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
-        if(covar_eigenvecs_gd is not None):
-            print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gd,axis=1)**2}')
-            print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gd))}')
+        if(covar_eigenvecs_gt is not None):
+            print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}')
+            print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gt))}')
 
 
         noise_est_num_ims = min(source.n,2**12)
@@ -156,31 +157,36 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
         if(invert_data):
             print('inverting dataset sign')
             (-1 * mean_est).save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
-        dataset = CovarDataset(source,noise_var,vectorsGD=covar_eigenvecs_gd,mean_volume=mean_est if (not optimize_pose) else None, #When optimizing pose is set to true mean volume should not be substracted from images
+        dataset = CovarDataset(source,noise_var,mean_volume=mean_est if (not optimize_pose) else None, #When optimizing pose is set to true mean volume should not be substracted from images
                                 mask=mask if (not optimize_pose) else None,
                                 invert_data = invert_data)
-        if(states_in_source):
-            dataset.states = torch.tensor(source.states) #TODO : do this at dataset constructor
         dataset.starfile = starfile
+
+        gt_data = GTData(torch.tensor(covar_eigenvecs_gt))
+
         
         if(debug):
             with open(dataset_path,'wb') as fid:
                 pickle.dump(dataset,fid)
+            with open(os.path.join(output_dir,'gt_data.pkl'),'wb') as fid:
+                pickle.dump(gt_data,fid)
     else:
         print(f"Reading pickled dataset from {dataset_path}")
         with open(dataset_path,'rb') as fid:
             dataset = pickle.load(fid)
+        with open(os.path.join(output_dir,'gt_data.pkl'),'rb') as fid:
+            gt_data = pickle.load(fid)
         mean_est = Volume.load(path.join(output_dir,'mean_est.mrc'))
         mask = load_mask(mask,mean_est.resolution)
         print(f"Dataset loaded successfuly")
 
-    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,mask,optimize_pose,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,mask,optimize_pose,gt_data=gt_data,**training_kwargs)
     torch.cuda.empty_cache()
     return covar_precoessing_output
 
     
 
-def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=None,optimize_pose=False,**training_kwargs):
+def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=None,optimize_pose=False,gt_data=None,**training_kwargs):
     L = dataset.images.shape[-1]
 
     #Perform optimization for eigenvectors estimation
@@ -215,12 +221,12 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
     if(torch.cuda.device_count() > 1): #TODO : implement halfsets for parallel training
         trainParallel(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             mean_model=mean,pose=pose,optimize_pose=optimize_pose,
-            **default_training_kwargs)
+            gt_data=gt_data,**default_training_kwargs)
     else:
         cov = cov.to(get_torch_device())
         trainCovar(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             mean_model=mean,pose=pose,optimize_pose=optimize_pose,
-            **default_training_kwargs)
+            gt_data=gt_data,**default_training_kwargs)
     
     if(optimize_pose):
         #Update dataset with estimated pose
@@ -234,10 +240,10 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
     eigenval_est = eigenval_est.to('cuda:0')
     coords_est,coords_covar_inv_est = latentMAP(dataset,eigen_est,eigenval_est,return_coords_covar=True)
 
-    is_gt_eigenvols = dataset.vectorsGD is not None
+    is_gt_eigenvols = gt_data.eigenvecs is not None
     if(is_gt_eigenvols):
-        eigenvals_GT = torch.norm(dataset.vectorsGD,dim=1) ** 2
-        eigenvectors_GT = (dataset.vectorsGD / torch.sqrt(eigenvals_GT).unsqueeze(1)).reshape((-1,L,L,L))
+        eigenvals_GT = torch.norm(gt_data.eigenvecs,dim=1) ** 2
+        eigenvectors_GT = (gt_data.eigenvecs / torch.sqrt(eigenvals_GT).unsqueeze(1)).reshape((-1,L,L,L))
         coords_GT,coords_covar_inv_GT = latentMAP(dataset,eigenvectors_GT.to('cuda:0'),eigenvals_GT.to('cuda:0'),return_coords_covar=True)
     
     print(f'Eigenvalues of estimated covariance {eigenval_est}')

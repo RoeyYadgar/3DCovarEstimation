@@ -11,8 +11,8 @@ from cov3d.covar_sgd import frobeniusNormDiff,frobeniusNorm,cosineSimilarity
 @click.option('--cov3d-results', type=click.Path(exists=True))
 def compare_recovar_results(recovar_results,cov3d_results):
     cov3d_results = torch.load(os.path.join(cov3d_results,'training_results.bin'))
-    cov3d_eigenvectors = cov3d_results['_vectors_real']
-    gd_eigenvectors = cov3d_results['vectorsGD']
+    cov3d_eigenvectors = cov3d_results['vectors']
+    gd_eigenvectors = cov3d_results['vectorsGT']
     device = cov3d_eigenvectors.device
     rank = cov3d_eigenvectors.shape[0]
     L = cov3d_eigenvectors.shape[1]

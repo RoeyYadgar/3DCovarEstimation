@@ -18,7 +18,7 @@ def ddp_setup(rank,world_size,backend):
     torch.cuda.set_device(rank)
 
 
-def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_pose=False,mean_model = None,pose=None,savepath = None,kwargs = {}):
+def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_pose=False,mean_model = None,pose=None,savepath = None,gt_data=None,kwargs = {}):
     backend = 'nccl' if kwargs.get('nufft_disc') is not None else 'gloo' #For some reason cuFINUFFT breaks when using NCCL backend
     ddp_setup(rank,world_size,backend)
     device = torch.device(f'cuda:{rank}')
@@ -41,13 +41,13 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
     else:
         covar_model = DDP(covar_model,device_ids=[rank])
     if(not optimize_pose):
-        trainer = CovarTrainer(covar_model,dataloader,device,savepath)
+        trainer = CovarTrainer(covar_model,dataloader,device,savepath,gt_data=gt_data)
     else:
         mean_model = mean_model.to(device)
         pose = pose.to(device)
         mean_model = DDP(mean_model,device_ids=[rank])
         pose = DDP(pose,device_ids=[rank])
-        trainer = CovarPoseTrainer(covar_model,dataloader,device,mean_model,pose,savepath)
+        trainer = CovarPoseTrainer(covar_model,dataloader,device,mean_model,pose,savepath,gt_data=gt_data)
     
     trainer.process_ind = (rank,world_size)
 
@@ -106,7 +106,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
     dist.destroy_process_group()
 
 
-def trainParallel(covar_model,dataset,batch_size,num_gpus = 'max',optimize_pose=False,mean_model = None,pose=None,savepath = None,**kwargs):
+def trainParallel(covar_model,dataset,batch_size,num_gpus = 'max',optimize_pose=False,mean_model = None,pose=None,savepath = None,gt_data=None,**kwargs):
     if(num_gpus == 'max'):
         num_gpus = torch.cuda.device_count()
 
@@ -115,7 +115,7 @@ def trainParallel(covar_model,dataset,batch_size,num_gpus = 'max',optimize_pose=
         print(f'Batch size is not a multiple of number of GPUs used, increasing batch size to {batch_size}')
     batch_size_per_gpu = int(batch_size / num_gpus)
 
-    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,optimize_pose,mean_model,pose,savepath,kwargs),nprocs = num_gpus)
+    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,optimize_pose,mean_model,pose,savepath,gt_data=None,kwargs),nprocs = num_gpus)
 
     covar_model.load_state_dict(torch.load(TMP_STATE_DICT_FILE))
     os.remove(TMP_STATE_DICT_FILE)

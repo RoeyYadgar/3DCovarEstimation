@@ -7,7 +7,8 @@ from aspire.source import Simulation
 from aspire.noise import WhiteNoiseAdder
 
 from cov3d import nufft_plan
-from cov3d.covar_sgd import cost,cost_fourier_domain,cost_maximum_liklihood,cost_maximum_liklihood_fourier_domain,CovarDataset
+from cov3d.covar_sgd import cost,cost_fourier_domain,cost_maximum_liklihood,cost_maximum_liklihood_fourier_domain
+from cov3d.dataset import CovarDataset
 from cov3d.covar import Covar
 from cov3d.utils import volsCovarEigenvec,generateBallVoxel
 from cov3d.projection_funcs import vol_forward,centered_fft3
@@ -41,7 +42,8 @@ class TestTorchImpl(unittest.TestCase):
             unique_filters=[RadialCTFFilter(defocus=d,pixel_size=3) for d in np.linspace(8e3, 2.5e4, 7)],
             noise_adder=WhiteNoiseAdder(noise_var)
         )
-        self.dataset = CovarDataset(self.sim,noise_var=noise_var,vectorsGD = volsCovarEigenvec(self.vols),mean_volume=Volume(np.zeros((self.img_size,)*3,dtype=np.float32)))
+        self.dataset = CovarDataset(self.sim,noise_var=noise_var,mean_volume=Volume(np.zeros((self.img_size,)*3,dtype=np.float32)))
+        self.vectorsGT = torch.tensor(volsCovarEigenvec(self.vols))
         rots = self.sim.rotations[:]
         pts_rot = rotated_grids(self.img_size,rots)
         self.pts_rot = pts_rot.reshape((3,-1))
@@ -163,10 +165,10 @@ class TestTorchImpl(unittest.TestCase):
 
     def test_fourier_reg(self):
         L = self.img_size
-        rank = self.dataset.vectorsGD.shape[0]
-        vgd = self.dataset.vectorsGD.reshape((rank,L,L,L))
-        vectorsGD_rpsd = rpsd(*vgd)
-        gd_psd = torch.sum(expand_fourier_shell(vectorsGD_rpsd,L,3),dim=0) if rank > 1 else expand_fourier_shell(vectorsGD_rpsd,L,3)
+        rank = self.vectorsGT.shape[0]
+        vgd = self.vectorsGT.reshape((rank,L,L,L))
+        vectorsGT_rpsd = rpsd(*vgd)
+        gd_psd = torch.sum(expand_fourier_shell(vectorsGT_rpsd,L,3),dim=0) if rank > 1 else expand_fourier_shell(vectorsGT_rpsd,L,3)
 
         noise_var = 10
         fourier_reg = noise_var / gd_psd
@@ -182,9 +184,9 @@ class TestTorchImpl(unittest.TestCase):
 
         
         vols_fourier = centered_fft3(vols).reshape(rank,-1)
-        vgd_fourier = centered_fft3(vgd).reshape(rank,-1)
+        vgd_fourier = gd_psd.reshape(1,-1)
         M = vgd_fourier.T @ vgd_fourier.conj()
-        reg_matrix_coeff = noise_var / torch.abs(M) #torch.sqrt(noise_var ** 2 / torch.abs(M)**2)
+        reg_matrix_coeff = noise_var / torch.abs(M)**0.5 
         reg_term_inefficient_computation = torch.norm(reg_matrix_coeff * (vols_fourier.T @ vols_fourier.conj()))**2
 
         print((reg_term_efficient_computation,reg_term_inefficient_computation))
@@ -203,17 +205,17 @@ class TestTorchImpl(unittest.TestCase):
         filters = self.dataset.unique_filters[filter_inds]
         pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
 
-        vectorsGD_rpsd = rpsd(*self.dataset.vectorsGD.reshape((-1,self.img_size,self.img_size,self.img_size)))
-        fourier_reg = (self.dataset.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,self.img_size,3),dim=0))
+        vectorsGT_rpsd = rpsd(*self.vectorsGT.reshape((-1,self.img_size,self.img_size,self.img_size)))
+        fourier_reg = (self.dataset.noise_var) / (torch.mean(expand_fourier_shell(vectorsGT_rpsd,self.img_size,3),dim=0))
         
         #Spatial domain cost
         plans = nufft_plan.NufftPlan((self.img_size,)*3,batch_size=rank)
         plans.setpts(pts_rot)
         cost_spatial = torch.tensor([
-            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var),
-            cost(covar.vectors * 1e3,ims,plans,filters,self.dataset.noise_var),
-            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var * 1e6),
-            cost(covar.vectors,ims,plans,filters,self.dataset.noise_var,reg_scale=1,fourier_reg = fourier_reg)
+            cost(covar.get_vectors_spatial_domain(),ims,plans,filters,self.dataset.noise_var),
+            cost(covar.get_vectors_spatial_domain() * 1e3,ims,plans,filters,self.dataset.noise_var),
+            cost(covar.get_vectors_spatial_domain(),ims,plans,filters,self.dataset.noise_var * 1e6),
+            cost(covar.get_vectors_spatial_domain(),ims,plans,filters,self.dataset.noise_var,reg_scale=1,fourier_reg = fourier_reg)
             ])
 
         #Fourier domain cost
@@ -223,7 +225,7 @@ class TestTorchImpl(unittest.TestCase):
         filters = fourier_data.unique_filters[filter_inds]
         pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
 
-        fourier_reg = (fourier_data.noise_var) / (torch.mean(expand_fourier_shell(vectorsGD_rpsd,self.img_size,3),dim=0))
+        fourier_reg = (fourier_data.noise_var) / (torch.mean(expand_fourier_shell(vectorsGT_rpsd,self.img_size,3),dim=0))
         fourier_reg_radial = average_fourier_shell(fourier_reg) / (upsampling_factor ** 3)
         fourier_reg = upsample_and_expand_fourier_shell(fourier_reg_radial,covar.resolution * covar.upsampling_factor,3)
 
@@ -300,7 +302,7 @@ class TestTorchImpl(unittest.TestCase):
         torch.testing.assert_close(naive_cost,efficient_cost, rtol=5e-3,atol=5e-3)
 
     def test_covar_rpsd(self):
-        eigenvecs1 = self.dataset.vectorsGD.reshape(-1,self.img_size,self.img_size,self.img_size).to(self.device)
+        eigenvecs1 = self.vectorsGT.reshape(-1,self.img_size,self.img_size,self.img_size).to(self.device)
         eigenvecs2 = eigenvecs1 + 0*torch.randn(eigenvecs1.shape,device=self.device)
 
         eigenvecs1 = centered_fft3(eigenvecs1).reshape(-1,self.img_size**3)
