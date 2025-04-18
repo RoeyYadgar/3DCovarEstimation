@@ -1,6 +1,6 @@
 import torch
 from torch import distributed as dist
-from cov3d.covar_sgd import CovarDataset,CovarTrainer,cost
+from cov3d.covar_sgd import CovarTrainer,cost
 from cov3d.covar import Covar
 from cov3d.nufft_plan import NufftPlan
 from cov3d.wiener_coords import wiener_coords

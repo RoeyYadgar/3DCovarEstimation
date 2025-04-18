@@ -1,6 +1,4 @@
-import torch
-import numpy as np
-import aspire
+import os
 import pickle
 import click
 from matplotlib import pyplot as plt
@@ -15,7 +13,10 @@ def inspect_dataset(dataset_path,output_path):
     L = dataset.resolution
     sample_images = dataset.images[:5].transpose(0,1).reshape(L,-1)
 
-    is_vectors_gd = dataset.vectorsGD is not None
+
+    gt_datapath = os.path.join(os.path.split(dataset_path)[0],'gt_data.pkl')
+    gt_data = pickle.load(open(gt_datapath,'rb'))
+    is_vectors_gt = gt_data.eigenvecs is not None
 
     fig = plt.figure(figsize=(8,6))
     gs = GridSpec(2,3,figure=fig)
@@ -37,9 +38,9 @@ def inspect_dataset(dataset_path,output_path):
     ax3.set_yscale('log')
     ax3.set_title('Filter radial gain')
 
-    if(is_vectors_gd):
+    if(is_vectors_gt):
         ax4 = fig.add_subplot(gs[1,2])
-        ax4.plot(rpsd(*dataset.vectorsGD.reshape(-1,L,L,L)).T)
+        ax4.plot(rpsd(*gt_data.eigenvecs.reshape(-1,L,L,L)).T)
         ax4.set_yscale('log')
         ax4.set_title('Groundtruth eigen volumes RPSD')
 

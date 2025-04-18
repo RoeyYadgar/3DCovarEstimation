@@ -31,7 +31,7 @@ class TestWienerImpl(unittest.TestCase):
             )
         mean_vol = Volume(np.mean(vols,axis=0))
         noise_var = 1
-        dataset = CovarDataset(source,noise_var,vectorsGD=None,mean_volume=mean_vol,mask=None)
+        dataset = CovarDataset(source,noise_var,mean_volume=mean_vol,mask=None)
         device = torch.device('cuda:0')
 
 

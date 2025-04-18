@@ -7,7 +7,6 @@ import os
 from cov3d.covar_sgd import CovarTrainer,compute_updated_fourier_reg
 from cov3d.covar import Covar
 from cov3d.utils import get_cpu_count
-from cov3d.iterative_covar_sgd import IterativeCovarTrainer,IterativeCovar,IterativeCovarVer2,IterativeCovarTrainerVer2
 import math
 
 TMP_STATE_DICT_FILE = 'tmp_state_dict.pt'
@@ -19,7 +18,7 @@ def ddp_setup(rank,world_size,backend):
     torch.cuda.set_device(rank)
 
 
-def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath = None,kwargs = {}):
+def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath = None,gt_data=None,kwargs = {}):
     backend = 'nccl' if kwargs.get('nufft_disc') is not None else 'gloo' #For some reason cuFINUFFT breaks when using NCCL backend
     ddp_setup(rank,world_size,backend)
     device = torch.device(f'cuda:{rank}')
@@ -41,7 +40,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
         covar_model = DDP(covar_model,device_ids=[rank],process_group=group1 if is_group1 else group2)
     else:
         covar_model = DDP(covar_model,device_ids=[rank])
-    trainer = CovarTrainer(covar_model,dataloader,device,savepath)
+    trainer = CovarTrainer(covar_model,dataloader,device,savepath,gt_data=gt_data)
     trainer.process_ind = (rank,world_size)
 
 
@@ -99,7 +98,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,savepath =
     dist.destroy_process_group()
 
 
-def trainParallel(covar_model,dataset,num_gpus = 'max',batch_size=1,savepath = None,**kwargs):
+def trainParallel(covar_model,dataset,num_gpus = 'max',batch_size=1,savepath = None,gt_data=None,**kwargs):
     if(num_gpus == 'max'):
         num_gpus = torch.cuda.device_count()
 
@@ -108,7 +107,7 @@ def trainParallel(covar_model,dataset,num_gpus = 'max',batch_size=1,savepath = N
         print(f'Batch size is not a multiple of number of GPUs used, increasing batch size to {batch_size}')
     batch_size_per_gpu = int(batch_size / num_gpus)
 
-    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,savepath,kwargs),nprocs = num_gpus)
+    mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,savepath,gt_data,kwargs),nprocs = num_gpus)
 
     covar_model.load_state_dict(torch.load(TMP_STATE_DICT_FILE))
     os.remove(TMP_STATE_DICT_FILE)
