@@ -291,7 +291,9 @@ class CovarPoseTrainer(CovarTrainer):
                 "rot_angle_dist" : [],
             })
 
-        self.get_mean_module().volume.requires_grad = False
+        for param in self.get_mean_module().parameters():
+            param.requires_grad = False
+
 
     def get_mean_module(self):
         return self.mean if not self.isDDP else self.mean.module
@@ -300,8 +302,11 @@ class CovarPoseTrainer(CovarTrainer):
         return self.pose if not self.isDDP else self.pose.module
     
     def set_pose_grad_req(self,grad):
-        self.get_mean_module().volume.requires_grad = grad
-        self.get_pose_module().rotvec.requires_grad = grad
+        for param in self.get_pose_module().parameters():
+            param.requires_grad = grad
+        for param in self.get_mean_module().parameters():
+            param.requires_grad = grad
+
         
 
     def get_trainable_parameters(self):
@@ -327,6 +332,7 @@ class CovarPoseTrainer(CovarTrainer):
                                                          fourier_domain=self.optimize_in_fourier_domain)
 
             cost_val = self.cost_func(self._covar(dummy_var=None),preprocessed_images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
+            cost_val = cost_val + self.regularize_mean()
             cost_val.backward()
 
             self.optimizer.step()
@@ -341,6 +347,7 @@ class CovarPoseTrainer(CovarTrainer):
         super().setup_training(**kwargs)
         self.get_mean_module().init_grid_correction(kwargs.get('nufft_disc'))
         self.mask = self.get_mean_module().get_volume_mask()
+        self.compute_fourier_mean_reg_term()
         
         softening_kernel = soft_edged_kernel(radius=5,L=self.get_mean_module().resolution,dim=2)
         softening_kernel = torch.tensor(softening_kernel,device=self.device)
@@ -356,6 +363,21 @@ class CovarPoseTrainer(CovarTrainer):
     def restart_optimizer(self):
         super().restart_optimizer()
         self.pose_optimizer = torch.optim.SparseAdam([{'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio * self.lr}])
+
+    def compute_fourier_mean_reg_term(self):
+        mean = self.get_mean_module()
+        mean_rpsd = rpsd(*mean.get_volume_spatial_domain().detach())
+        mean_rpsd[-1] = mean_rpsd[-2] #TODO: fix tail of rpsd
+        self.mean_fourier_reg = 1 / upsample_and_expand_fourier_shell(mean_rpsd,mean.resolution * mean.upsampling_factor,3)
+
+    def regularize_mean(self):
+        if(self.objective_func == 'ml'):                
+            vol_fourier = self.get_mean_module().get_volume_fourier_domain() * torch.sqrt(self.mean_fourier_reg)
+            reg_cost = torch.norm(vol_fourier)**2 * self.reg_scale
+            return reg_cost
+
+        else:
+            raise Exception('Mean regularization not implemented for this objective function')
 
     def log_training(self, num_epoch, batch_ind, cost_val):
         from aspire.utils import Rotation
