@@ -130,14 +130,7 @@ class CovarTrainer():
             if(self.logTraining):
                 if((batch_ind % self.training_log_freq == 0)):
                     self.log_training(epoch,batch_ind,cost_val)
-                    pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(cost_val)
-                    pbar_description += f" , vecs norm : {torch.norm(self.covar.get_vectors())}"
-                    if(self.vectorsGT is not None):
-                        #TODO : update log metrics, use principal angles
-                        cosine_sim_val = np.mean(np.sqrt(np.sum(self.training_log['cosine_sim'][-1] ** 2,axis = 0)))
-                        fro_err_val = self.training_log['fro_err'][-1]
-                        pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val) + ", covar fsc mean : {:.2e}".format(self.training_log['covar_fsc_mean'][-1])
-                    pbar.set_description(pbar_description)
+                    pbar.set_description(self._get_pbar_desc(epoch))
 
                 pbar.update(1)
 
@@ -259,7 +252,15 @@ class CovarTrainer():
                     (frobeniusNormDiff(vectorsGT, vectors) / frobeniusNorm(vectorsGT)).cpu().numpy()
             )
                 
-
+    def _get_pbar_desc(self, epoch):
+        pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(self.cost_in_epoch)
+        pbar_description += f" , vecs norm : {torch.norm(self.covar.get_vectors())}"
+        if(self.vectorsGT is not None):
+            #TODO : update log metrics, use principal angles
+            cosine_sim_val = np.mean(np.sqrt(np.sum(self.training_log['cosine_sim'][-1] ** 2,axis = 0)))
+            fro_err_val = self.training_log['fro_err'][-1]
+            pbar_description =  pbar_description +",  cosine sim : {:.2f}".format(cosine_sim_val) + ", frobenium norm error : {:.2e}".format(fro_err_val) + ", covar fsc mean : {:.2e}".format(self.training_log['covar_fsc_mean'][-1])
+        return pbar_description
 
     def results_dict(self):
         ckp = self.covar.state_dict()
@@ -282,8 +283,13 @@ class CovarPoseTrainer(CovarTrainer):
         self.mean = mean.to(self.device)
         self.pose = pose.to(self.device)
         self.pose_lr_ratio = 1
-        self.num_rep = 5
+        self.num_rep = 1
         self.set_pose_grad_req(True)
+
+        if(self.logTraining and self.gt_data.rotations is not None):
+            self.training_log.update({
+                "rot_angle_dist" : [],
+            })
 
         self.get_mean_module().volume.requires_grad = False
 
@@ -350,6 +356,23 @@ class CovarPoseTrainer(CovarTrainer):
     def restart_optimizer(self):
         super().restart_optimizer()
         self.pose_optimizer = torch.optim.SparseAdam([{'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio * self.lr}])
+
+    def log_training(self, num_epoch, batch_ind, cost_val):
+        from aspire.utils import Rotation
+        super().log_training(num_epoch,batch_ind,cost_val)
+        if self.gt_data is not None and self.gt_data.rotations is not None:
+            with torch.no_grad():
+                rotvecs = self.get_pose_module().get_rotvecs()
+                rots_est = Rotation.from_rotvec(rotvecs.cpu().numpy())
+                rots_gt = Rotation(self.gt_data.rotations.numpy())
+                self.training_log["rot_angle_dist"].append(Rotation.mean_angular_distance(rots_est, rots_gt)) #TODO: implement this with pytorch
+        
+
+    def _get_pbar_desc(self, epoch):
+        pbar_description = super()._get_pbar_desc(epoch)
+        if(self.gt_data is not None and self.gt_data.rotations is not None):
+            pbar_description += f" , mean angle dist : {self.training_log['rot_angle_dist'][-1]}"
+        return pbar_description
 
     def results_dict(self):
         ckp = super().results_dict()

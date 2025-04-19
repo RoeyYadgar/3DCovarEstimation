@@ -203,7 +203,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
         sim.noise_var = noise_var
         noise_var = sim.noise_var
         dataset = CovarDataset(sim,noise_var,mean_volume=Volume(voxels.asnumpy().mean(axis=0)),mask=Volume.load(mask) if mask is not None else None)
-        gt_data = GTData(torch.tensor(vectorsGT))
+        gt_data = GTData(vectorsGT)
         
         for obj in objs:
             dir_name = os.path.join(folder_name,f'obj_{obj}',f'algorithm_output_{snr}')
@@ -267,19 +267,23 @@ def simulate_noisy_rots(folder_name,snr,rots_std,L=64,r=5,no_ctf=False,vols = No
     os.makedirs(output_dir,exist_ok=True)
     Volume(voxels.asnumpy().mean(axis=0)).save(os.path.join(output_dir,'mean_est.mrc'),overwrite=True)
     voxels.save(os.path.join(output_dir,'class_vols.mrc'),overwrite=True)
-    vectorsGD = volsCovarEigenvec(voxels)
-    dataset = CovarDataset(sim,noise_var,vectorsGD=vectorsGD,mean_volume=None,mask=Volume.load(mask) if mask is not None else None)
+    vectorsGT = volsCovarEigenvec(voxels)
+    dataset = CovarDataset(sim,noise_var,mean_volume=None,mask=Volume.load(mask) if mask is not None else None)
     dataset.starfile = os.path.join(folder_name,'particles.star')
 
+    gt_data = GTData(vectorsGT,sim._rotations)
+
     sim.save(folder_name,gt_pose=False)
-    sim.save(folder_name,save_image_stack=False,file_prefix='gt',gt_pose=True)
+    sim.save(os.path.join('gt'),save_image_stack=False,gt_pose=True)
     display_source(sim,os.path.join(folder_name,'clean_images.jpg'),display_clean=True)
     with open(os.path.join(output_dir,'dataset.pkl'),'wb') as f:
         pickle.dump(dataset,f)
+    with open(os.path.join(output_dir,'gt_data.pkl'),'wb') as f:
+        pickle.dump(gt_data,f)
 
 
 if __name__=="__main__":
-    simulateExp('data/rank5_converges_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
+    #simulateExp('data/rank5_converges_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
     [f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,10)]
     simulate_noisy_rots('data/pose_opt_exp',snr=0.1,rots_std = 0.1,r=5,
                         vols = [f'data/scratch_data/igg_1d/vols/128_org/{int(i):03}.mrc' for i in np.linspace(0,100,6,endpoint=False)],

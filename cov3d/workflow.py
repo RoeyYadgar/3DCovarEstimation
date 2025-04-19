@@ -95,7 +95,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,class_vols = None,debug = False,**training_kwargs):
+def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
     #Load starfile
     data_dir = os.path.split(starfile)[0]
     if(output_dir is None):
@@ -162,7 +162,10 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
                                 invert_data = invert_data)
         dataset.starfile = starfile
 
-        gt_data = GTData(torch.tensor(covar_eigenvecs_gt))
+        if(gt_pose is not None):
+            gt_pose = pickle.load(open(gt_pose,'rb'))
+            gt_pose = np.transpose(gt_pose[0],axes=(0,2,1))
+        gt_data = GTData(covar_eigenvecs_gt,gt_pose)
 
         
         if(debug):
@@ -279,7 +282,8 @@ def workflow_click_decorator(func):
     @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
     @click.option('--optimize-pose',is_flag=True,default=False,help = 'Whether to optimize over image pose')
-    @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. If provided additional metrics are logged while training & GT embedding is computed and logged')
+    @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. Used if provided to log eigen vectors error metrics while training.Additionally, GT embedding is computed and logged')
+    @click.option('--gt-pose',type=str,default=None,help='Path to GT pkl pose file (cryoDRGN format). Used if provided to log pose error metrics while training')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
     @click.option('--batch-size',type=int,help = 'training batch size')
     @click.option('--max-epochs',type=int,help = 'number of epochs to train')
@@ -300,8 +304,8 @@ def workflow_click_decorator(func):
 
 @click.command()
 @workflow_click_decorator
-def covar_workflow_cli(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,class_vols = None,debug = False,**training_kwargs):
-    covar_workflow(starfile,rank,output_dir=output_dir,whiten=whiten,noise_estimator=noise_estimator,mask=mask,optimize_pose=optimize_pose,class_vols = class_vols,debug = debug,**training_kwargs)
+def covar_workflow_cli(**kwargs):
+    covar_workflow(**kwargs)
 
 if __name__ == "__main__":
     covar_workflow_cli()
