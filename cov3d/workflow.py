@@ -128,8 +128,10 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
             _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
             states_dist = counts/np.sum(counts)
             covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
+            mean_gt = np.mean(class_vols,axis=0)
         else:
             covar_eigenvecs_gt = None
+            mean_gt = None
 
         #Print useful info TODO: use log files
         print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
@@ -165,7 +167,7 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
         if(gt_pose is not None):
             gt_pose = pickle.load(open(gt_pose,'rb'))
             gt_pose = np.transpose(gt_pose[0],axes=(0,2,1))
-        gt_data = GTData(covar_eigenvecs_gt,gt_pose)
+        gt_data = GTData(covar_eigenvecs_gt,mean_gt,gt_pose)
 
         
         if(debug):
@@ -234,6 +236,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
     if(optimize_pose):
         #Update dataset with estimated pose
         #TODO: output pose to file
+        #TODO: mask and substract mean before computing latent coords
         dataset.rot_vecs = pose.get_rotvecs().cpu()
         dataset.pts_rot = dataset.compute_pts_rot(dataset.rot_vecs)
     

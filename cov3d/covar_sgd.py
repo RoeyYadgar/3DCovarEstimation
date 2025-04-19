@@ -8,7 +8,7 @@ import copy
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3
-from cov3d.fsc_utils import rpsd,average_fourier_shell,sum_over_shell,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
+from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 
 
 def preprocess_image_batch(images,nufft_plan,filters,mean_volume,mask,mask_threshold,softening_kernel_fourier,fourier_domain):
@@ -286,13 +286,19 @@ class CovarPoseTrainer(CovarTrainer):
         self.num_rep = 1
         self.set_pose_grad_req(True)
 
-        if(self.logTraining and self.gt_data.rotations is not None):
-            self.training_log.update({
-                "rot_angle_dist" : [],
-            })
+        if(self.logTraining and self.gt_data is not None):
+            if(self.gt_data.rotations is not None):
+                self.training_log.update({
+                    "rot_angle_dist" : []
+                    })
+            if(self.gt_data.mean is not None):
+                self.training_log.update({
+                    "mean_vol_norm_err" : [],
+                    "mean_vol_fsc" : []
+                })
 
-        for param in self.get_mean_module().parameters():
-            param.requires_grad = False
+        #for param in self.get_mean_module().parameters():
+        #    param.requires_grad = False
 
 
     def get_mean_module(self):
@@ -382,18 +388,30 @@ class CovarPoseTrainer(CovarTrainer):
     def log_training(self, num_epoch, batch_ind, cost_val):
         from aspire.utils import Rotation
         super().log_training(num_epoch,batch_ind,cost_val)
-        if self.gt_data is not None and self.gt_data.rotations is not None:
+        if self.gt_data is not None:
             with torch.no_grad():
-                rotvecs = self.get_pose_module().get_rotvecs()
-                rots_est = Rotation.from_rotvec(rotvecs.cpu().numpy())
-                rots_gt = Rotation(self.gt_data.rotations.numpy())
-                self.training_log["rot_angle_dist"].append(Rotation.mean_angular_distance(rots_est, rots_gt)) #TODO: implement this with pytorch
+                if(self.gt_data.rotations is not None):
+                    rotvecs = self.get_pose_module().get_rotvecs()
+                    rots_est = Rotation.from_rotvec(rotvecs.cpu().numpy())
+                    rots_gt = Rotation(self.gt_data.rotations.numpy())
+                    self.training_log["rot_angle_dist"].append(Rotation.mean_angular_distance(rots_est, rots_gt)) #TODO: implement this with pytorch
+                if(self.gt_data.mean is not None):
+                    mean_gt = self.gt_data.mean.to(self.device)
+                    mean_est = self.get_mean_module().get_volume_spatial_domain()
+                    mean_fsc = vol_fsc(mean_gt,mean_est.squeeze(0))
+                    mean_fsc = mean_fsc[:mean_gt.shape[-1]//2].mean()
+                    self.training_log["mean_vol_norm_err"].append(torch.norm(mean_gt - mean_est).cpu().numpy()/torch.norm(mean_gt).cpu().numpy())
+                    self.training_log["mean_vol_fsc"].append(mean_fsc.cpu().numpy())
         
 
     def _get_pbar_desc(self, epoch):
         pbar_description = super()._get_pbar_desc(epoch)
-        if(self.gt_data is not None and self.gt_data.rotations is not None):
-            pbar_description += f" , mean angle dist : {self.training_log['rot_angle_dist'][-1]}"
+        if(self.gt_data is not None):
+            if(self.gt_data.rotations is not None):
+                pbar_description += f" , mean angle dist : {self.training_log['rot_angle_dist'][-1]}"
+            if(self.gt_data.mean is not None):
+                pbar_description += f" , mean vol norm err : {self.training_log['mean_vol_norm_err'][-1]}"
+                pbar_description += f" , mean vol fsc : {self.training_log['mean_vol_fsc'][-1]}"
         return pbar_description
 
     def results_dict(self):

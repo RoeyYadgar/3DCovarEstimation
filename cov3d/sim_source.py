@@ -109,7 +109,7 @@ class SimulatedSource():
 
         return full_ctf
 
-    def save(self,output_dir,file_prefix=None,save_image_stack=True,gt_pose = False):
+    def save(self,output_dir,file_prefix=None,save_image_stack=True,gt_pose = False,whiten=False):
 
         def add_prefix(filename):
             return f'{file_prefix}_{filename}' if file_prefix is not None else filename
@@ -119,12 +119,15 @@ class SimulatedSource():
         ctf_output = os.path.join(output_dir,add_prefix('ctf.pkl'))
 
         if(save_image_stack):
+            whiten_val = self.whiten
+            self.whiten = whiten
             with mrcfile.new(mrcs_output,overwrite=True) as mrc:
                 mrc.set_data(self.images.asnumpy().astype(np.float32))
                 #mrc.voxel_size = self.vols.pixel_size
                 #mrc.set_spacegroup(1)
                 #mrc.data = np.transpose(mrc.data,(0,2,1))
                 #mrc.update_header()
+            self.whiten = whiten_val
         
         shifts = self._offsets
         if(gt_pose):
@@ -259,22 +262,25 @@ def simulate_noisy_rots(folder_name,snr,rots_std,L=64,r=5,no_ctf=False,vols = No
 
     noise_var = var / snr
     sim.noise_var = noise_var
+    noise_var = sim.noise_var
 
 
     
     #Place mean est and class vols in the output dir
     output_dir = os.path.join(folder_name,'result_data')
     os.makedirs(output_dir,exist_ok=True)
-    Volume(voxels.asnumpy().mean(axis=0)).save(os.path.join(output_dir,'mean_est.mrc'),overwrite=True)
+    mean = voxels.asnumpy().mean(axis=0)
+    Volume(mean,pixel_size=pixel_size).save(os.path.join(output_dir,'mean_est.mrc'),overwrite=True)
     voxels.save(os.path.join(output_dir,'class_vols.mrc'),overwrite=True)
     vectorsGT = volsCovarEigenvec(voxels)
     dataset = CovarDataset(sim,noise_var,mean_volume=None,mask=Volume.load(mask) if mask is not None else None)
     dataset.starfile = os.path.join(folder_name,'particles.star')
 
-    gt_data = GTData(vectorsGT,sim._rotations)
+    gt_data = GTData(vectorsGT,mean,sim._rotations)
 
     sim.save(folder_name,gt_pose=False)
-    sim.save(os.path.join('gt'),save_image_stack=False,gt_pose=True)
+    os.makedirs(os.path.join(folder_name,'gt'),exist_ok=True)
+    sim.save(os.path.join(folder_name,'gt'),save_image_stack=False,gt_pose=True)
     display_source(sim,os.path.join(folder_name,'clean_images.jpg'),display_clean=True)
     with open(os.path.join(output_dir,'dataset.pkl'),'wb') as f:
         pickle.dump(dataset,f)

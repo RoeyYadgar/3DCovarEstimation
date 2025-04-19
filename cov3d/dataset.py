@@ -224,6 +224,7 @@ class GTData:
     Class to hold the ground truth data to compute metrics against ground truth.
     """
     eigenvecs: torch.Tensor = None
+    mean : torch.Tensor = None
     rotations : torch.Tensor = None
 
     def __post_init__(self):
@@ -231,5 +232,7 @@ class GTData:
             self.eigenvecs = torch.tensor(self.eigenvecs)
         if self.rotations is not None:
             self.rotations = torch.tensor(self.rotations)
+        if self.mean is not None:
+            self.mean = torch.tensor(self.mean)
 
 
