@@ -11,12 +11,17 @@ from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,cent
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 
 
-def preprocess_image_batch(images,nufft_plan,filters,mean_volume,mask,mask_threshold,softening_kernel_fourier,fourier_domain):
+def preprocess_image_batch(images,nufft_plan,filters,pose,mean_volume,mask,mask_threshold,softening_kernel_fourier,fourier_domain):
     """
-    Subtracts projected mean volume and applies masking on a batch of images
+    Shifts images, subtracts projected mean volume and applies masking on a batch of images
     """
+    pts_rot,phase_shift = pose
+    nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+
     if(not fourier_domain):
         images = centered_fft2(images)
+
+    images = images * phase_shift
 
     mean_forward = vol_forward(mean_volume,nufft_plan,filters=filters,fourier_domain=True).squeeze(1)
     images = images - mean_forward
@@ -64,6 +69,7 @@ class CovarTrainer():
 
         self.filter_gain = self.dataset.get_total_gain().to(self.device)
         self.num_reduced_lr_before_stop = 4
+        self.scheduler_patiece = 0
         self.fourier_reg = None
         self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
 
@@ -188,7 +194,7 @@ class CovarTrainer():
             self.optimizer = torch.optim.SGD(params_lr,momentum = self.momentum)
         elif(self.optim_type == 'Adam'):
             self.optimizer = torch.optim.Adam(params_lr)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=0)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,patience=self.scheduler_patiece)
 
     def train_epochs(self,max_epochs,restart_optimizer = False):
         if(restart_optimizer):
@@ -291,6 +297,10 @@ class CovarPoseTrainer(CovarTrainer):
                 self.training_log.update({
                     "rot_angle_dist" : []
                     })
+            if(self.gt_data.offsets is not None):
+                self.training_log.update({
+                    "offsets_mean_dist" : []
+                    })
             if(self.gt_data.mean is not None):
                 self.training_log.update({
                     "mean_vol_norm_err" : [],
@@ -298,6 +308,7 @@ class CovarPoseTrainer(CovarTrainer):
                 })
 
         self.mean_fourier_reg = None
+        self.scheduler_patiece = 1
         #for param in self.get_mean_module().parameters():
         #    param.requires_grad = False
         #for param in self.get_pose_module().parameters():
@@ -334,8 +345,7 @@ class CovarPoseTrainer(CovarTrainer):
         for _ in range(self.num_rep):
             self.optimizer.zero_grad()
             self.pose_optimizer.zero_grad()
-            self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
-            preprocessed_images = preprocess_image_batch(images,self.nufft_plans,filters,self.mean(dummy_var=None),
+            preprocessed_images = preprocess_image_batch(images,self.nufft_plans,filters,self.pose(idx),self.mean(dummy_var=None),
                                                          self.mask,self.mask_threshold,self.softening_kernel_fourier,
                                                          fourier_domain=self.optimize_in_fourier_domain)
 
@@ -362,7 +372,7 @@ class CovarPoseTrainer(CovarTrainer):
 
         with torch.no_grad():
             idx = torch.arange(self.batch_size,device=self.device)
-            self.nufft_plans.setpts(self.pose(idx).transpose(0,1).reshape((3,-1)))
+            self.nufft_plans.setpts(self.pose(idx)[0].transpose(0,1).reshape((3,-1)))
             projected_mask = vol_forward(self.mask,self.nufft_plans).squeeze(1)
             vals = projected_mask.reshape(-1).cpu().numpy()
             self.mask_threshold = np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
@@ -403,6 +413,10 @@ class CovarPoseTrainer(CovarTrainer):
                     rots_est = Rotation.from_rotvec(rotvecs.cpu().numpy())
                     rots_gt = Rotation(self.gt_data.rotations.numpy())
                     self.training_log["rot_angle_dist"].append(Rotation.mean_angular_distance(rots_est, rots_gt)) #TODO: implement this with pytorch
+                if(self.gt_data.offsets is not None):
+                    offsets_est = self.get_pose_module().get_offsets()
+                    offsets_gt = self.gt_data.offsets
+                    self.training_log["offsets_mean_dist"].append(torch.norm(offsets_est.cpu()-offsets_gt,dim=1).mean().numpy()/self.covar.resolution)
                 if(self.gt_data.mean is not None):
                     mean_gt = self.gt_data.mean.to(self.device)
                     mean_est = self.get_mean_module().get_volume_spatial_domain()
@@ -416,10 +430,12 @@ class CovarPoseTrainer(CovarTrainer):
         pbar_description = super()._get_pbar_desc(epoch)
         if(self.gt_data is not None):
             if(self.gt_data.rotations is not None):
-                pbar_description += f" , mean angle dist : {self.training_log['rot_angle_dist'][-1]}"
+                pbar_description += f" , mean angle dist : {self.training_log['rot_angle_dist'][-1]:.2e}"
+            if(self.gt_data.offsets is not None):
+                pbar_description += f" , offset mean : {self.training_log['offsets_mean_dist'][-1]:.2e}"
             if(self.gt_data.mean is not None):
-                pbar_description += f" , mean vol norm err : {self.training_log['mean_vol_norm_err'][-1]}"
-                pbar_description += f" , mean vol fsc : {self.training_log['mean_vol_fsc'][-1]}"
+                pbar_description += f" , mean vol norm err : {self.training_log['mean_vol_norm_err'][-1]:.2e}"
+                pbar_description += f" , mean vol fsc : {self.training_log['mean_vol_fsc'][-1]:.2e}"
         return pbar_description
 
     def results_dict(self):

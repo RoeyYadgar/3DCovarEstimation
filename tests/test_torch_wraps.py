@@ -7,6 +7,7 @@ from aspire.volume import Volume,LegacyVolume,rotated_grids
 from aspire.utils import Rotation
 from aspire.source import Simulation
 from aspire.operators import RadialCTFFilter
+from aspire.image import Image
 from aspire.nufft import nufft as aspire_nufft
 from aspire.nufft import anufft as aspire_anufft
 
@@ -241,15 +242,28 @@ class TestTorchWraps(unittest.TestCase):
         torch.testing.assert_close(vol_forward_grad,batch_vol_forward_grad,rtol=5e-3,atol=5e-3)
 
 
-    def test_pose_module(self):
+    def test_pose_module_rots(self):
         rotations = self.sim.rotations
         init_rotvec = torch.tensor(Rotation.from_matrix(rotations).as_rotvec(),dtype=torch.float32)
-        pose_module = PoseModule(init_rotvec,self.img_size)
-        pose_module = pose_module.to(self.device)
+        pose_module = PoseModule(init_rotvec,torch.zeros(len(init_rotvec),2),self.img_size)
         index = torch.tensor([5,13,192,153])
-        pts_rot = torch.tensor(self.pts_rot.copy(),device=self.device).reshape(3,-1,self.img_size**2)[:,index].transpose(0,1)
-        module_pts_rot = pose_module(index)
+        pts_rot = torch.tensor(self.pts_rot.copy()).reshape(3,-1,self.img_size**2)[:,index].transpose(0,1)
+        module_pts_rot,_ = pose_module(index)
         torch.testing.assert_close(pts_rot,module_pts_rot,rtol=1e-3,atol=1e-3)
+
+    def test_pose_module_offsets(self):
+        N = 100  
+        offsets = torch.randn((N,2),dtype=torch.float32) * 5
+        init_rotvec = torch.tensor(Rotation.from_matrix(self.sim.rotations[:N]).as_rotvec(),dtype=torch.float32)
+        pose_module = PoseModule(init_rotvec,offsets,self.img_size)
+
+        images = torch.randn((N,self.img_size,self.img_size),dtype=torch.float32)
+        _,phase_shift = pose_module(torch.arange(N))
+        module_shifted_images = projection_funcs.centered_ifft2(projection_funcs.centered_fft2(images) * phase_shift).real
+
+        aspire_shifted_images = Image(images.numpy()).shift(-offsets).asnumpy()
+
+        torch.testing.assert_close(module_shifted_images,torch.tensor(aspire_shifted_images),rtol=1e-3,atol=1e-3)
 
 if __name__ == "__main__":
     

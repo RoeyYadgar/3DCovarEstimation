@@ -11,7 +11,7 @@ from cov3d.utils import *
 from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset,GTData
 from cov3d.covar import Covar,CovarFourier,Mean
-from cov3d.poses import PoseModule
+from cov3d.poses import PoseModule,pose_cryoDRGN2APIRE
 from cov3d.covar_distributed import trainParallel
 from cov3d.wiener_coords import latentMAP
 
@@ -166,8 +166,11 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
 
         if(gt_pose is not None):
             gt_pose = pickle.load(open(gt_pose,'rb'))
-            gt_pose = np.transpose(gt_pose[0],axes=(0,2,1))
-        gt_data = GTData(covar_eigenvecs_gt,mean_gt,gt_pose)
+            gt_rots,gt_offsets = pose_cryoDRGN2APIRE(gt_pose,L)
+        else:
+            gt_rots = None
+            gt_offsets = None
+        gt_data = GTData(covar_eigenvecs_gt,mean_gt,gt_rots,gt_offsets)
 
         
         if(debug):
@@ -218,7 +221,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
                     fourier_domain=optimize_in_fourier_domain,
                     volume_mask=torch.tensor(mask.asnumpy()),
                     upsampling_factor=upsampling_factor)
-        pose = PoseModule(dataset.rot_vecs,L)
+        pose = PoseModule(dataset.rot_vecs,dataset.offsets,L)
     else:
         mean = None
         pose = None

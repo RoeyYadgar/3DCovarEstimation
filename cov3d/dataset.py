@@ -16,6 +16,7 @@ class CovarDataset(Dataset):
     def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False):
         self.resolution = src.L
         self.rot_vecs = torch.tensor(Rotation(src.rotations).as_rotvec().astype(src.rotations.dtype))
+        self.offsets = torch.tensor(src.offsets)
         self.pts_rot = self.compute_pts_rot(self.rot_vecs)
         self.noise_var = noise_var
         self.data_inverted = invert_data
@@ -60,7 +61,7 @@ class CovarDataset(Dataset):
         nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean_volume.dtype,device=device)
 
         images = src.images[:]
-        images = images.shift(-src.offsets)
+        images = images.shift(-self.offsets.numpy())
         images = images/(src.amplitudes[:,np.newaxis,np.newaxis].astype(images.dtype))
         if(mean_volume is not None): #Substracted projected mean from images. Using own implemenation of volume projection since Aspire implemention is too slow
             for i in range(0,src.n,batch_size): #TODO : do this with own wrapper of nufft to improve run time
@@ -226,13 +227,17 @@ class GTData:
     eigenvecs: torch.Tensor = None
     mean : torch.Tensor = None
     rotations : torch.Tensor = None
+    offsets : torch.Tensor = None
 
     def __post_init__(self):
         if self.eigenvecs is not None:
             self.eigenvecs = torch.tensor(self.eigenvecs)
-        if self.rotations is not None:
-            self.rotations = torch.tensor(self.rotations)
         if self.mean is not None:
             self.mean = torch.tensor(self.mean)
+        if self.rotations is not None:
+            self.rotations = torch.tensor(self.rotations)
+        if self.offsets is not None:
+            self.offsets = torch.tensor(self.offsets)
+
 
 
