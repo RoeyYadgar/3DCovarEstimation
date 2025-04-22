@@ -10,6 +10,12 @@ def pose_cryoDRGN2APIRE(poses,L):
 
     return rots, offsets
 
+def pose_ASPIRE2cryoDRGN(rots,offsets,L):
+    rots = np.transpose(rots,axes=(0,2,1))
+    offsets = offsets / L
+
+    return (rots, offsets)
+
 def rodrigues_rotation_matrix(rotvecs):
     theta = torch.norm(rotvecs, dim=-1, keepdim=True)  # (N, 1)
     k = rotvecs / (theta + 1e-6)  # Normalize, avoiding division by zero

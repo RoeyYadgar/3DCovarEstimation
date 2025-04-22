@@ -8,6 +8,7 @@ from cov3d.utils import get_torch_device
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward
 from cov3d.dataset import CovarDataset,GTData
+from cov3d.poses import pose_ASPIRE2cryoDRGN
 from cov3d.workflow import covar_processing
 from cov3d.analyze import analyze
 from cov3d.utils import volsCovarEigenvec,readVols
@@ -17,7 +18,7 @@ from matplotlib import pyplot as plt
 import mrcfile
 
 class SimulatedSource():
-    def __init__(self,n,vols,noise_var,whiten=True,unique_filters = None,rotations_std = 0):
+    def __init__(self,n,vols,noise_var,whiten=True,unique_filters = None,rotations_std = 0,offsets_std = 0):
         self.n = n
         self.L = vols.shape[-1]
         self.num_vols = vols.shape[0]
@@ -27,6 +28,7 @@ class SimulatedSource():
             unique_filters = [ArrayFilter(np.ones((self.L,self.L)))]
         self._unique_filters = unique_filters
         self.rotations_std = rotations_std
+        self.offsets_std = offsets_std
         self._clean_images = self._gen_clean_images()
         self.noise_var = noise_var
 
@@ -59,7 +61,8 @@ class SimulatedSource():
 
     def _gen_clean_images(self,batch_size=1024):
         clean_images = torch.zeros((self.n,self.L,self.L))
-        self._offsets = torch.zeros((self.n,2))
+        self._offsets = torch.zeros((self.n,2)) #TODO: create non-zero gt offsets
+        self.offsets = self._offsets + self.L * self.offsets_std * np.random.randn(self.n,2)
         self.amplitudes = np.ones((self.n))
         self.states = torch.tensor(np.random.choice(self.num_vols,self.n))
         self.filter_indices = np.random.choice(len(self._unique_filters),self.n)
@@ -129,13 +132,15 @@ class SimulatedSource():
                 #mrc.update_header()
             self.whiten = whiten_val
         
-        shifts = self._offsets
         if(gt_pose):
             rots = self._rotations
+            offsets = self._offsets
         else:
             rots = self.rotations
+            offsets = self.offsets
+        poses = pose_ASPIRE2cryoDRGN(rots,offsets,self.L)
         with open(poses_output,'wb') as f:
-            pickle.dump((np.transpose(rots,axes=(0,2,1)),shifts),f)
+            pickle.dump(poses,f)
 
         with open(ctf_output,'wb') as f:
             pickle.dump(self._ctf_cryodrgn_format(),f)
@@ -234,7 +239,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
                                     latent_coords=os.path.join(dir_name,'state_centers.pkl'))
 
 
-def simulate_noisy_rots(folder_name,snr,rots_std,L=64,r=5,no_ctf=False,vols = None,mask=None):
+def simulate_noisy_rots(folder_name,snr,rots_std,offsets_std,L=64,r=5,no_ctf=False,vols = None,mask=None):
     os.makedirs(folder_name,exist_ok=True)
 
     n = 100000
@@ -257,7 +262,7 @@ def simulate_noisy_rots(folder_name,snr,rots_std,L=64,r=5,no_ctf=False,vols = No
         if(voxels.resolution > L):
             voxels = voxels.downsample(L)
 
-    sim = SimulatedSource(n,vols=voxels,unique_filters=filters,noise_var = 0,rotations_std = rots_std)
+    sim = SimulatedSource(n,vols=voxels,unique_filters=filters,noise_var = 0,rotations_std = rots_std,offsets_std = offsets_std)
     var = torch.var(sim._clean_images).item()    
 
     noise_var = var / snr
@@ -276,7 +281,7 @@ def simulate_noisy_rots(folder_name,snr,rots_std,L=64,r=5,no_ctf=False,vols = No
     dataset = CovarDataset(sim,noise_var,mean_volume=None,mask=Volume.load(mask) if mask is not None else None)
     dataset.starfile = os.path.join(folder_name,'particles.star')
 
-    gt_data = GTData(vectorsGT,mean,sim._rotations)
+    gt_data = GTData(vectorsGT,mean,sim._rotations,sim._offsets)
 
     sim.save(folder_name,gt_pose=False)
     os.makedirs(os.path.join(folder_name,'gt'),exist_ok=True)
@@ -291,6 +296,6 @@ def simulate_noisy_rots(folder_name,snr,rots_std,L=64,r=5,no_ctf=False,vols = No
 if __name__=="__main__":
     #simulateExp('data/rank5_converges_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
     [f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,10)]
-    simulate_noisy_rots('data/pose_opt_exp',snr=0.1,rots_std = 0.1,r=5,
+    simulate_noisy_rots('data/pose_opt_exp',snr=0.1,rots_std = 0.1,offsets_std=0.008,r=5,
                         vols = [f'data/scratch_data/igg_1d/vols/128_org/{int(i):03}.mrc' for i in np.linspace(0,100,6,endpoint=False)],
                         mask=None)
