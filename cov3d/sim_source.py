@@ -278,7 +278,7 @@ def simulate_noisy_rots(folder_name,snr,rots_std,offsets_std,L=64,r=5,no_ctf=Fal
     Volume(mean,pixel_size=pixel_size).save(os.path.join(output_dir,'mean_est.mrc'),overwrite=True)
     voxels.save(os.path.join(output_dir,'class_vols.mrc'),overwrite=True)
     vectorsGT = volsCovarEigenvec(voxels)
-    dataset = CovarDataset(sim,noise_var,mean_volume=None,mask=Volume.load(mask) if mask is not None else None)
+    dataset = CovarDataset(sim,noise_var,mean_volume=None,mask=None,apply_preprocessing=False)
     dataset.starfile = os.path.join(folder_name,'particles.star')
 
     gt_data = GTData(vectorsGT,mean,sim._rotations,sim._offsets)
@@ -287,6 +287,7 @@ def simulate_noisy_rots(folder_name,snr,rots_std,offsets_std,L=64,r=5,no_ctf=Fal
     os.makedirs(os.path.join(folder_name,'gt'),exist_ok=True)
     sim.save(os.path.join(folder_name,'gt'),save_image_stack=False,gt_pose=True)
     display_source(sim,os.path.join(folder_name,'clean_images.jpg'),display_clean=True)
+    display_source(sim,os.path.join(folder_name,'noisy_images.jpg'),display_clean=False)
     with open(os.path.join(output_dir,'dataset.pkl'),'wb') as f:
         pickle.dump(dataset,f)
     with open(os.path.join(output_dir,'gt_data.pkl'),'wb') as f:

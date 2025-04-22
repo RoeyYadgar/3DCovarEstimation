@@ -15,6 +15,7 @@ import aspire
 import multiprocessing
 import pickle
 from cov3d.wiener_coords import mahalanobis_threshold
+from cov3d.projection_funcs import centered_fft2,centered_fft3
 
 
 def generateBallVoxel(center,radius,L):
@@ -187,7 +188,7 @@ def appendCSV(dataframe,csv_file):
     else:
         dataframe.to_csv(csv_file)
         
-def soft_edged_kernel(radius,L,dim,radius_backoff = 2):
+def soft_edged_kernel(radius,L,dim,radius_backoff = 2,in_fourier=False):
     #Implementation is based on RECOVAR https://github.com/ma-gilles/recovar/blob/main/recovar/mask.py#L106
     if(radius < 3):
         radius = 3
@@ -206,7 +207,10 @@ def soft_edged_kernel(radius,L,dim,radius_backoff = 2):
 
     kernel = np.where((grid_radius >= radius0)*(grid_radius < radius),(1+np.cos(np.pi*(grid_radius-radius0)/(radius-radius0)))/2,kernel)
 
-    return kernel / np.sum(kernel)
+    kernel = torch.tensor(kernel / np.sum(kernel))
+    if(in_fourier):
+        kernel = centered_fft2(kernel) if dim == 2 else centered_fft3(kernel)
+    return kernel
 
 
 def meanCTFPSD(ctfs,L):

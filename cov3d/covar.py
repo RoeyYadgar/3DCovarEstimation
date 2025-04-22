@@ -84,7 +84,7 @@ class Mean(VolumeBase):
         
     def to(self,*args,**kwargs):
         super().to(*args,**kwargs)
-        self.volume_mask = self.volume_mask.to(*args,**kwargs)
+        self.volume_mask = self.volume_mask.to(*args,**kwargs) if self.volume_mask is not None else None
 
         return self
 

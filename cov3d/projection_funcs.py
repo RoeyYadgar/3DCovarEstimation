@@ -1,6 +1,7 @@
+import math
+import numpy as np
 import torch
 from cov3d.nufft_plan import nufft_forward,nufft_adjoint,BaseNufftPlan
-import math
 
 def pad_tensor(tensor,size,dims=None):
     tensor_shape = tensor.shape
@@ -55,6 +56,39 @@ def _centered_fft(fft_func,tensor,dim,size=None,**fft_kwargs):
         tensor = pad_tensor(tensor,size,dim)
     return torch.fft.fftshift(fft_func(torch.fft.ifftshift(tensor,dim=dim,**fft_kwargs),dim=dim),dim=dim)
 
+def preprocess_image_batch(images,nufft_plan,filters,pose,mean_volume,mask = None,mask_threshold = None,softening_kernel_fourier = None,fourier_domain = False):
+    """
+    Shifts images, subtracts projected mean volume and applies masking on a batch of images
+    """
+    pts_rot,phase_shift = pose
+    nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+
+    if(not fourier_domain):
+        images = centered_fft2(images)
+
+    images = images * phase_shift
+
+    mean_forward = vol_forward(mean_volume,nufft_plan,filters=filters,fourier_domain=True).squeeze(1)
+    images = images - mean_forward
+
+    if(mask is not None):
+        images = centered_ifft2(images).real
+        mask_forward = vol_forward(mask,nufft_plan,filters=None,fourier_domain=False).squeeze(1).detach() #We don't want to take the gradient with respect to the mask (in case the pose is being optimized)
+        mask_forward = mask_forward > mask_threshold 
+        soft_mask = centered_ifft2(centered_fft2(mask_forward)  * softening_kernel_fourier).real
+        images *= soft_mask
+
+        if(fourier_domain):
+            images = centered_fft2(images)
+    elif(not fourier_domain):
+        images = centered_ifft2(images).real
+
+    return images
+
+def get_mask_threshold(mask,nufft_plan):
+    projected_mask = vol_forward(mask,nufft_plan).squeeze(1)
+    vals = projected_mask.reshape(-1).cpu().numpy()
+    return np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
 
 def lowpass_volume(volume,cutoff):
     fourier_vol = centered_fft3(volume)

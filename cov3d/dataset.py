@@ -4,42 +4,46 @@ from torch.utils.data import Dataset
 from aspire.utils import support_mask
 import numpy as np
 import copy
+from tqdm import tqdm
 from aspire.volume import Volume,rotated_grids
 from aspire.utils import Rotation
 from cov3d.utils import soft_edged_kernel,get_torch_device,get_complex_real_dtype
-from cov3d.nufft_plan import NufftPlan
-from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2
+from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
+from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,get_mask_threshold,preprocess_image_batch
 from cov3d.fsc_utils import average_fourier_shell,sum_over_shell
-
+from cov3d.covar import Mean
+from cov3d.poses import PoseModule
 
 class CovarDataset(Dataset):
-    def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False):
+    def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False,apply_preprocessing = True):
         self.resolution = src.L
         self.rot_vecs = torch.tensor(Rotation(src.rotations).as_rotvec().astype(src.rotations.dtype))
         self.offsets = torch.tensor(src.offsets)
         self.pts_rot = self.compute_pts_rot(self.rot_vecs)
         self.noise_var = noise_var
         self.data_inverted = invert_data
+        self._in_spatial_domain = True
 
         self.filter_indices = torch.tensor(src.filter_indices.astype(int)) #For some reason ASPIRE store filter_indices as string for some star files
         num_filters = len(src.unique_filters)
         self.unique_filters = torch.zeros((num_filters,src.L,src.L))
         for i in range(num_filters):
             self.unique_filters[i] = torch.tensor(src.unique_filters[i].evaluate_grid(src.L))
-   
-        if(mean_volume is not None):
-            self.images = torch.tensor(self.preprocess_images(src,mean_volume))
-        else:
-            self.images = torch.tensor(src.images[:].asnumpy())
-        self.estimate_filters_gain()
-        self.estimate_signal_var()
-        self.mask_images(mask)
+
+        self.images = torch.tensor(src.images[:].asnumpy())
+
+        if(apply_preprocessing):
+            self.preprocess_from_modules(*self.construct_mean_pose_modules(mean_volume,mask,self.rot_vecs,self.offsets))
 
         if(self.data_inverted):
             self.images = -1*self.images
 
+        self.estimate_filters_gain()
+        self.estimate_signal_var()
+
         self.dtype = self.images.dtype
-        self._in_spatial_domain = True
+        self.mask = torch.tensor(mask.asnumpy()) if mask is not None else None
+
         
     def __len__(self):
         return len(self.images)
@@ -77,6 +81,49 @@ class CovarDataset(Dataset):
 
 
         return images
+
+    def construct_mean_pose_modules(self,mean_volume,mask,rot_vecs,offsets):
+        L = self.resolution
+        device = get_torch_device()
+        mean = Mean(torch.tensor(mean_volume.asnumpy()),L,
+                    fourier_domain=False,
+                    volume_mask=torch.tensor(mask.asnumpy()) if mask is not None else None,
+                    )
+        pose = PoseModule(rot_vecs,offsets,L)
+        nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean.dtype,device=device)
+
+        return mean,pose,nufft_plan
+
+    def preprocess_from_modules(self,mean_module,pose_module,nufft_plan=None,batch_size=1024):
+        device = get_torch_device()
+        mean_module = mean_module.to(device)
+        pose_module = pose_module.to(device)
+        if(nufft_plan is None):
+            nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean_module.dtype,device=device) if mean_module._in_spatial_domain else \
+                    NufftPlanDiscretized((self.resolution,)*3,upsample_factor=mean_module.upsampling_factor, mode='bilinear')
+
+        softening_kernel_fourier = soft_edged_kernel(radius=5,L=self.resolution,dim=2,in_fourier=True).to(device)
+
+        with torch.no_grad():
+            mask = mean_module.get_volume_mask()
+            mean_volume = mean_module(None)
+            idx = torch.arange(min(batch_size,len(self)),device=device)
+            nufft_plan.setpts(pose_module(idx)[0].transpose(0,1).reshape((3,-1)))
+            mask_threshold = get_mask_threshold(mask,nufft_plan) if mask is not None else 0
+            pbar = tqdm(total=np.ceil(len(self)/batch_size), desc=f'Applying preprocessing on dataset images')
+            for i in range(0,len(self),batch_size): 
+                idx = torch.arange(i,min(i+batch_size,len(self)))
+                images,_,filters,_ = self[idx]
+                idx = idx.to(device)
+                images = images.to(device)
+                filters = self.unique_filters[filters].to(device) if len(self.unique_filters) > 0 else None
+                self.images[idx] = preprocess_image_batch(images,nufft_plan,filters,
+                                                          pose_module(idx),mean_volume,
+                                                          mask,mask_threshold,softening_kernel_fourier,fourier_domain=not self._in_spatial_domain).cpu()
+                
+                pbar.update(1)
+            pbar.close()
+
     
     def get_subset(self,idx):
         subset = self.copy()
@@ -185,39 +232,7 @@ class CovarDataset(Dataset):
         self.radial_filters_gain = radial_filters_gain
 
 
-    def mask_images(self,mask,batch_size=512):
-        if(mask is None):
-            self.mask = None
-            return
 
-        device = get_torch_device()
-
-        self.mask = torch.tensor(mask.asnumpy(),device=device) if isinstance(mask,Volume) else torch.tensor(mask,device=device)
-
-        softening_kernel = soft_edged_kernel(radius=5,L=self.resolution,dim=2)
-        softening_kernel = torch.tensor(softening_kernel,device=device)
-        softening_kernel_fourier = centered_fft2(softening_kernel)
-
-        nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=self.mask.dtype,device=device)
-
-        for i in range(0,len(self.images),batch_size):
-            _,pts_rot,_,_ = self[i:(i+batch_size)]
-            pts_rot = pts_rot.to(device)
-            nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-            projected_mask = vol_forward(self.mask,nufft_plan).squeeze(1)
-
-            if(i == 0): #Use first batch to determine threshold
-                vals = projected_mask.reshape(-1).cpu().numpy()
-                threshold = np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
-            
-            mask_binary = projected_mask > threshold
-            mask_binary_fourier = centered_fft2(mask_binary)
-
-            soft_mask_binary = centered_ifft2(mask_binary_fourier * softening_kernel_fourier).real
-
-            self.images[i:min(i+batch_size,len(self.images))] *= soft_mask_binary.cpu()
-
-        self.mask = self.mask.cpu()
 
 @dataclass
 class GTData:

@@ -1,41 +1,14 @@
 import os
 import torch
 import time
-from aspire.utils import support_mask,fuzzy_mask
 import numpy as np
 from tqdm import tqdm
 import copy
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,centered_fft3
+from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 
-
-def preprocess_image_batch(images,nufft_plan,filters,pose,mean_volume,mask,mask_threshold,softening_kernel_fourier,fourier_domain):
-    """
-    Shifts images, subtracts projected mean volume and applies masking on a batch of images
-    """
-    pts_rot,phase_shift = pose
-    nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-
-    if(not fourier_domain):
-        images = centered_fft2(images)
-
-    images = images * phase_shift
-
-    mean_forward = vol_forward(mean_volume,nufft_plan,filters=filters,fourier_domain=True).squeeze(1)
-    images = images - mean_forward
-
-    images = centered_ifft2(images).real
-    mask_forward = vol_forward(mask,nufft_plan,filters=None,fourier_domain=False).squeeze(1).detach() #We don't want to take the gradient with respect to the mask (in case the pose is being optimized)
-    mask_forward = mask_forward > mask_threshold 
-    soft_mask = centered_ifft2(centered_fft2(mask_forward)  * softening_kernel_fourier).real
-    images *= soft_mask
-
-    if(fourier_domain):
-        images = centered_fft2(images)
-
-    return images  
         
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
@@ -313,6 +286,8 @@ class CovarPoseTrainer(CovarTrainer):
         #    param.requires_grad = False
         #for param in self.get_pose_module().parameters():
         #    param.requires_grad = False
+        for param in self.get_pose_module().offsets.parameters():
+            param.requires_grad = False
 
     def get_mean_module(self):
         return self.mean if not self.isDDP else self.mean.module
@@ -366,16 +341,13 @@ class CovarPoseTrainer(CovarTrainer):
         self.get_mean_module().init_grid_correction(kwargs.get('nufft_disc'))
         self.mask = self.get_mean_module().get_volume_mask()
         
-        softening_kernel = soft_edged_kernel(radius=5,L=self.get_mean_module().resolution,dim=2)
-        softening_kernel = torch.tensor(softening_kernel,device=self.device)
-        self.softening_kernel_fourier = centered_fft2(softening_kernel)
+        
+        self.softening_kernel_fourier = soft_edged_kernel(radius=5,L=self.get_mean_module().resolution,dim=2,in_fourier=True).to(self.device)
 
         with torch.no_grad():
             idx = torch.arange(self.batch_size,device=self.device)
             self.nufft_plans.setpts(self.pose(idx)[0].transpose(0,1).reshape((3,-1)))
-            projected_mask = vol_forward(self.mask,self.nufft_plans).squeeze(1)
-            vals = projected_mask.reshape(-1).cpu().numpy()
-            self.mask_threshold = np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
+            self.mask_threshold = get_mask_threshold(self.mask,self.nufft_plans)
 
     def restart_optimizer(self):
         super().restart_optimizer()

@@ -159,9 +159,8 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
         if(invert_data):
             print('inverting dataset sign')
             (-1 * mean_est).save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
-        dataset = CovarDataset(source,noise_var,mean_volume=mean_est if (not optimize_pose) else None, #When optimizing pose is set to true mean volume should not be substracted from images
-                                mask=mask if (not optimize_pose) else None,
-                                invert_data = invert_data)
+        dataset = CovarDataset(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
+                               apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
         dataset.starfile = starfile
 
         if(gt_pose is not None):
@@ -237,11 +236,10 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
             gt_data=gt_data,**default_training_kwargs)
     
     if(optimize_pose):
-        #Update dataset with estimated pose
+        #Update dataset with estimated pose and apply preprocessing
         #TODO: output pose to file
-        #TODO: mask and substract mean before computing latent coords
-        dataset.rot_vecs = pose.get_rotvecs().cpu()
-        dataset.pts_rot = dataset.compute_pts_rot(dataset.rot_vecs)
+        dataset.pts_rot = dataset.compute_pts_rot(pose.get_rotvecs().cpu())
+        dataset.preprocess_from_modules(mean,pose)
     
     #Compute wiener coordinates using estimated and ground truth eigenvectors
     eigen_est,eigenval_est= cov.eigenvecs
