@@ -76,6 +76,8 @@ class Mean(VolumeBase):
         return self.get_volume_spatial_domain() if self._in_spatial_domain else self.get_volume_fourier_domain()
     
     def get_volume_mask(self):
+        if(self.volume_mask is None):
+            return None
         if(not self._in_spatial_domain):
             return centered_fft3(self.volume_mask / self.grid_correction if self.grid_correction is not None else self.volume_mask,
                                  padding_size = (self.resolution * self.upsampling_factor,)*3)

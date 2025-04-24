@@ -134,19 +134,41 @@ class NufftPlan(BaseNufftPlan):
         self.adjoint_plan.setpts(*points)
 
     def execute_forward(self,signal):
+        zero_pad = False
+        if(signal.shape[0] < self.batch_size):
+            print('Warning : signal batch size is smaller than the nufft plan batch size. Padding with zeros')
+            zero_pad = True
+            orig_batch = signal.shape[0]
+            pad_size = self.batch_size - signal.shape[0]
+            pad = torch.zeros((pad_size,) + signal.shape[1:],dtype=signal.dtype,device=signal.device)
+            signal = torch.cat((signal,pad),dim=0)
+
         signal = signal.type(self.complex_dtype).contiguous()
         if(self.device == torch.device('cpu')):
             signal = signal.numpy()
         forward_signal = self.forward_plan.execute(signal).reshape((self.batch_size,-1))
+        if(zero_pad):
+            forward_signal = forward_signal[:orig_batch]
         if(self.device == torch.device('cpu')):
             forward_signal = torch.from_numpy(forward_signal)
         return forward_signal
     
     def execute_adjoint(self,signal):
+        zero_pad = False
+        if(signal.shape[0] < self.batch_size):
+            print('Warning : signal batch size is smaller than the nufft plan batch size. Padding with zeros')
+            zero_pad = True
+            orig_batch = signal.shape[0]
+            pad_size = self.batch_size - signal.shape[0]
+            pad = torch.zeros((pad_size,) + signal.shape[1:],dtype=signal.dtype,device=signal.device)
+            signal = torch.cat((signal,pad),dim=0)
+
         signal = signal.type(self.complex_dtype).contiguous()
         if(self.device == torch.device('cpu')):
             signal = signal.numpy()
         adjoint_signal = self.adjoint_plan.execute(signal.reshape((self.batch_size,-1)))
+        if(zero_pad):
+            adjoint_signal = adjoint_signal[:orig_batch]
         if(self.device == torch.device('cpu')):
             adjoint_signal = torch.from_numpy(adjoint_signal)
         return adjoint_signal

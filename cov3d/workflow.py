@@ -125,10 +125,10 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
 
         if(class_vols is not None):
             #Compute ground truth eigenvectors
+            mean_gt = np.mean(class_vols,axis=0)
             _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
             states_dist = counts/np.sum(counts)
             covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
-            mean_gt = np.mean(class_vols,axis=0)
         else:
             covar_eigenvecs_gt = None
             mean_gt = None
@@ -159,6 +159,8 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
         if(invert_data):
             print('inverting dataset sign')
             (-1 * mean_est).save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
+            if(mean_gt is not None):
+                mean_gt *= -1
         dataset = CovarDataset(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
                                apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
         dataset.starfile = starfile
