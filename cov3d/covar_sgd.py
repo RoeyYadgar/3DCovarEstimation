@@ -8,7 +8,7 @@ from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
-
+from cov3d.poses import out_of_plane_rot_error
         
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
@@ -133,7 +133,7 @@ class CovarTrainer():
         if(lr is None):
             lr = 1e-1 if optim_type == 'Adam' else 1e-2 #Default learning rate for Adam/SGD optimizer
             
-        lr *= self.batch_size
+        lr *= self.batch_size if not self.isDDP else self.batch_size* torch.distributed.get_world_size()
         self.lr = lr
         self.optim_type = optim_type
         self.scale_params = scale_params
@@ -261,9 +261,10 @@ class CovarPoseTrainer(CovarTrainer):
         super().__init__(covar,train_data,device,save_path,gt_data,training_log_freq)
         self.mean = mean.to(self.device)
         self.pose = pose.to(self.device)
-        self.pose_lr_ratio = 1
+        self.pose_lr_ratio = 0.1
         self.num_rep = 1
         self.set_pose_grad_req(True)
+        self._updated_idx = torch.zeros(len(self.dataset),device=self.device)
 
         if(self.logTraining and self.gt_data is not None):
             if(self.gt_data.rotations is not None):
@@ -293,7 +294,37 @@ class CovarPoseTrainer(CovarTrainer):
         return self.mean if not self.isDDP else self.mean.module
     
     def get_pose_module(self):
-        return self.pose if not self.isDDP else self.pose.module
+        return self.pose
+    
+    def _ddp_sync_pose_module(self):
+        if(not self.isDDP):
+            return
+        #For some reason DDP does support sparse gradients. Hence we do not wrap the pose module in DDP and have to sync it manually
+
+        updated_idx_list = [torch.zeros_like(self._updated_idx) for _ in range(torch.distributed.get_world_size())]
+        torch.distributed.all_gather(updated_idx_list,self._updated_idx)
+
+        rotvecs = self.get_pose_module().get_rotvecs()
+        rotvec_list = [torch.zeros_like(rotvecs) for _ in range(torch.distributed.get_world_size())]
+        torch.distributed.all_gather(rotvec_list,rotvecs)
+
+        offsets = self.get_pose_module().get_offsets()
+        offsets_list = [torch.zeros_like(offsets) for _ in range(torch.distributed.get_world_size())]
+        torch.distributed.all_gather(offsets_list,offsets)
+
+        idx_to_update = torch.zeros_like(self._updated_idx)
+        for i in range(len(updated_idx_list)):
+            assert idx_to_update[updated_idx_list[i] > 0].sum() == 0, 'Updated indices are not unique'
+            idx_to_update[updated_idx_list[i] > 0] = 1
+            #rotvecs and offsets point to the same memory location in the pose module - so we can just update them here
+            rotvecs[updated_idx_list[i] > 0] = rotvec_list[i][updated_idx_list[i] > 0]
+            offsets[updated_idx_list[i] > 0] = offsets_list[i][updated_idx_list[i] > 0]
+
+        #Reset updated_idx
+        self._updated_idx = torch.zeros_like(self._updated_idx)
+
+
+
     
     def set_pose_grad_req(self,grad):
         for param in self.get_pose_module().parameters():
@@ -334,7 +365,13 @@ class CovarPoseTrainer(CovarTrainer):
         if(self.use_orthogonal_projection):
             self.covar.orthogonal_projection()
 
+        self._updated_idx[idx] = 1
+
         return cost_val
+
+    def run_epoch(self,epoch):
+        self._ddp_sync_pose_module()
+        super().run_epoch(epoch)
 
     def setup_training(self, **kwargs):
         super().setup_training(**kwargs)
@@ -348,6 +385,10 @@ class CovarPoseTrainer(CovarTrainer):
             idx = torch.arange(self.batch_size,device=self.device)
             self.nufft_plans.setpts(self.pose(idx)[0].transpose(0,1).reshape((3,-1)))
             self.mask_threshold = get_mask_threshold(self.mask,self.nufft_plans)
+
+    def complete_training(self):
+        super().complete_training()
+        self._ddp_sync_pose_module()
 
     def restart_optimizer(self):
         super().restart_optimizer()
@@ -384,7 +425,10 @@ class CovarPoseTrainer(CovarTrainer):
                     rotvecs = self.get_pose_module().get_rotvecs()
                     rots_est = Rotation.from_rotvec(rotvecs.cpu().numpy())
                     rots_gt = Rotation(self.gt_data.rotations.numpy())
-                    self.training_log["rot_angle_dist"].append(Rotation.mean_angular_distance(rots_est, rots_gt)) #TODO: implement this with pytorch
+                    angle_diff = out_of_plane_rot_error(torch.tensor(rots_est.matrices), torch.tensor(rots_gt.matrices))
+                    self.training_log["rot_angle_dist"].append(angle_diff[1])
+
+
                 if(self.gt_data.offsets is not None):
                     offsets_est = self.get_pose_module().get_offsets()
                     offsets_gt = self.gt_data.offsets

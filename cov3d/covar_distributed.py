@@ -46,7 +46,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
         mean_model = mean_model.to(device)
         pose = pose.to(device)
         mean_model = DDP(mean_model,device_ids=[rank])
-        pose = DDP(pose,device_ids=[rank])
+        #pose is not wrapped with DDP, since it has sparse gradients - we instead sync it manually
         trainer = CovarPoseTrainer(covar_model,dataloader,device,mean_model,pose,savepath,gt_data=gt_data)
     
     trainer.process_ind = (rank,world_size)

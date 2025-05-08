@@ -97,7 +97,39 @@ class PoseModule(torch.nn.Module):
     def get_rotvecs(self):
         return self.rotvec.weight.data
     
+    def set_rotvecs(self, rotvecs,idx = None):
+        if idx is None:
+            self.rotvec.weight.data.copy_(rotvecs)
+        else:
+            with torch.no_grad():
+                self.rotvec.weight[idx] = rotvecs
+    
     def get_offsets(self):
         return self.offsets.weight.data
+    
+    def set_offsets(self, offsets,idx = None):
+        if idx is None:
+            self.offsets.weight.data.copy_(offsets)
+        else:
+            with torch.no_grad():
+                self.offsets.weight[idx] = offsets
 
         
+
+def out_of_plane_rot_error(rot1, rot2):
+    """
+    #Implementation is used from DRGN-AI https://github.com/ml-struct-bio/drgnai/blob/d45341d1f3411d6db6da6f557207f10efd16da17/src/metrics.py#L134
+    """
+    unitvec_gt = torch.tensor([0, 0, 1], dtype=torch.float32).reshape(3, 1)
+
+    out_of_planes_1 = torch.sum(rot1 * unitvec_gt, dim=-2)
+    out_of_planes_1 = out_of_planes_1.numpy()
+    out_of_planes_1 /= np.linalg.norm(out_of_planes_1, axis=-1, keepdims=True)
+
+    out_of_planes_2 = torch.sum(rot2 * unitvec_gt, dim=-2)
+    out_of_planes_2 = out_of_planes_2.numpy()
+    out_of_planes_2 /= np.linalg.norm(out_of_planes_2, axis=-1, keepdims=True)
+
+    angles = np.arccos(np.clip(np.sum(out_of_planes_1 * out_of_planes_2, -1), -1.0, 1.0)) * 180.0 / np.pi
+
+    return angles, np.mean(angles), np.median(angles)
