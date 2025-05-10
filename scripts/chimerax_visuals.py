@@ -273,9 +273,14 @@ def empiar10076():
     vols = [os.path.join(dir_name,f'vol{i:04d}.mrc') for i in range(14)]
     save_volumes_figure(vols,'data/final_figures/empiar10076/',(2,7),view_commands=empiar_view,level=0.014,color=colors,volume_names=vol_names)
 
+    dir_name = 'data/scratch_data/empiar10076/analysis/minor_classes'
+    vols = [os.path.join(dir_name,f'vol_{i:03d}.mrc') for i in range(14)]
+    save_volumes_figure(vols,'data/final_figures/empiar10076/',(2,7),view_commands=empiar_view,level=0.014,color=colors,volume_names=vol_names,vol_prefix='cryodrgn')
+    
+
     #Same state A from a different angle
-    empiar_view.append('turn y -90')
-    save_volumes_figure(vols[:1],'data/final_figures/empiar10076/',(1,1),vol_prefix='state_A',view_commands=empiar_view,level=0.014,color=colors[:1])
+    #empiar_view.append('turn y -90')
+    #save_volumes_figure(vols[:1],'data/final_figures/empiar10076/',(1,1),vol_prefix='state_A',view_commands=empiar_view,level=0.014,color=colors[:1])
 
 if __name__ == "__main__":
     #discrete_sim()
