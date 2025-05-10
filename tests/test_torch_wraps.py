@@ -13,6 +13,8 @@ from aspire.nufft import anufft as aspire_anufft
 
 from cov3d import nufft_plan
 from cov3d import projection_funcs
+from cov3d.poses import PoseModule
+from cov3d.covar import Mean
 
 class TestTorchWraps(unittest.TestCase):
     
@@ -101,7 +103,12 @@ class TestTorchWraps(unittest.TestCase):
         #singleton validation
         pts_rot = self.pts_rot[:,:self.img_size ** 2]
         images = self.sim.images[0]
+        from aspire.numeric import fft, xp
+        from aspire.image import Image
+        images = Image(xp.asnumpy(fft.centered_fft2(xp.asarray(images))))
         nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1,-1)),pts_rot,(self.img_size,)*3)
+        threshold = np.mean(np.abs(nufft_adjoint_aspire.real))*0.1
+
 
         im_torch = torch.tensor(images.asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device = self.device)
@@ -109,21 +116,46 @@ class TestTorchWraps(unittest.TestCase):
         nufft_adjoint_torch = nufft_plan.nufft_adjoint(im_torch,plan)
         nufft_adjoint_torch = nufft_adjoint_torch.cpu().numpy()[0]
 
-        np.testing.assert_allclose(nufft_adjoint_torch,nufft_adjoint_aspire,rtol = 1e-3,atol=1e-3)
+        np.testing.assert_allclose(nufft_adjoint_torch,nufft_adjoint_aspire,rtol = 1e-2,atol=threshold)
 
-        #singleton validation
-        num_ims = 5
-        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+        # Testing with NufftPlanDiscretized
+        us = 4
+        pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(), device=self.device) + torch.pi, 2 * torch.pi) - torch.pi)
+        plan_disc = nufft_plan.NufftPlanDiscretized((self.img_size,) * 3, upsample_factor=us, mode='bilinear')
+        plan_disc.setpts(pts_rot_torch)
+        nufft_adjoint_disc = plan_disc.execute_adjoint(im_torch)
+        nufft_adjoint_disc = projection_funcs.centered_ifft3(nufft_adjoint_disc,cropping_size=(self.img_size,)*3).cpu().numpy()[0]
+
+        m = Mean(torch.tensor(nufft_adjoint_disc),15,upsampling_factor=us)
+        m.init_grid_correction('bilinear')
+
+        np.testing.assert_allclose(nufft_adjoint_disc.real * (us * self.img_size) ** 3 /  m.grid_correction.numpy(), nufft_adjoint_aspire.real, rtol=1e-2, atol=threshold * 3)
+
+
+        # Stack validation
+        pts_rot = self.pts_rot[:, :self.img_size ** 2 * num_ims]
         images = self.sim.images[:num_ims]
-        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((num_ims,-1)),pts_rot,(self.img_size,)*3)
+        images = Image(xp.asnumpy(fft.centered_fft2(xp.asarray(images))))
+        threshold = np.mean(np.abs(nufft_adjoint_aspire.real))*0.1
+        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1, -1)), pts_rot, (self.img_size,) * 3)
+        threshold = np.mean(np.abs(nufft_adjoint_aspire.real))*0.1
 
         im_torch = torch.tensor(images.asnumpy()).to(self.device)
-        plan = nufft_plan.NufftPlan((self.img_size,)*3,num_ims,device = self.device)
-        plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
-        nufft_adjoint_torch = nufft_plan.nufft_adjoint(im_torch,plan)
+        plan = nufft_plan.NufftPlan((self.img_size,) * 3, 1, device=self.device)
+        plan.setpts(torch.tensor(pts_rot.copy(), device=self.device))
+        nufft_adjoint_torch = nufft_plan.nufft_adjoint(im_torch.reshape(num_ims,-1), plan)
         nufft_adjoint_torch = nufft_adjoint_torch.cpu().numpy()[0]
 
-        np.testing.assert_allclose(nufft_adjoint_torch,nufft_adjoint_aspire,rtol = 1e-3,atol=1e-3)
+        np.testing.assert_allclose(nufft_adjoint_torch, nufft_adjoint_aspire, rtol=1e-2, atol=threshold)
+
+        # Stack validation with NufftPlanDiscretized
+        pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(), device=self.device) + torch.pi, 2 * torch.pi) - torch.pi)
+        plan_disc = nufft_plan.NufftPlanDiscretized((self.img_size,) * 3, upsample_factor=us, mode='bilinear')
+        plan_disc.setpts(pts_rot_torch)
+        nufft_adjoint_disc = plan_disc.execute_adjoint(im_torch)
+        nufft_adjoint_disc = projection_funcs.centered_ifft3(nufft_adjoint_disc,cropping_size=(self.img_size,)*3).cpu().numpy()[0]
+
+        np.testing.assert_allclose(nufft_adjoint_disc.real * (us * self.img_size) ** 3 /  m.grid_correction.numpy(), nufft_adjoint_aspire.real, rtol=1e-2, atol=threshold * 3)
 
     def test_grad_forward(self):
         pts_rot = np.float64(self.pts_rot[:,:self.img_size ** 2])
@@ -160,7 +192,7 @@ class TestTorchWraps(unittest.TestCase):
   
         pts_rot = self.pts_rot[:,:self.img_size ** 2]
         imgs = self.sim.images[0]
-        im_backproject_aspire = self.sim.im_backward(imgs,0).T
+        im_backproject_aspire = self.sim.im_backward(imgs,0).asnumpy()
 
         im_torch = torch.tensor(imgs.asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device = self.device)

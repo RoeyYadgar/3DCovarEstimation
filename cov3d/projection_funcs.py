@@ -37,11 +37,12 @@ def crop_tensor(tensor,size,dims=None):
     return tensor[slice_ind_full]
 
 
-def centered_fft2(image,im_dim = [-1,-2]):
-    return _centered_fft(torch.fft.fft2,image,im_dim)
+def centered_fft2(image,im_dim = [-1,-2],padding_size = None):
+    return _centered_fft(torch.fft.fft2,image,im_dim,padding_size)
 
-def centered_ifft2(image,im_dim = [-1,-2]):
-    return _centered_fft(torch.fft.ifft2,image,im_dim)
+def centered_ifft2(image,im_dim = [-1,-2],cropping_size = None):
+    tensor =  _centered_fft(torch.fft.ifft2,image,im_dim)
+    return crop_tensor(tensor,cropping_size,im_dim) if cropping_size is not None else tensor
 
 def centered_fft3(image,im_dim = [-1,-2,-3],padding_size = None):
     return _centered_fft(torch.fft.fftn,image,im_dim,padding_size)
