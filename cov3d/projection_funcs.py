@@ -131,9 +131,12 @@ def vol_forward(volume,plan,filters = None,fourier_domain = False):
         return volume_forward/L
 
 
-def im_backward(image,plan):
+def im_backward(image,plan,filters = None, fourier_domain = False):
     L = image.shape[-1]
-    im_fft = centered_fft2(image/L**2)
+    im_fft = centered_fft2(image/L**2) if (not fourier_domain) else image
+
+    if(filters is not None):
+        im_fft *= filters
 
     if(L % 2 == 0):
         im_fft[:,0,:] = 0
@@ -141,7 +144,7 @@ def im_backward(image,plan):
 
     image_backward = nufft_adjoint(im_fft,plan)
 
-    return torch.real(image_backward)/L
+    return torch.real(image_backward)/L if (not fourier_domain) else image_backward/L
 
     
 
