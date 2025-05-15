@@ -9,7 +9,8 @@ from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 from cov3d.poses import out_of_plane_rot_error
-        
+from cov3d.mean import reconstruct_mean
+
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
         self.device = device
@@ -282,8 +283,10 @@ class CovarPoseTrainer(CovarTrainer):
                 })
 
         self.mean_fourier_reg = None
-        self.scheduler_patiece = 1
-        #for param in self.get_mean_module().parameters():
+        self.scheduler_patiece = 3
+        for param in self.get_mean_module().parameters():
+            param.requires_grad = False
+        #for param in self.covar.parameters():
         #    param.requires_grad = False
         #for param in self.get_pose_module().parameters():
         #    param.requires_grad = False
@@ -372,6 +375,11 @@ class CovarPoseTrainer(CovarTrainer):
     def run_epoch(self,epoch):
         self._ddp_sync_pose_module()
         super().run_epoch(epoch)
+        #update datatset pts_rot and update the mean volume estimate
+        self.dataset.pts_rot = self.dataset.compute_pts_rot(self.get_pose_module().get_rotvecs().cpu())
+        reconstructed_mean = reconstruct_mean(self.dataset,self.get_mean_module().get_volume_spatial_domain(),mask=self.get_mean_module().volume_mask)
+        self.get_mean_module().set_mean(reconstructed_mean)
+        
 
     def setup_training(self, **kwargs):
         super().setup_training(**kwargs)
@@ -425,6 +433,7 @@ class CovarPoseTrainer(CovarTrainer):
                     rotvecs = self.get_pose_module().get_rotvecs()
                     rots_est = Rotation.from_rotvec(rotvecs.cpu().numpy())
                     rots_gt = Rotation(self.gt_data.rotations.numpy())
+                    #self.training_log["rot_angle_dist"].append(Rotation.mean_angular_distance(rots_est, rots_gt)) #TODO: implement this with pytorch
                     angle_diff = out_of_plane_rot_error(torch.tensor(rots_est.matrices), torch.tensor(rots_gt.matrices))
                     self.training_log["rot_angle_dist"].append(angle_diff[1])
 
@@ -514,7 +523,7 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
 
     return new_fourier_reg
 
-def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False):
+def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False,mean_aggregate=True):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = vols.shape[-1]
@@ -539,7 +548,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
         cost_val += torch.pow(norm_squared_images,2)
         cost_val -= 2*noise_var*norm_squared_images+(noise_var * L) ** 2
 
-    cost_val = torch.mean(cost_val,dim=0)
+    cost_val = torch.mean(cost_val,dim=0) if mean_aggregate else cost_val
             
     if(fourier_reg is not None and reg_scale != 0):
         vols_fourier = centered_fft3(vols)
@@ -551,7 +560,7 @@ def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = N
 
     return cost_val
 
-def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False):
+def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False,mean_aggregate=True):
     batch_size = images.shape[0]
     rank = vols.shape[0]
 
@@ -572,7 +581,7 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
         ml_exp_term += 1/noise_var * torch.norm(images,dim=(1,2)) ** 2
         #ml_exp_term += (L**2) * torch.log(noise_var) # constant term
 
-    cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term)
+    cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term) if mean_aggregate else 0.5*(ml_exp_term + ml_noise_term)
 
     if(fourier_reg is not None and reg_scale != 0):
         vols_fourier = centered_fft3(vols)
@@ -624,7 +633,7 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
 
     return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 
-def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False):
+def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False,mean_aggregate=True):
     batch_size = images.shape[0]
     rank = vols.shape[0]
     L = images.shape[-1]
@@ -646,7 +655,7 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
         ml_exp_term += 1/noise_var * torch.norm(images,dim=(1,2)) ** 2
         #ml_noise_term += (L**2 - rank) * torch.log(noise_var)
 
-    cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real
+    cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real if mean_aggregate else 0.5*(ml_exp_term + ml_noise_term).real
 
     if(fourier_reg is not None and reg_scale != 0):
         vols_fourier = vols * torch.sqrt(fourier_reg)

@@ -50,16 +50,21 @@ class Mean(VolumeBase):
     def __init__(self,volume_init,resolution,dtype=torch.float32,fourier_domain=False,volume_mask=None,upsampling_factor=2):
         super().__init__(resolution=resolution,dtype=dtype,fourier_domain=fourier_domain,upsampling_factor=upsampling_factor)
 
-        volume,log_volume_amplitude = self._get_eigenvecs_representation(volume_init)
+        volume,log_volume_amplitude = self._get_mean_representation(volume_init)
         self.volume = torch.nn.Parameter(volume)
         self.log_volume_amplitude = torch.nn.Parameter(log_volume_amplitude)
 
         self.volume_mask = volume_mask
 
-    def _get_eigenvecs_representation(self,volume):
+    def _get_mean_representation(self,volume):
         volume_amplitude = volume.reshape(volume.shape[0],-1).norm(dim=1)
 
         return volume/volume_amplitude, torch.log(volume_amplitude)
+    
+    def set_mean(self,volume):
+        volume,log_volume_amplitude = self._get_mean_representation(volume.unsqueeze(0))
+        self.volume.data.copy_(volume)
+        self.log_volume_amplitude.data.copy_(log_volume_amplitude)
 
     @property
     def device(self):
