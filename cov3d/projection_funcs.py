@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import torch
+from aspire.utils import grid_3d
 from cov3d.nufft_plan import nufft_forward,nufft_adjoint,BaseNufftPlan
 
 def pad_tensor(tensor,size,dims=None):
@@ -91,14 +92,18 @@ def get_mask_threshold(mask,nufft_plan):
     vals = projected_mask.reshape(-1).cpu().numpy()
     return np.percentile(vals[vals > 10 ** (-1.5)],10) #filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
 
-def lowpass_volume(volume,cutoff):
+def lowpass_volume(volume,cutoff, lowpass_shape = 'rect'):
     fourier_vol = centered_fft3(volume)
     L = volume.shape[-1]
-    fourier_mask = torch.arange(-L//2,L//2) if L % 2 == 0 else torch.arange(-L//2,L//2) + 1
-    fourier_mask = torch.abs(fourier_mask) > cutoff
-    fourier_vol[:,fourier_mask,:,:] = 0
-    fourier_vol[:,:,fourier_mask,:] = 0
-    fourier_vol[:,:,:,fourier_mask] = 0
+    if(lowpass_shape == 'rect'):
+        fourier_mask = torch.arange(-L//2,L//2) if L % 2 == 0 else torch.arange(-L//2,L//2) + 1
+        fourier_mask = torch.abs(fourier_mask.to(volume.device)) < cutoff
+        fourier_mask = torch.einsum('i,j,k->ijk',fourier_mask,fourier_mask,fourier_mask)
+    elif(lowpass_shape == 'sphere'):
+        fourier_mask = torch.tensor(grid_3d(L,normalized=False)['r'],device=volume.device)
+        fourier_mask = torch.abs(fourier_mask) < cutoff
+
+    fourier_vol *= fourier_mask.unsqueeze(0)
     return centered_ifft3(fourier_vol).real
 
 def vol_forward(volume,plan,filters = None,fourier_domain = False):
