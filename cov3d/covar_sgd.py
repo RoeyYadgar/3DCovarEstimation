@@ -9,7 +9,7 @@ from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 from cov3d.poses import out_of_plane_rot_error
-from cov3d.mean import reconstruct_mean
+from cov3d.mean import reconstruct_mean_from_halfsets
 
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
@@ -262,7 +262,7 @@ class CovarPoseTrainer(CovarTrainer):
         super().__init__(covar,train_data,device,save_path,gt_data,training_log_freq)
         self.mean = mean.to(self.device)
         self.pose = pose.to(self.device)
-        self.pose_lr_ratio = 0.1
+        self.pose_lr_ratio = 0.3
         self.num_rep = 1
         self.set_pose_grad_req(True)
         self._updated_idx = torch.zeros(len(self.dataset),device=self.device)
@@ -377,7 +377,7 @@ class CovarPoseTrainer(CovarTrainer):
         super().run_epoch(epoch)
         #update datatset pts_rot and update the mean volume estimate
         self.dataset.pts_rot = self.dataset.compute_pts_rot(self.get_pose_module().get_rotvecs().cpu())
-        reconstructed_mean = reconstruct_mean(self.dataset,self.get_mean_module().get_volume_spatial_domain(),mask=self.get_mean_module().volume_mask)
+        reconstructed_mean = reconstruct_mean_from_halfsets(self.dataset,mask=self.get_mean_module().volume_mask)
         self.get_mean_module().set_mean(reconstructed_mean)
         
 
