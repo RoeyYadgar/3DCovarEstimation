@@ -114,7 +114,59 @@ class PoseModule(torch.nn.Module):
             with torch.no_grad():
                 self.offsets.weight[idx] = offsets
 
-        
+
+    def split_module(self, permutation=None):
+        '''
+        Returns two modules, each with non-overlapping subsets of pose entries.
+        '''
+        n = self.offsets.weight.shape[0]
+        device = self.offsets.weight.device
+        dtype = self.offsets.weight.dtype
+
+        if permutation is None:
+            permutation = torch.arange(n)
+        perm = permutation[:n//2], permutation[n//2:]
+
+
+        # First module: entries at idx
+        rotvecs1 = self.rotvec.weight.data[perm[0]].detach().clone()
+        offsets1 = self.offsets.weight.data[perm[0]].detach().clone()
+        # Second module: entries not in idx
+        rotvecs2 = self.rotvec.weight.data[perm[1]].detach().clone()
+        offsets2 = self.offsets.weight.data[perm[1]].detach().clone()
+
+        module1 = PoseModule(rotvecs1, offsets1, self.resolution, dtype=dtype)
+        module2 = PoseModule(rotvecs2, offsets2, self.resolution, dtype=dtype)
+
+        # Move to same device as original
+        module1 = module1.to(device)
+        module2 = module2.to(device)
+
+        return module1, module2
+
+
+    @staticmethod
+    def merge_modules(module1, module2, permutation):
+        """
+        Merges two PoseModule instances into a new PoseModule containing all poses,
+        reordered according to the given permutation.
+        """
+        device = module1.rotvec.weight.device
+        dtype = module1.rotvec.weight.dtype
+        resolution = module1.resolution
+
+        # Concatenate the weights from both modules
+        rotvecs = torch.cat([module1.rotvec.weight.data.detach(), module2.rotvec.weight.data.detach()], dim=0)
+        offsets = torch.cat([module1.offsets.weight.data.detach(), module2.offsets.weight.data.detach()], dim=0)
+
+        # Reorder according to permutation
+        rotvecs[permutation] = rotvecs.clone()
+        offsets[permutation] = offsets.clone()
+
+        merged_module = PoseModule(rotvecs, offsets, resolution, dtype=dtype)
+        merged_module = merged_module.to(device)
+        return merged_module
+            
 
 def out_of_plane_rot_error(rot1, rot2):
     """

@@ -8,7 +8,7 @@ from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
-from cov3d.poses import out_of_plane_rot_error
+from cov3d.poses import PoseModule,out_of_plane_rot_error
 from cov3d.mean import reconstruct_mean_from_halfsets
 
 class CovarTrainer():
@@ -700,8 +700,8 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
     num_workers = min(4,get_cpu_count()-1)
     use_halfsets = kwargs.pop('use_halfsets')
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
-    if(optimize_pose and use_halfsets):
-        raise ValueError('Optimizing pose while using halfsets regularization scheme is not supported yet')
+    num_epochs = kwargs.pop('max_epochs')
+
     if(not use_halfsets):
         dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
@@ -712,7 +712,6 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         else:            
             trainer = CovarPoseTrainer(covar_model,dataloader,covar_model.device,mean_model,pose,savepath,gt_data=gt_data)
 
-        num_epochs = kwargs.pop('max_epochs')
         trainer.setup_training(**kwargs)
         for _ in range(num_reg_update_iters):
             trainer.train_epochs(num_epochs,restart_optimizer=True)
@@ -727,19 +726,25 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         covar_model_copy = copy.deepcopy(covar_model)
         with torch.no_grad(): #Reinitalize the copied model since having the same initalization will produce unwanted correlation even after training
             covar_model_copy.set_vectors(covar_model_copy.init_random_vectors(covar_model.rank))
-        half1,half2 = dataset.half_split()
-
-        num_epochs = kwargs.pop('max_epochs')
+        half1,half2,permutation = dataset.half_split()
 
         #TODO: Use sampler like in DDP to not have to split dataset?
         dataloader1 = torch.utils.data.DataLoader(half1,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
-        trainer1 = CovarTrainer(covar_model,dataloader1,covar_model.device,savepath,gt_data=gt_data)
-        trainer1.setup_training(**kwargs) 
-
         dataloader2 = torch.utils.data.DataLoader(half2,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
-        trainer2 = CovarTrainer(covar_model_copy,dataloader2,covar_model_copy.device,save_path=None,gt_data=gt_data)
+        
+        if(not optimize_pose):
+            trainer1 = CovarTrainer(covar_model,dataloader1,covar_model.device,savepath,gt_data=gt_data)
+            trainer2 = CovarTrainer(covar_model_copy,dataloader2,covar_model_copy.device,save_path=None,gt_data=gt_data)
+        else:
+            mean_model_copy = copy.deepcopy(mean_model)
+            pose1,pose2 = pose.split_module(permutation)
+            gt_data1, gt_data2 = gt_data.half_split(permutation)
+            trainer1 = CovarPoseTrainer(covar_model,dataloader1,covar_model.device,mean_model,pose1,savepath,gt_data=gt_data1)
+            trainer2 = CovarPoseTrainer(covar_model_copy,dataloader2,covar_model_copy.device,mean_model_copy,pose2,save_path=None,gt_data=gt_data2)
+
+        trainer1.setup_training(**kwargs) 
         trainer2.setup_training(**kwargs)
 
         for i in range(0,num_reg_update_iters):
@@ -753,7 +758,13 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         #Train on full dataset #TODO: reuse trainer1 to avoid having to set up the training again, this still requries to transform the dataset to fourier domain if needed
         full_dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
                                                 num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
-        trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath,gt_data=gt_data)
+        if(not optimize_pose):
+            trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath,gt_data=gt_data)
+        else:
+            pose = PoseModule.merge_modules(pose1,pose2,permutation)
+            #TODO: merge mean module instead of taking the first one
+            trainer_final = CovarPoseTrainer(covar_model,full_dataloader,covar_model.device,mean_model,pose,savepath,gt_data=gt_data)
+
         trainer_final.fourier_reg = trainer1.fourier_reg
         trainer_final.train(max_epochs=num_epochs,**kwargs)
         

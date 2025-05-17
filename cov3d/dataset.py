@@ -146,7 +146,7 @@ class CovarDataset(Dataset):
         ds1 = self.get_subset(permutation[:data_size//2])
         ds2 = self.get_subset(permutation[data_size//2:])
 
-        return ds1,ds2
+        return ds1,ds2,permutation
     
 
     def get_total_gain(self,batch_size=1024,device=None):
@@ -263,6 +263,38 @@ class GTData:
             self.rotations = torch.tensor(self.rotations)
         if self.offsets is not None:
             self.offsets = torch.tensor(self.offsets)
+
+
+    def half_split(self, permutation = None):
+        rotations_present = self.rotations is not None
+        offsets_present = self.offsets is not None
+        if not (rotations_present or offsets_present):
+            return self, self
+        
+        n = self.rotations.shape[0] if rotations_present else self.offsets.shape[0]
+        if permutation is None:
+            permutation = torch.arange(n)
+        perm = permutation[:n//2], permutation[n//2:]
+
+        rotations1 = self.rotations[perm[0]] if rotations_present else None
+        offsets1 = self.offsets[perm[0]] if offsets_present else None
+        rotations2 = self.rotations[perm[1]] if rotations_present else None
+        offsets2 = self.offsets[perm[1]] if offsets_present else None
+
+        gt1 = GTData(
+            eigenvecs=self.eigenvecs,
+            mean=self.mean,
+            rotations=rotations1,
+            offsets=offsets1
+        )
+        gt2 = GTData(
+            eigenvecs=self.eigenvecs,
+            mean=self.mean,
+            rotations=rotations2,
+            offsets=offsets2
+        )
+        return gt1, gt2
+        
 
 
 
