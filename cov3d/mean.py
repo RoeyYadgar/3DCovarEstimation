@@ -1,5 +1,5 @@
 import torch
-from cov3d.projection_funcs import im_backward,centered_ifft3
+from cov3d.projection_funcs import im_backward,centered_ifft3,centered_fft3
 from cov3d.dataset import CovarDataset
 from cov3d.nufft_plan import NufftPlanDiscretized
 from cov3d.fsc_utils import rpsd,upsample_and_expand_fourier_shell,average_fourier_shell,vol_fsc
@@ -76,11 +76,9 @@ def reconstruct_mean_from_halfsets(dataset : CovarDataset, **reconstruction_kwar
     mean_half1,lhs1,rhs1 = reconstruct_mean(dataset,start_ind=0,end_ind=len(dataset)//2,**reconstruction_kwargs)
     mean_half2,lhs2,rhs2 = reconstruct_mean(dataset,start_ind=len(dataset)//2,end_ind=len(dataset),**reconstruction_kwargs)
 
-    #filter_gain = dataset.get_total_gain() / dataset.resolution ** 2
-    from projection_funcs import centered_fft3
-    filter_gain = centered_fft3(centered_ifft3((rhs1 + rhs2),cropping_size=(dataset.resolution,)*3)).abs()
+    filter_gain = centered_fft3(centered_ifft3((rhs1 + rhs2),cropping_size=(dataset.resolution,)*3)).abs() / 2
 
-    averaged_filter_gain = 1 / average_fourier_shell(filter_gain).to(mean_half1.device)
+    averaged_filter_gain = average_fourier_shell(1 / filter_gain).to(mean_half1.device)
 
     mean_fsc = vol_fsc(mean_half1,mean_half2)
     fsc_epsilon = 1e-6
@@ -100,16 +98,21 @@ def reconstruct_mean_from_halfsets(dataset : CovarDataset, **reconstruction_kwar
         mean_volume *= mask.squeeze(0)
 
     from matplotlib import pyplot as plt
-    fig = plt.figure()
-    v = average_fourier_shell(rhs1.real,rhs2.real,fourier_reg)
-    plt.plot(v.cpu().T)
-    #v = average_fourier_shell(fourier_reg)
-    #plt.plot(torch.arange(len(v))*2,v.cpu().T)
-    plt.yscale('log')
-    fig.savefig('test2.jpg')
-    fig = plt.figure()
-    plt.plot(mean_fsc.cpu())
-    fig.savefig('fsc.jpg')
+    fig, axs = plt.subplots(2, 2, figsize=(10, 5))
+
+    v = average_fourier_shell(rhs1.real, rhs2.real, fourier_reg)
+    axs[0,0].plot(v.cpu().T)
+    axs[0,0].set_yscale('log')
+    axs[0,0].set_title('Fourier Shell Averages')
+
+    axs[0,1].plot(mean_fsc.cpu())
+    axs[0,1].set_title('Mean FSC')
+
+    axs[1,0].plot(average_fourier_shell(filter_gain).cpu())
+    axs[1,0].set_yscale('log')
+
+    fig.tight_layout()
+    fig.savefig('test2_and_fsc.jpg')
 
 
 
@@ -120,12 +123,15 @@ if __name__ == "__main__":
     import pickle
     from aspire.volume import Volume
     from aspire.utils import Rotation
-    dataset = pickle.load(open('data/pose_opt_exp/result_data/dataset.pkl','rb'))
+    import os
+    #dataset_path = 'data/pose_opt_exp'
+    dataset_path = 'data/scratch_data/igg_1d/images/snr0.01/downsample_L128/relion_refinement_abinit'
+    dataset = pickle.load(open(os.path.join(dataset_path,'result_data/dataset.pkl'),'rb'))
 
     USE_GT = True
 
     if(USE_GT):
-        gt_data = pickle.load(open('data/pose_opt_exp/result_data/gt_data.pkl','rb'))
+        gt_data = pickle.load(open(os.path.join(dataset_path,'result_data/gt_data.pkl'),'rb'))
         vol = gt_data.mean.unsqueeze(0).to('cuda:0')
         dataset.pts_rot = dataset.compute_pts_rot(torch.tensor(Rotation(gt_data.rotations.numpy()).as_rotvec()).to(torch.float32))
     else:

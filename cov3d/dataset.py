@@ -9,7 +9,7 @@ from aspire.volume import Volume,rotated_grids
 from aspire.utils import Rotation
 from cov3d.utils import soft_edged_kernel,get_torch_device,get_complex_real_dtype
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft2,centered_ifft2,get_mask_threshold,preprocess_image_batch
+from cov3d.projection_funcs import vol_forward,im_backward,centered_fft2,centered_ifft2,get_mask_threshold,preprocess_image_batch
 from cov3d.fsc_utils import average_fourier_shell,sum_over_shell
 from cov3d.covar import Mean
 from cov3d.poses import PoseModule
@@ -32,14 +32,16 @@ class CovarDataset(Dataset):
 
         self.images = torch.tensor(src.images[:].asnumpy())
 
+        #TODO: signal var should be estimated after removing projected mean but before applying masking
+        self.estimate_filters_gain()
+        self.estimate_signal_var()
         if(apply_preprocessing):
             self.preprocess_from_modules(*self.construct_mean_pose_modules(mean_volume,mask,self.rot_vecs,self.offsets))
 
         if(self.data_inverted):
             self.images = -1*self.images
 
-        self.estimate_filters_gain()
-        self.estimate_signal_var()
+
 
         self.dtype = self.images.dtype
         self.mask = torch.tensor(mask.asnumpy()) if mask is not None else None
@@ -147,18 +149,26 @@ class CovarDataset(Dataset):
         return ds1,ds2
     
 
-    def get_total_gain(self):
-        """Returns a 3D tensor represntaing the total gain of each frequency, observed by the dataset"""
-        pts_rot_grid = torch.round(self.pts_rot / torch.pi * (self.resolution//2)).to(torch.long)
-        gain_tensor = torch.zeros((self.resolution,)*3,dtype=self.unique_filters.dtype)
-        filters = self.unique_filters[self.filter_indices]
-        
-        coords = (pts_rot_grid + (self.resolution // 2)) % self.resolution
-        indices = coords[:,0] * self.resolution**2 + coords[:,1] * self.resolution + coords[:,2]
-        gain_tensor = gain_tensor.view(-1)
-        gain_tensor.scatter_add_(0,indices.reshape(-1),filters.reshape(-1)**2)
+    def get_total_gain(self,batch_size=1024,device=None):
+        """
+        Returns a 3D tensor represntaing the total gain of each frequency, observed by the dataset = diag(sum(P_i^T P_i))
+        """
+        L = self.resolution
+        upsample_factor=1
+        nufft_plan = NufftPlanDiscretized((L,)*3,upsample_factor=upsample_factor,mode='nearest',use_half_grid=False)
+        device = get_torch_device() if device is None else device
+        gain_tensor = torch.zeros((L*upsample_factor,)*3,device=device,dtype=self.dtype)
 
-        gain_tensor = gain_tensor.reshape((self.resolution,)*3)
+        for i in range(0,len(self),batch_size):
+            _,pts_rot,filter_indices,_ = self[i:min(i+batch_size,len(self))]
+            pts_rot = pts_rot.to(device)
+            filters = self.unique_filters[filter_indices].to(device) if self.unique_filters is not None else None
+
+            nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+
+            gain_tensor += im_backward(torch.complex(filters,torch.zeros_like(filters)),nufft_plan,filters,fourier_domain=True).squeeze().abs()
+
+        gain_tensor /= L
 
         return gain_tensor
 

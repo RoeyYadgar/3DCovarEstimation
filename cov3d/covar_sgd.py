@@ -41,7 +41,7 @@ class CovarTrainer():
                 })
             
 
-        self.filter_gain = self.dataset.get_total_gain().to(self.device)
+        self.filter_gain = self.dataset.get_total_gain(device=self.device)
         self.num_reduced_lr_before_stop = 4
         self.scheduler_patiece = 0
         self.fourier_reg = None
@@ -493,9 +493,9 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
         current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
 
     averaged_filter_gain = average_fourier_shell(1/filter_gain).reshape(-1,1)
+    averaged_filter_gain[averaged_filter_gain == torch.inf] = averaged_filter_gain[averaged_filter_gain != torch.inf][-1]
     averaged_filter_gain = (averaged_filter_gain @ averaged_filter_gain.T)
-    averaged_filter_gain[:,L//2+1:] = averaged_filter_gain[L//2,L//2]
-    averaged_filter_gain[L//2+1:,:] = averaged_filter_gain[L//2,L//2]
+
     #averaged_filter_gain += 1e-12
     filter_gain_shell_correction = averaged_filter_gain
 
@@ -512,7 +512,6 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     
     new_fourier_reg = 1/((eigenvecs_fsc / (1 - eigenvecs_fsc))*filter_gain_shell_correction)
     new_fourier_reg[new_fourier_reg < 0] = 0
-    new_fourier_reg /= L ** 4 # This term comes from the normalization by L in projection operator which scales to the power of 4 through the filter gain
 
     #This is a heuristic approach to get a rank 1 approx of the 'regulariztaion matrix' which allows much faster computation of the regularizaiton term
     new_fourier_reg = expand_fourier_shell(new_fourier_reg.diag().sqrt().unsqueeze(0),L,3)
