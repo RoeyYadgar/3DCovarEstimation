@@ -94,23 +94,28 @@ class Mean(VolumeBase):
         self.volume_mask = self.volume_mask.to(*args,**kwargs) if self.volume_mask is not None else None
 
         return self
+    
+    def state_dict(self,*args,**kwargs):
+        state_dict = super().state_dict(*args,**kwargs)
+        state_dict.update({'volume_mask' : self.volume_mask.to('cpu') if self.volume_mask is not None else None})
+        return state_dict
+    
+    def load_state_dict(self,state_dict,*args,**kwargs):
+        self.volume_mask = state_dict.pop('volume_mask')
+        super().load_state_dict(state_dict, *args, **kwargs)
+        return
 
 class Covar(VolumeBase):
     def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
         super().__init__(resolution=resolution,dtype=dtype,fourier_domain=fourier_domain,upsampling_factor=upsampling_factor)
-        self.resolution = resolution
         self.rank = rank
         self.pixel_var_estimate = pixel_var_estimate
-        self.dtype = dtype
-        self.upsampling_factor = upsampling_factor
 
         if(vectors is None):
             vectors = self.init_random_vectors(rank) if (not isinstance(pixel_var_estimate,torch.Tensor) or pixel_var_estimate.ndim == 0) else self.init_random_vectors_from_psd(rank,self.pixel_var_estimate) 
         else:
             vectors = torch.clone(vectors)
 
-        self._in_spatial_domain = not fourier_domain
-        self.grid_correction = None
         vectors,log_sqrt_eigenvals = self._get_eigenvecs_representation(vectors)
         self.vectors = torch.nn.Parameter(vectors)
         self.log_sqrt_eigenvals = torch.nn.Parameter(log_sqrt_eigenvals)

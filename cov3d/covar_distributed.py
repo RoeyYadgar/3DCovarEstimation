@@ -102,6 +102,9 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
 
     if(rank == 0):
         torch.save(covar_model.module.state_dict(),TMP_STATE_DICT_FILE)
+        if(optimize_pose):
+            torch.save(mean_model.module.state_dict(),f'mean_{TMP_STATE_DICT_FILE}')
+            torch.save(pose.state_dict(),f'pose_{TMP_STATE_DICT_FILE}')
 
     dist.destroy_process_group()
 
@@ -117,6 +120,13 @@ def trainParallel(covar_model,dataset,batch_size,num_gpus = 'max',optimize_pose=
 
     mp.spawn(ddp_train,args=(num_gpus,covar_model,dataset,batch_size_per_gpu,optimize_pose,mean_model,pose,savepath,gt_data,kwargs),nprocs = num_gpus)
 
-    covar_model.load_state_dict(torch.load(TMP_STATE_DICT_FILE))
-    os.remove(TMP_STATE_DICT_FILE)
+
+    def update_module_from_state_dict(module,state_dict_file):
+        module.load_state_dict(torch.load(state_dict_file))
+        os.remove(state_dict_file)
+
+    update_module_from_state_dict(covar_model,TMP_STATE_DICT_FILE)
+    if(optimize_pose):
+        update_module_from_state_dict(mean_model,f'mean_{TMP_STATE_DICT_FILE}')
+        update_module_from_state_dict(pose,f'pose_{TMP_STATE_DICT_FILE}')
 
