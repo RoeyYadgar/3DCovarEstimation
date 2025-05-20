@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from cov3d.projection_funcs import im_backward,centered_ifft3,centered_fft3
 from cov3d.dataset import CovarDataset
 from cov3d.nufft_plan import NufftPlanDiscretized
@@ -6,12 +7,10 @@ from cov3d.fsc_utils import rpsd,upsample_and_expand_fourier_shell,average_fouri
 from cov3d.utils import get_torch_device
 from tqdm import tqdm
 
-def reconstruct_mean(dataset : CovarDataset,init_vol = None,mask=None,upsampling_factor=2,batch_size=1024,start_ind = None,end_ind = None,return_lhs_rhs=False):
+def reconstruct_mean(dataset : CovarDataset,init_vol = None,mask=None,upsampling_factor=2,batch_size=1024,idx=None,return_lhs_rhs=False):
 
-    if(start_ind is None):
-        start_ind = 0
-    if(end_ind is None):
-        end_ind = len(dataset)
+    if(idx is None):
+        idx = torch.arange(len(dataset))
 
     L = dataset.resolution
     nufft_plan = NufftPlanDiscretized((L,)*3,upsample_factor=upsampling_factor,mode='nearest',use_half_grid=False)
@@ -27,8 +26,8 @@ def reconstruct_mean(dataset : CovarDataset,init_vol = None,mask=None,upsampling
     
     backproj_ctf = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=dataset.dtype)
 
-    for i in tqdm(range(start_ind,end_ind,batch_size),desc='Reconstructing mean volume'):
-        images,pts_rot,filter_indices,_ = dataset[i:min(i + batch_size,end_ind)]
+    for i in tqdm(range(0,len(idx),batch_size),desc='Reconstructing mean volume'):
+        images,pts_rot,filter_indices,_ = dataset[idx[i:min(i + batch_size,len(idx))]]
         images = images.to(device)
         pts_rot = pts_rot.to(device)
         filters = dataset.unique_filters[filter_indices].to(device) if dataset.unique_filters is not None else None
@@ -70,13 +69,75 @@ def reconstruct_mean(dataset : CovarDataset,init_vol = None,mask=None,upsampling
         return mean_volume,backproj_im,backproj_ctf
 
 
-def reconstruct_mean_from_halfsets(dataset : CovarDataset, **reconstruction_kwargs):
+def reconstruct_mean_from_halfsets(dataset : CovarDataset,idx = None, **reconstruction_kwargs):
 
     reconstruction_kwargs['return_lhs_rhs'] = True
-    mean_half1,lhs1,rhs1 = reconstruct_mean(dataset,start_ind=0,end_ind=len(dataset)//2,**reconstruction_kwargs)
-    mean_half2,lhs2,rhs2 = reconstruct_mean(dataset,start_ind=len(dataset)//2,end_ind=len(dataset),**reconstruction_kwargs)
+    if(idx is None):
+        idx = torch.arange(len(dataset))
 
-    filter_gain = centered_fft3(centered_ifft3((rhs1 + rhs2),cropping_size=(dataset.resolution,)*3)).abs() / 2
+    mean_half1,lhs1,rhs1 = reconstruct_mean(dataset,idx=idx[:len(idx)//2],**reconstruction_kwargs)
+    mean_half2,lhs2,rhs2 = reconstruct_mean(dataset,idx=idx[len(idx)//2:],**reconstruction_kwargs)
+
+    return regularize_mean_from_halfsets(mean_half1,lhs1,rhs1,
+                                        mean_half2,lhs2,rhs2,
+                                        mask=reconstruction_kwargs.get('mask',None))
+
+def reconstruct_mean_from_halfsets_DDP(dataset : CovarDataset, idx = None,ranks = None, **reconstruction_kwargs):
+    reconstruction_kwargs['return_lhs_rhs'] = True
+    if(ranks is None):
+        ranks = [i for i in range(dist.get_world_size())]
+
+    if(idx is None):
+        idx = torch.arange(len(dataset))
+
+    world_size = len(ranks)
+    rank = dist.get_rank()
+
+    total_len = len(idx)
+    chunk_size = total_len // world_size
+    start_ind = rank * chunk_size
+    end_ind = (rank + 1) * chunk_size if rank != world_size - 1 else total_len
+    idx = torch.arange(start_ind,end_ind)
+
+
+    result = reconstruct_mean(dataset, idx=idx, **reconstruction_kwargs)
+    _, backproj_im, backproj_ctf = result
+
+
+
+    #Sum backproj_im and backproj_ctf only on the group of the corresponding half set
+    group1 = dist.new_group(ranks=ranks[:world_size//2])
+    group2 = dist.new_group(ranks=ranks[world_size//2:])
+    rank_group = group1 if rank in ranks[:world_size//2] else group2
+    #print(f'DEVICE : {backproj_im.device} , {torch.norm(backproj_im)}')
+    dist.all_reduce(backproj_im,op=dist.ReduceOp.SUM,group=rank_group)
+    #print(f'DEVICE : {backproj_im.device} , {torch.norm(backproj_im)}')
+    dist.all_reduce(backproj_ctf,op=dist.ReduceOp.SUM,group=rank_group)
+
+    mean_volume =  backproj_im / (backproj_ctf + 1e-1)
+    mean_volume = centered_ifft3(mean_volume,cropping_size=(dataset.resolution,)*3).real
+
+    #Sync mean_volume,backproj_im,backproj_ctf across the two groups
+    half1 = []
+    half2 = []
+    for i,tensor in enumerate([mean_volume,backproj_im,backproj_ctf]):
+        #TODO: this is inefficent since tensor is the same across each group. This can be done instead by sending an receiveing the tensor for rank pairs from the two groups
+        tensor_list = [torch.zeros_like(tensor) for _ in range(world_size)]
+        tensor = tensor.contiguous()
+        dist.all_gather(tensor_list, tensor)
+        
+        half1.append(tensor_list[0])
+        half2.append(tensor_list[-1])
+
+    #print(f'DEVICE : {backproj_im.device} , {torch.norm(half1[1])}, {torch.norm(half2[1])}')
+    return regularize_mean_from_halfsets(*half1,*half2,reconstruction_kwargs.get('mask',None))
+        
+
+def regularize_mean_from_halfsets(mean_half1,lhs1,rhs1,mean_half2,lhs2,rhs2,mask=None):
+
+    L = mean_half1.shape[-1]
+
+    filter_gain = centered_fft3(centered_ifft3((rhs1 + rhs2),cropping_size=(L,)*3)).abs() / 2
 
     averaged_filter_gain = average_fourier_shell(1 / filter_gain).to(mean_half1.device)
 
@@ -91,28 +152,10 @@ def reconstruct_mean_from_halfsets(dataset : CovarDataset, **reconstruction_kwar
 
     mean_volume = ((lhs1 / (rhs1 + fourier_reg)) + (lhs2 / (rhs2 + fourier_reg)))/2
 
-    mean_volume = centered_ifft3(mean_volume,cropping_size=(dataset.resolution,)*3).real
+    mean_volume = centered_ifft3(mean_volume,cropping_size=(L,)*3).real
 
-    mask = reconstruction_kwargs.get('mask',None)
     if(mask is not None):
         mean_volume *= mask.squeeze(0)
-
-    from matplotlib import pyplot as plt
-    fig, axs = plt.subplots(2, 2, figsize=(10, 5))
-
-    v = average_fourier_shell(rhs1.real, rhs2.real, fourier_reg)
-    axs[0,0].plot(v.cpu().T)
-    axs[0,0].set_yscale('log')
-    axs[0,0].set_title('Fourier Shell Averages')
-
-    axs[0,1].plot(mean_fsc.cpu())
-    axs[0,1].set_title('Mean FSC')
-
-    axs[1,0].plot(average_fourier_shell(filter_gain).cpu())
-    axs[1,0].set_yscale('log')
-
-    fig.tight_layout()
-    fig.savefig('test2_and_fsc.jpg')
 
 
 

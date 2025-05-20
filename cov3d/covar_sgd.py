@@ -9,7 +9,7 @@ from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 from cov3d.poses import PoseModule,out_of_plane_rot_error
-from cov3d.mean import reconstruct_mean_from_halfsets
+from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
 
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
@@ -284,6 +284,9 @@ class CovarPoseTrainer(CovarTrainer):
 
         self.mean_fourier_reg = None
         self.scheduler_patiece = 3
+
+        self.mean_reconstruct_func = reconstruct_mean_from_halfsets if not self.isDDP else reconstruct_mean_from_halfsets_DDP
+
         for param in self.get_mean_module().parameters():
             param.requires_grad = False
         #for param in self.covar.parameters():
@@ -373,11 +376,12 @@ class CovarPoseTrainer(CovarTrainer):
         return cost_val
 
     def run_epoch(self,epoch):
-        self._ddp_sync_pose_module()
         super().run_epoch(epoch)
+        self._ddp_sync_pose_module()
+
         #update datatset pts_rot and update the mean volume estimate
         self.dataset.pts_rot = self.dataset.compute_pts_rot(self.get_pose_module().get_rotvecs().cpu())
-        reconstructed_mean = reconstruct_mean_from_halfsets(self.dataset,mask=self.get_mean_module().volume_mask)
+        reconstructed_mean = self.mean_reconstruct_func(self.dataset,mask=self.get_mean_module().volume_mask) #TODO: handle use halfsets in DDP
         self.get_mean_module().set_mean(reconstructed_mean)
         
 
