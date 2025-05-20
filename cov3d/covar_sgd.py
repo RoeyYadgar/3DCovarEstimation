@@ -284,6 +284,8 @@ class CovarPoseTrainer(CovarTrainer):
 
         self.mean_fourier_reg = None
         self.scheduler_patiece = 3
+        self.mean_est_method = 'Reconstruction'
+        self.mean_update_frequency = 5
 
         self.mean_reconstruct_func = reconstruct_mean_from_halfsets if not self.isDDP else reconstruct_mean_from_halfsets_DDP
 
@@ -362,7 +364,8 @@ class CovarPoseTrainer(CovarTrainer):
                                                          fourier_domain=self.optimize_in_fourier_domain)
 
             cost_val = self.cost_func(self._covar(dummy_var=None),preprocessed_images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
-            cost_val = cost_val + self.regularize_mean()
+            if(self.mean_est_method == 'SGD'):
+                cost_val = cost_val + self.regularize_mean()
             cost_val.backward()
 
             self.optimizer.step()
@@ -377,12 +380,28 @@ class CovarPoseTrainer(CovarTrainer):
 
     def run_epoch(self,epoch):
         super().run_epoch(epoch)
-        self._ddp_sync_pose_module()
 
-        #update datatset pts_rot and update the mean volume estimate
-        self.dataset.pts_rot = self.dataset.compute_pts_rot(self.get_pose_module().get_rotvecs().cpu())
-        reconstructed_mean = self.mean_reconstruct_func(self.dataset,mask=self.get_mean_module().volume_mask) #TODO: handle use halfsets in DDP
-        self.get_mean_module().set_mean(reconstructed_mean)
+        mem_allocated = torch.cuda.memory_allocated(self.device) / (1024 ** 3)
+        mem_reserved = torch.cuda.memory_reserved(self.device) / (1024 ** 3)
+        print(f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB")
+        log_file = "gpu_memory_log.txt"
+        with open(log_file, "a") as f:
+            f.write(f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB\n")
+
+        if(epoch % self.mean_update_frequency == 0):
+            self._ddp_sync_pose_module()
+
+            if(self.mean_est_method == 'Reconstruction'):
+                #update datatset pts_rot and update the mean volume estimate
+                batch_size = self.batch_size * 16 #We can use larger batch size since this computation is very light weight
+                with torch.no_grad():
+                    for i in range(0,len(self.dataset),batch_size):
+                        #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
+                        idx = torch.arange(i,min(i + batch_size,len(self.dataset)),device=self.device)
+                        self.dataset.pts_rot[idx.cpu()] = self.pose(idx)[0].detach().cpu()
+                reconstructed_mean = self.mean_reconstruct_func(self.dataset,mask=self.get_mean_module().volume_mask) #TODO: handle use halfsets in DDP
+                self.get_mean_module().set_mean(reconstructed_mean)
+                
         
 
     def setup_training(self, **kwargs):
@@ -408,7 +427,8 @@ class CovarPoseTrainer(CovarTrainer):
 
     def compute_fourier_reg_term(self,eigenvecs):
         super().compute_fourier_reg_term(eigenvecs)
-        self.compute_fourier_mean_reg_term()
+        if(self.mean_est_method == 'SGD'):
+            self.compute_fourier_mean_reg_term()
 
     def compute_fourier_mean_reg_term(self):
         mean = self.get_mean_module()
