@@ -78,6 +78,7 @@ class PoseModule(torch.nn.Module):
             rot_mat.reshape(len(index)*3, 3),
             self.xy_rot_grid
         ).reshape(len(index), 3, self.resolution**2), dims=[1])
+        pts_rot = pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
 
         offsets = -self.offsets(index)
         phase_shift = torch.exp(

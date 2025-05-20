@@ -279,6 +279,7 @@ class TestTorchWraps(unittest.TestCase):
         pose_module = PoseModule(init_rotvec,torch.zeros(len(init_rotvec),2),self.img_size)
         index = torch.tensor([5,13,192,153])
         pts_rot = torch.tensor(self.pts_rot.copy()).reshape(3,-1,self.img_size**2)[:,index].transpose(0,1)
+        pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
         module_pts_rot,_ = pose_module(index)
         torch.testing.assert_close(pts_rot,module_pts_rot,rtol=1e-3,atol=1e-3)
 
