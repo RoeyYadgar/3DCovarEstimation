@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from torch.utils.data import Dataset
 from aspire.utils import support_mask
 import numpy as np
+import random
 import copy
 from tqdm import tqdm
 from aspire.volume import Volume,rotated_grids
@@ -241,7 +242,40 @@ class CovarDataset(Dataset):
         self.filters_gain = estimated_filters_gain
         self.radial_filters_gain = radial_filters_gain
 
+class BatchIndexSampler(torch.utils.data.Sampler):
+    def __init__(self, data_size, batch_size, shuffle=True,idx=None):
+        self.data_size = data_size
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        if(idx is None):
+            idx = list(range(self.data_size))
+        else:
+            self.data_size = len(idx)
+        if self.shuffle:
+            random.shuffle(idx)
+        self.idx = idx
 
+    def __iter__(self):
+        for i in range(0, self.data_size, self.batch_size):
+            yield self.idx[i:i + self.batch_size]
+
+    def __len__(self):
+        return (self.data_size + self.batch_size - 1) // self.batch_size
+
+def create_dataloader(dataset, batch_size,idx=None, **dataloader_kwargs):
+    sampler = dataloader_kwargs.pop('sampler', None)
+    if sampler is None:
+        sampler = BatchIndexSampler(len(dataset), batch_size, shuffle=False,idx=idx)
+    else:
+        sampler = torch.utils.data.BatchSampler(sampler, batch_size=batch_size,drop_last=False)
+    batch_size = None
+    return torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=lambda x: x,
+        **dataloader_kwargs
+    )
 
 
 @dataclass

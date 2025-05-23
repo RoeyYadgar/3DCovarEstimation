@@ -1,23 +1,33 @@
 import torch
 import torch.distributed as dist
+from torch.utils.data import DataLoader 
 from cov3d.projection_funcs import im_backward,centered_ifft3,centered_fft3
-from cov3d.dataset import CovarDataset
+from cov3d.dataset import CovarDataset,create_dataloader
 from cov3d.nufft_plan import NufftPlanDiscretized
 from cov3d.fsc_utils import rpsd,upsample_and_expand_fourier_shell,average_fourier_shell,vol_fsc
 from cov3d.utils import get_torch_device
 from tqdm import tqdm
+from typing import Union
 
-def reconstruct_mean(dataset : CovarDataset,init_vol = None,mask=None,upsampling_factor=2,batch_size=1024,idx=None,return_lhs_rhs=False):
+def reconstruct_mean(dataset : Union[CovarDataset,DataLoader],init_vol = None,mask=None,upsampling_factor=2,batch_size=1024,idx=None,return_lhs_rhs=False):
+    
+    if(not isinstance(dataset,DataLoader)):
+        if(idx is None):
+            idx = torch.arange(len(dataset))
+        dataloader = create_dataloader(dataset,batch_size=batch_size,idx=idx,pin_memory=True)
+    else:
+        dataloader = dataset
+        assert idx is None, "If input dataset is a dataloader, idx cannot be specified"
+    dataset = dataloader.dataset
 
-    if(idx is None):
-        idx = torch.arange(len(dataset))
+    device = get_torch_device() if init_vol is None else init_vol.device
+        
 
     L = dataset.resolution
     nufft_plan = NufftPlanDiscretized((L,)*3,upsample_factor=upsampling_factor,mode='nearest',use_half_grid=False)
 
     is_dataset_in_fourier = not dataset._in_spatial_domain
 
-    device = get_torch_device() if init_vol is None else init_vol.device
 
     if(not is_dataset_in_fourier):
         dataset.to_fourier_domain()
@@ -25,9 +35,8 @@ def reconstruct_mean(dataset : CovarDataset,init_vol = None,mask=None,upsampling
     backproj_im = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=dataset.dtype)
     
     backproj_ctf = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=dataset.dtype)
-
-    for i in tqdm(range(0,len(idx),batch_size),desc='Reconstructing mean volume'):
-        images,pts_rot,filter_indices,_ = dataset[idx[i:min(i + batch_size,len(idx))]]
+    for batch in tqdm(dataloader,desc='Reconstructing mean volume'):
+        images,pts_rot,filter_indices,_ = batch
         images = images.to(device)
         pts_rot = pts_rot.to(device)
         filters = dataset.unique_filters[filter_indices].to(device) if dataset.unique_filters is not None else None
@@ -82,26 +91,22 @@ def reconstruct_mean_from_halfsets(dataset : CovarDataset,idx = None, **reconstr
                                         mean_half2,lhs2,rhs2,
                                         mask=reconstruction_kwargs.get('mask',None))
 
-def reconstruct_mean_from_halfsets_DDP(dataset : CovarDataset, idx = None,ranks = None, **reconstruction_kwargs):
-    reconstruction_kwargs['return_lhs_rhs'] = True
+def reconstruct_mean_from_halfsets_DDP(dataset : DataLoader,ranks = None, **reconstruction_kwargs):
+    #This function assumes the input dataloader has a distributed sampler. Each node will only pass on its corresponding samples determined by the sampler.
     if(ranks is None):
         ranks = [i for i in range(dist.get_world_size())]
 
-    if(idx is None):
-        idx = torch.arange(len(dataset))
+    if(len(ranks) == 1):
+        #In the case there's only one rank, we call the non DDP version using the internal dataset of the dataloader, and idx selected by the sampler
+        return reconstruct_mean_from_halfsets(dataset.dataset,idx=list(iter(dataset.sampler)),**reconstruction_kwargs)
+    reconstruction_kwargs['return_lhs_rhs'] = True
+
 
     world_size = len(ranks)
     rank = dist.get_rank()
 
-    total_len = len(idx)
-    chunk_size = total_len // world_size
-    start_ind = rank * chunk_size
-    end_ind = (rank + 1) * chunk_size if rank != world_size - 1 else total_len
-    idx = torch.arange(start_ind,end_ind)
-
-
-    result = reconstruct_mean(dataset, idx=idx, **reconstruction_kwargs)
-    _, backproj_im, backproj_ctf = result
+    result = reconstruct_mean(dataset, **reconstruction_kwargs)
+    mean, backproj_im, backproj_ctf = result
 
 
 
@@ -115,19 +120,22 @@ def reconstruct_mean_from_halfsets_DDP(dataset : CovarDataset, idx = None,ranks 
     dist.all_reduce(backproj_ctf,op=dist.ReduceOp.SUM,group=rank_group)
 
     mean_volume =  backproj_im / (backproj_ctf + 1e-1)
-    mean_volume = centered_ifft3(mean_volume,cropping_size=(dataset.resolution,)*3).real
+    mean_volume = centered_ifft3(mean_volume,cropping_size=(mean.shape[-1],)*3).real
 
     #Sync mean_volume,backproj_im,backproj_ctf across the two groups
     half1 = []
     half2 = []
     for i,tensor in enumerate([mean_volume,backproj_im,backproj_ctf]):
         #TODO: this is inefficent since tensor is the same across each group. This can be done instead by sending an receiveing the tensor for rank pairs from the two groups
-        tensor_list = [torch.zeros_like(tensor) for _ in range(world_size)]
+        tensor_list = [torch.zeros_like(tensor) for _ in range(dist.get_world_size())]
         tensor = tensor.contiguous()
         dist.all_gather(tensor_list, tensor)
         
-        half1.append(tensor_list[0])
-        half2.append(tensor_list[-1])
+        half1.append(tensor_list[ranks[0]])
+        half2.append(tensor_list[ranks[-1]])
+
+    dist.destroy_process_group(group1)
+    dist.destroy_process_group(group2)
 
     #print(f'DEVICE : {backproj_im.device} , {torch.norm(half1[1])}, {torch.norm(half2[1])}')
     return regularize_mean_from_halfsets(*half1,*half2,reconstruction_kwargs.get('mask',None))

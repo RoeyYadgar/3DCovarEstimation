@@ -31,15 +31,21 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
     
     covar_model = covar_model.to(device)
     if(use_halfsets):
-        group1 = dist.new_group(ranks=list(range(world_size//2)))
-        group2 = dist.new_group(ranks=list(range(world_size//2,world_size)))
+        ranks1 = list(range(world_size//2))
+        ranks2 = list(range(world_size//2,world_size))
+        group1 = dist.new_group(ranks=ranks1)
+        group2 = dist.new_group(ranks=ranks2)
         is_group1 = rank in range(world_size//2)
         if not is_group1:
             torch.manual_seed(1) #Reinitalize vectors in group2
             covar_model.set_vectors(covar_model.init_random_vectors(covar_model.rank))
         covar_model = DDP(covar_model,device_ids=[rank],process_group=group1 if is_group1 else group2)
+        #Attach the ranks to the model so that we can use them in the trainer 
+        covar_model.ranks_in_group = ranks1 if is_group1 else ranks2
+        print(f'Rank {rank} is in group {covar_model.ranks_in_group}')
     else:
         covar_model = DDP(covar_model,device_ids=[rank])
+        covar_model.ranks_in_group = list(range(world_size))
     if(not optimize_pose):
         trainer = CovarTrainer(covar_model,dataloader,device,savepath,gt_data=gt_data)
     else:
@@ -94,6 +100,7 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
                     vectors=vectors).to(device)
         covar_model = DDP(covar_model,device_ids=[rank])
         covar_model.module.init_grid_correction(kwargs.get('nufft_disc',None))
+        covar_model.ranks_in_group = list(range(world_size))
         #Set the optimizer to the new model and retrain
         trainer._covar = covar_model
         trainer.restart_optimizer()
