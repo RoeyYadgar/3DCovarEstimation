@@ -10,6 +10,7 @@ from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_ba
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 from cov3d.poses import PoseModule,out_of_plane_rot_error
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
+from cov3d.dataset import create_dataloader,get_dataloader_batch_size
 
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
@@ -17,7 +18,7 @@ class CovarTrainer():
         self.train_data = train_data
         self._covar = covar.to(device)
         
-        self.batch_size = train_data.data_iterable.batch_size if (not isinstance(train_data,torch.utils.data.DataLoader)) else train_data.batch_size
+        self.batch_size = get_dataloader_batch_size(train_data.data_iterable) if (not isinstance(train_data,torch.utils.data.DataLoader)) else get_dataloader_batch_size(train_data)
         self.isDDP = type(self._covar) == torch.nn.parallel.distributed.DistributedDataParallel
         self.filters = self.dataset.unique_filters
         if(len(self.filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
@@ -728,8 +729,7 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
     num_epochs = kwargs.pop('max_epochs')
 
     if(not use_halfsets):
-        dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
-                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        dataloader = create_dataloader(dataset,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
         #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
         if(not optimize_pose):
@@ -754,10 +754,8 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         half1,half2,permutation = dataset.half_split()
 
         #TODO: Use sampler like in DDP to not have to split dataset?
-        dataloader1 = torch.utils.data.DataLoader(half1,batch_size = batch_size,shuffle = True,
-                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
-        dataloader2 = torch.utils.data.DataLoader(half2,batch_size = batch_size,shuffle = True,
-                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        dataloader1 = create_dataloader(half1,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        dataloader2 = create_dataloader(half2,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         
         if(not optimize_pose):
             trainer1 = CovarTrainer(covar_model,dataloader1,covar_model.device,savepath,gt_data=gt_data)
@@ -781,8 +779,7 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         trainer2.complete_training()
 
         #Train on full dataset #TODO: reuse trainer1 to avoid having to set up the training again, this still requries to transform the dataset to fourier domain if needed
-        full_dataloader = torch.utils.data.DataLoader(dataset,batch_size = batch_size,shuffle = True,
-                                                num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        full_dataloader = create_dataloader(dataset,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
         if(not optimize_pose):
             trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath,gt_data=gt_data)
         else:

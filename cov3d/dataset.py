@@ -253,7 +253,7 @@ class BatchIndexSampler(torch.utils.data.Sampler):
             self.data_size = len(idx)
         if self.shuffle:
             random.shuffle(idx)
-        self.idx = idx
+        self.idx = torch.tensor(idx)
 
     def __iter__(self):
         for i in range(0, self.data_size, self.batch_size):
@@ -261,6 +261,9 @@ class BatchIndexSampler(torch.utils.data.Sampler):
 
     def __len__(self):
         return (self.data_size + self.batch_size - 1) // self.batch_size
+
+def identity_collate(batch):
+    return batch
 
 def create_dataloader(dataset, batch_size,idx=None, **dataloader_kwargs):
     sampler = dataloader_kwargs.pop('sampler', None)
@@ -273,9 +276,15 @@ def create_dataloader(dataset, batch_size,idx=None, **dataloader_kwargs):
         dataset,
         batch_size=batch_size,
         sampler=sampler,
-        collate_fn=lambda x: x,
+        collate_fn=identity_collate, #Can't use lambda function here since it will be pickled and sent to other processes when using DDP
         **dataloader_kwargs
     )
+
+def get_dataloader_batch_size(dataloader):
+    batch_size = dataloader.batch_size
+    if(batch_size is None):
+        batch_size = dataloader.sampler.batch_size
+    return batch_size
 
 
 @dataclass
