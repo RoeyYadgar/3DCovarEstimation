@@ -169,6 +169,34 @@ class PoseModule(torch.nn.Module):
         return merged_module
             
 
+
+def estimate_image_offsets(images, reference, upsampling=4, device=None,mask=None):
+
+    if device is not None:
+        images = images.to(device)
+        reference = reference.to(device)
+
+    n, h, w = images.shape
+
+    images = images*mask if mask is not None else images
+    # Cross-correlation via FFT
+    f_img = torch.fft.fft2(images,s=(h*upsampling, w*upsampling))
+    f_ref = torch.conj(torch.fft.fft2(reference, s=(h*upsampling, w*upsampling)))
+    corr = torch.fft.ifft2(f_img * f_ref).real
+
+    # Center the correlation output
+    corr = torch.fft.fftshift(corr)
+
+    max_idx = torch.argmax(corr.reshape(n,-1),dim=1)
+    max_idx = torch.unravel_index(max_idx, (h*upsampling, w*upsampling))
+    shift_y = max_idx[0] - (h*upsampling) // 2
+    shift_x = max_idx[1] - (w*upsampling) // 2
+
+
+    offsets = torch.vstack([shift_y,shift_x]).T / upsampling
+
+    return offsets
+
 def out_of_plane_rot_error(rot1, rot2):
     """
     #Implementation is used from DRGN-AI https://github.com/ml-struct-bio/drgnai/blob/d45341d1f3411d6db6da6f557207f10efd16da17/src/metrics.py#L134

@@ -6,9 +6,9 @@ from tqdm import tqdm
 import copy
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold
+from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
-from cov3d.poses import PoseModule,out_of_plane_rot_error
+from cov3d.poses import PoseModule,out_of_plane_rot_error,estimate_image_offsets
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
 from cov3d.dataset import create_dataloader,get_dataloader_batch_size
 
@@ -331,7 +331,25 @@ class CovarPoseTrainer(CovarTrainer):
         self._updated_idx = torch.zeros_like(self._updated_idx)
 
 
+    def correct_offsets(self):
+        with torch.no_grad():
+            for batch in tqdm(self.train_data,desc='Correcting offsets'):
+                images,idx,filters = self.prepare_batch(batch)
+                self.nufft_plans.setpts(self.pose(idx)[0].transpose(0,1).reshape((3,-1)))
+                if(self.optimize_in_fourier_domain):
+                    images = centered_ifft2(images).real
+                mean_forward = centered_ifft2(vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters=filters,fourier_domain=True).squeeze(1)).real
 
+                mask_forward = vol_forward(self.mask,self.nufft_plans,filters=None,fourier_domain=False).squeeze(1)
+                mask_forward = mask_forward > self.mask_threshold 
+                soft_mask = centered_ifft2(centered_fft2(mask_forward)  * self.softening_kernel_fourier).real
+
+                offsets = estimate_image_offsets(images,mean_forward,mask=soft_mask)
+
+                self.get_pose_module().set_offsets(offsets,idx=idx)
+
+
+            
     
     def set_pose_grad_req(self,grad):
         for param in self.get_pose_module().parameters():
@@ -388,6 +406,7 @@ class CovarPoseTrainer(CovarTrainer):
             f.write(f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB\n")
 
         if(epoch % self.mean_update_frequency == 0):
+            self.correct_offsets()
             self._ddp_sync_pose_module()
 
             if(self.mean_est_method == 'Reconstruction'):
