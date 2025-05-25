@@ -321,7 +321,9 @@ class CovarPoseTrainer(CovarTrainer):
 
         idx_to_update = torch.zeros_like(self._updated_idx)
         for i in range(len(updated_idx_list)):
-            assert idx_to_update[updated_idx_list[i] > 0].sum() == 0, 'Updated indices are not unique'
+            #If idx_to_update is already set to 1, we don't need to update it again (this means that a previous node has already updated this index (can happen when len(dataset) % world_size != 0))
+            updated_idx_list[i][idx_to_update > 0] = 0
+
             idx_to_update[updated_idx_list[i] > 0] = 1
             #rotvecs and offsets point to the same memory location in the pose module - so we can just update them here
             rotvecs[updated_idx_list[i] > 0] = rotvec_list[i][updated_idx_list[i] > 0]
