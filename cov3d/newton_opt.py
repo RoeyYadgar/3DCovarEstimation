@@ -5,8 +5,8 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
     Implements a Newton optimizer with backtracking line search. 
     Assumes hessian is block diagonal with respect to the parameters and batch (first dim) of tensor.
     """
-    def __init__(self, params, lr=1.0, max_ls_steps=10, c=1e-4, beta=0.1, damping=1e-6,line_search=True):
-        defaults = dict(lr=lr, max_ls_steps=max_ls_steps, c=c, beta=beta, damping=damping,line_search=line_search)
+    def __init__(self, params, lr=1.0, max_ls_steps=10, c=1e-4, beta=0.1, damping=1e-6,line_search=True,step_size_limit=None):
+        defaults = dict(lr=lr, max_ls_steps=max_ls_steps, c=c, beta=beta, damping=damping,line_search=line_search,step_size_limit=step_size_limit)
         super().__init__(params, defaults)
 
 
@@ -26,6 +26,7 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
             max_ls_steps = group['max_ls_steps']
             damping = group['damping']
             line_search = group['line_search']
+            step_size_limit = group['step_size_limit']
 
             for param in group['params']:
                 if param.grad is None:
@@ -47,6 +48,8 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
 
                 # Compute Newton step
                 step_dir = torch.linalg.solve(hessian, param.grad.view(batch_size,-1))
+                if(step_size_limit is not None):
+                    step_dir = torch.clamp(step_dir, -step_size_limit, step_size_limit)
 
                 # Backtracking line search
                 if(line_search):
@@ -56,6 +59,7 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
                         param.data = orig_param - alpha * step_dir.view_as(param.data)
 
                         with torch.enable_grad():
+                            self.zero_grad()
                             trial_loss = closure()
                             trial_loss.sum().backward(create_graph=True)
 

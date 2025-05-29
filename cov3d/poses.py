@@ -235,7 +235,7 @@ def estimate_image_offsets_newton(images, reference, mask=None, init_offsets=Non
 
     init_offsets.requires_grad = True
 
-    optimizer  = BlockNewtonOptimizer([init_offsets],beta=0.5,c=0,line_search=True)
+    optimizer  = BlockNewtonOptimizer([init_offsets],beta=0.2,c=0,line_search=True,max_ls_steps=3,step_size_limit=0.5)
 
     for _ in range(10):
         def closure():
@@ -246,6 +246,7 @@ def estimate_image_offsets_newton(images, reference, mask=None, init_offsets=Non
             return loss
                 
         optimizer.step(closure)
+        optimizer.zero_grad()
 
     init_offsets.requires_grad = False
 
