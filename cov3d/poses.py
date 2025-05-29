@@ -1,6 +1,7 @@
 import torch
 import numpy as np
-from aspire.volume import rotated_grids
+from cov3d.projection_funcs import centered_fft2,centered_ifft2
+from cov3d.newton_opt import BlockNewtonOptimizer
 from aspire.utils import grid_2d
 
 
@@ -32,6 +33,33 @@ def rodrigues_rotation_matrix(rotvecs):
     R = eye + torch.sin(theta).unsqueeze(-1) * K + (1 - torch.cos(theta).unsqueeze(-1)) * (K @ K)
     
     return R
+
+
+def get_phase_shift_grid(resolution, dtype=torch.float32,device=None):
+    if device is None:
+        device = torch.device("cpu")
+    grid_shifted = torch.ceil(torch.arange(-resolution / 2, resolution / 2, dtype=dtype))
+    grid_1d = grid_shifted * 2 * np.pi / resolution
+    phase_shift_grid_x, phase_shift_grid_y = torch.meshgrid(
+        grid_1d, grid_1d, indexing="xy"
+    )
+
+    return phase_shift_grid_x.to(device), phase_shift_grid_y.to(device)
+
+def offset_to_phase_shift(offsets, resolution = None, phase_shift_grid = None):
+    if phase_shift_grid is None:
+        if resolution is None:
+            raise ValueError("Either resolution or phase_shift_grid must be provided.")
+        phase_shift_grid_x, phase_shift_grid_y = get_phase_shift_grid(resolution)
+    else:
+        phase_shift_grid_x, phase_shift_grid_y = phase_shift_grid
+
+    phase_shift = torch.exp(
+        1j * (phase_shift_grid_x.unsqueeze(0) * offsets[:, 0].reshape(-1, 1, 1) +
+              phase_shift_grid_y.unsqueeze(0) * offsets[:, 1].reshape(-1, 1, 1))
+    )
+    
+    return phase_shift
 
 class PoseModule(torch.nn.Module):
     def __init__(self, init_rotvecs,offsets, resolution, dtype=torch.float32):
@@ -66,11 +94,7 @@ class PoseModule(torch.nn.Module):
         self.xy_rot_grid = torch.tensor(grid, dtype=dtype)
 
 
-        grid_shifted = torch.ceil(torch.arange(-self.resolution / 2, self.resolution / 2, dtype=self.dtype))
-        grid_1d = grid_shifted * 2 * torch.pi / self.resolution
-        self.phase_shift_grid_x,self.phase_shift_grid_y = torch.meshgrid(
-            grid_1d, grid_1d, indexing="xy"
-        )
+        self.phase_shift_grid_x,self.phase_shift_grid_y = get_phase_shift_grid(self.resolution, dtype=self.dtype)
 
     def forward(self, index):
         rot_mat = rodrigues_rotation_matrix(self.rotvec(index))
@@ -81,11 +105,8 @@ class PoseModule(torch.nn.Module):
         pts_rot = pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
 
         offsets = -self.offsets(index)
-        phase_shift = torch.exp(
-            1j * (self.phase_shift_grid_x.unsqueeze(0) * offsets[:, 0].reshape(-1,1,1) +
-                  self.phase_shift_grid_y.unsqueeze(0) * offsets[:, 1].reshape(-1,1,1))
-        )
-
+        phase_shift = offset_to_phase_shift(offsets, resolution=self.resolution,
+                                            phase_shift_grid=(self.phase_shift_grid_x, self.phase_shift_grid_y))
         return pts_rot, phase_shift
     
     def to(self, *args, **kwargs):
@@ -170,15 +191,12 @@ class PoseModule(torch.nn.Module):
             
 
 
-def estimate_image_offsets(images, reference, upsampling=4, device=None,mask=None):
-
-    if device is not None:
-        images = images.to(device)
-        reference = reference.to(device)
+def estimate_image_offsets_correlation(images, reference, upsampling=4,mask=None):
 
     n, h, w = images.shape
 
     images = images*mask if mask is not None else images
+    reference = reference*mask if mask is not None else reference
     # Cross-correlation via FFT
     f_img = torch.fft.fft2(images,s=(h*upsampling, w*upsampling))
     f_ref = torch.conj(torch.fft.fft2(reference, s=(h*upsampling, w*upsampling)))
@@ -193,9 +211,69 @@ def estimate_image_offsets(images, reference, upsampling=4, device=None,mask=Non
     shift_x = max_idx[1] - (w*upsampling) // 2
 
 
-    offsets = torch.vstack([shift_y,shift_x]).T / upsampling
+    offsets = -torch.vstack([shift_x,shift_y]).T
 
     return offsets
+
+
+def estimate_image_offsets_newton(images, reference, mask=None, init_offsets=None,in_fourier_domain=False):
+
+    if not in_fourier_domain:
+        dtype = images.dtype
+        images = centered_fft2(images * mask) if mask is not None else centered_fft2(images)
+        reference = centered_fft2(reference * mask) if mask is not None else centered_fft2(reference)
+    else:
+        dtype = images.real.dtype
+        images = centered_fft2(centered_ifft2(images).real * mask) if mask is not None else images
+        reference = centered_fft2(centered_ifft2(reference).real * mask) if mask is not None else reference
+
+    if(init_offsets is None):
+        init_offsets = torch.zeros((images.shape[0], 2), dtype=dtype, device=images.device)
+
+    phase_shift_grid = get_phase_shift_grid(images.shape[-1], dtype=dtype,device=images.device)
+
+
+    init_offsets.requires_grad = True
+
+    optimizer  = BlockNewtonOptimizer([init_offsets],beta=0.5,c=0,line_search=True)
+
+    for _ in range(10):
+        def closure():
+            optimizer.zero_grad()
+            phase_shifted_image = images * offset_to_phase_shift(-init_offsets, phase_shift_grid=phase_shift_grid)
+            loss = torch.norm(phase_shifted_image - reference,dim=(-1,-2))**2
+            
+            return loss
+                
+        optimizer.step(closure)
+
+    init_offsets.requires_grad = False
+
+    return init_offsets
+
+def estimate_image_offsets(images, reference, mask=None, in_fourier_domain=False):
+
+    if not in_fourier_domain:
+        images = centered_fft2(images * mask) if mask is not None else centered_fft2(images)
+        reference = centered_fft2(reference * mask) if mask is not None else centered_fft2(reference)
+    else:
+        images = centered_fft2(centered_ifft2(images).real * mask) if mask is not None else images
+        reference = centered_fft2(centered_ifft2(reference).real * mask) if mask is not None else reference
+
+
+    corr = torch.fft.ifft2(images * torch.conj(reference)).real
+
+    # Center the correlation output
+    corr = torch.fft.fftshift(corr)
+
+    max_idx = torch.argmax(corr.reshape(images.shape[0],-1),dim=1)
+    max_idx = torch.unravel_index(max_idx, images.shape[-2:])
+    shift_y = max_idx[0] - (images.shape[-2]) // 2
+    shift_x = max_idx[1] - (images.shape[-1]) // 2
+
+    init_offsets = -torch.vstack([shift_x,shift_y]).T.to(images.real.dtype)
+
+    return estimate_image_offsets_newton(images, reference, init_offsets=init_offsets, in_fourier_domain=True)
 
 def out_of_plane_rot_error(rot1, rot2):
     """
