@@ -216,7 +216,7 @@ def estimate_image_offsets_correlation(images, reference, upsampling=4,mask=None
     return offsets
 
 
-def estimate_image_offsets_newton(images, reference, mask=None, init_offsets=None,in_fourier_domain=False):
+def estimate_image_offsets_newton(images, reference, mask=None, init_offsets=None,in_fourier_domain=False,obj_func = None):
 
     if not in_fourier_domain:
         dtype = images.dtype
@@ -233,6 +233,10 @@ def estimate_image_offsets_newton(images, reference, mask=None, init_offsets=Non
     phase_shift_grid = get_phase_shift_grid(images.shape[-1], dtype=dtype,device=images.device)
 
 
+    if(obj_func is None):
+        def obj_func(phase_shifted_image):
+            return torch.norm(phase_shifted_image - reference, dim=(-1, -2)) ** 2
+
     init_offsets.requires_grad = True
 
     optimizer  = BlockNewtonOptimizer([init_offsets],beta=0.2,c=0,line_search=True,max_ls_steps=3,step_size_limit=0.5)
@@ -241,7 +245,7 @@ def estimate_image_offsets_newton(images, reference, mask=None, init_offsets=Non
         def closure():
             optimizer.zero_grad()
             phase_shifted_image = images * offset_to_phase_shift(-init_offsets, phase_shift_grid=phase_shift_grid)
-            loss = torch.norm(phase_shifted_image - reference,dim=(-1,-2))**2
+            loss = obj_func(phase_shifted_image)
             
             return loss
                 

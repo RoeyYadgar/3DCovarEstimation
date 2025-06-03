@@ -286,16 +286,19 @@ class CovarPoseTrainer(CovarTrainer):
         self.mean_fourier_reg = None
         self.scheduler_patiece = 3
         self.mean_est_method = 'Reconstruction'
+        self.offset_est_method = 'Newton'
         self.mean_update_frequency = 5
 
-        for param in self.get_mean_module().parameters():
-            param.requires_grad = False
+        if(self.mean_est_method != 'SGD'):
+            for param in self.get_mean_module().parameters():
+                param.requires_grad = False
         #for param in self.covar.parameters():
         #    param.requires_grad = False
         #for param in self.get_pose_module().parameters():
         #    param.requires_grad = False
-        for param in self.get_pose_module().offsets.parameters():
-            param.requires_grad = False
+        if(self.offset_est_method != 'SGD'):
+            for param in self.get_pose_module().offsets.parameters():
+                param.requires_grad = False
 
     def get_mean_module(self):
         return self.mean if not self.isDDP else self.mean.module
@@ -343,9 +346,18 @@ class CovarPoseTrainer(CovarTrainer):
             mask_forward = mask_forward > self.mask_threshold 
             soft_mask = centered_ifft2(centered_fft2(mask_forward)  * self.softening_kernel_fourier).real
 
+            def obj_func(phase_shifted_image):
+                preprocessed_images = phase_shifted_image - mean_forward
+
+                return self.cost_func(self._covar(dummy_var=None).detach(),preprocessed_images,self.nufft_plans,filters,self.noise_var,
+                                      apply_mean_const_term=True,mean_aggregate=False)
+
+
             offsets = estimate_image_offsets_newton(images,mean_forward,mask=soft_mask,
                                                     init_offsets=self.get_pose_module().get_offsets()[idx].detach(),
-                                                    in_fourier_domain=self.optimize_in_fourier_domain)
+                                                    in_fourier_domain=self.optimize_in_fourier_domain,
+                                                    obj_func=obj_func,
+                                                    )
 
             self.get_pose_module().set_offsets(offsets,idx=idx)
 
@@ -407,7 +419,8 @@ class CovarPoseTrainer(CovarTrainer):
             f.write(f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB\n")
 
         if(epoch % self.mean_update_frequency == 0):
-            self.correct_offsets()
+            if(self.offset_est_method == 'Newton'):
+                self.correct_offsets()
             self._ddp_sync_pose_module()
 
             if(self.mean_est_method == 'Reconstruction'):
