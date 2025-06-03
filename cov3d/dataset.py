@@ -19,7 +19,7 @@ class CovarDataset(Dataset):
     def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False,apply_preprocessing = True):
         self.resolution = src.L
         self.rot_vecs = torch.tensor(Rotation(src.rotations).as_rotvec().astype(src.rotations.dtype))
-        self.offsets = torch.tensor(src.offsets)
+        self.offsets = torch.tensor(src.offsets,dtype=self.rot_vecs.dtype)
         self.pts_rot = self.compute_pts_rot(self.rot_vecs)
         self.noise_var = noise_var
         self.data_inverted = invert_data
@@ -38,6 +38,7 @@ class CovarDataset(Dataset):
         self.estimate_signal_var()
         if(apply_preprocessing):
             self.preprocess_from_modules(*self.construct_mean_pose_modules(mean_volume,mask,self.rot_vecs,self.offsets))
+            self.offsets[:] = 0 #After preprocessing images have no offsets
 
         if(self.data_inverted):
             self.images = -1*self.images
@@ -62,28 +63,6 @@ class CovarDataset(Dataset):
 
         return pts_rot
     
-    def preprocess_images(self,src,mean_volume,batch_size=512):
-        device = get_torch_device()
-        mean_volume = torch.tensor(mean_volume.asnumpy(),device=device)
-        nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean_volume.dtype,device=device)
-
-        images = src.images[:]
-        images = images.shift(-self.offsets.numpy())
-        images = images/(src.amplitudes[:,np.newaxis,np.newaxis].astype(images.dtype))
-        if(mean_volume is not None): #Substracted projected mean from images. Using own implemenation of volume projection since Aspire implemention is too slow
-            for i in range(0,src.n,batch_size): #TODO : do this with own wrapper of nufft to improve run time
-                pts_rot = self.pts_rot[i:(i+batch_size)]
-                filter_indices = self.filter_indices[i:(i+batch_size)]
-                filters = self.unique_filters[filter_indices].to(device) if len(self.unique_filters) > 0 else None
-                pts_rot = pts_rot.to(device)
-                nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
-                projected_mean = vol_forward(mean_volume,nufft_plan,filters).squeeze(1)
-
-
-                images[i:min(i+batch_size,src.n)] -= projected_mean.cpu().numpy().astype(images.dtype)
-
-
-        return images
 
     def construct_mean_pose_modules(self,mean_volume,mask,rot_vecs,offsets):
         L = self.resolution
@@ -134,6 +113,7 @@ class CovarDataset(Dataset):
         subset.pts_rot = subset.pts_rot[idx]
         subset.filter_indices = subset.filter_indices[idx]
         subset.rot_vecs = subset.rot_vecs[idx]
+        subset.offsets = subset.offsets[idx]
 
         return subset
     

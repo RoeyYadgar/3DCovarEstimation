@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from cov3d.projection_funcs import im_backward,centered_ifft3,centered_fft3
 from cov3d.dataset import CovarDataset,create_dataloader
 from cov3d.nufft_plan import NufftPlanDiscretized
+from cov3d.poses import get_phase_shift_grid,offset_to_phase_shift
 from cov3d.fsc_utils import rpsd,upsample_and_expand_fourier_shell,average_fourier_shell,vol_fsc
 from cov3d.utils import get_torch_device
 from tqdm import tqdm
@@ -33,11 +34,14 @@ def reconstruct_mean(dataset : Union[CovarDataset,DataLoader],init_vol = None,ma
         dataset.to_fourier_domain()
 
     backproj_im = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=dataset.dtype)
-    
     backproj_ctf = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=dataset.dtype)
+    phase_shift_grid = get_phase_shift_grid(L, dtype=backproj_im.real.dtype,device=device)
+
+
     for batch in tqdm(dataloader,desc='Reconstructing mean volume'):
-        images,pts_rot,filter_indices,_ = batch
-        images = images.to(device)
+        images,pts_rot,filter_indices,idx = batch
+        image_offsets = dataset.offsets[idx].to(device).to(pts_rot.dtype)
+        images = images.to(device) * offset_to_phase_shift(-image_offsets, phase_shift_grid=phase_shift_grid)
         pts_rot = pts_rot.to(device)
         filters = dataset.unique_filters[filter_indices].to(device) if dataset.unique_filters is not None else None
 

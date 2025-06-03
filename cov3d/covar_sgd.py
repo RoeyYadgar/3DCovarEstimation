@@ -431,6 +431,7 @@ class CovarPoseTrainer(CovarTrainer):
                         #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
                         idx = torch.arange(i,min(i + batch_size,len(self.dataset)),device=self.device)
                         self.dataset.pts_rot[idx.cpu()] = self.pose(idx)[0].detach().cpu()
+                        self.dataset.offsets[idx.cpu()] = self.pose.get_offsets()[idx.cpu()].detach().cpu()
                 if(not self.isDDP):
                     reconstructed_mean = reconstruct_mean_from_halfsets(self.dataset,mask=self.get_mean_module().volume_mask)
                 else:
