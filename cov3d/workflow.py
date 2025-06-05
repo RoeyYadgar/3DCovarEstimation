@@ -109,6 +109,9 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
         states_in_source = '_rlnClassNumber' in star['particles']
         pixel_size = float(star['optics']['_rlnImagePixelSize'][0])
         source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
+        if('_rlnOriginXAngst' in star['particles'] and '_rlnOriginYAngst' in star['particles']):
+            #Aspire source only parses _rlnOriginX/Y and not _rlnOriginX/YAngst
+            source.offsets =  np.array([star['particles']['_rlnOriginXAngst'],star['particles']['_rlnOriginYAngst']]).astype(np.float32).T / pixel_size #Convert to pixels
         L = source.L
         
         mean_est = relionReconstruct(starfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
