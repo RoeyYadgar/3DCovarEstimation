@@ -1,5 +1,8 @@
 import subprocess
 import os
+import re
+import glob
+from cov3d.utils import readVols
 from aspire.volume import Volume
 from PIL import Image
 from PIL import ImageDraw, ImageFont
@@ -67,7 +70,34 @@ def save_volume_figure(volume_path,output_image,resolution=500,color='#ffffa0ff'
     CXC.add('close #1')
     #CXC.execute()
 
-def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vol',view_commands = [],volume_names = None,remove_individual_figures=True,**chimera_kwargs):
+def create_gif_frames(dir,prefix):
+
+    pattern = os.path.join(dir, f"{prefix}_*.png")
+    for img_path in glob.glob(pattern):
+        output_path = img_path.replace('.png', '_noalpha.png')
+        subprocess.run(['convert', img_path, '-alpha', 'remove', '-alpha', 'off', output_path])
+        pdf_path = img_path.replace('.png', '.pdf')
+        subprocess.run(['python', '-m', 'img2pdf', img_path, '-o', pdf_path])
+    # Rename all PDF files in the directory by adding a prefix "renamed_"
+    for fname in os.listdir(dir):
+        if fname.endswith('.pdf'):
+            old_path = os.path.join(dir, fname)
+            def pad_ints(match):
+                num = match.group()
+                return num.zfill(2) 
+
+            base_name = fname.replace('_noalpha', '')
+            # Pad all integer substrings in the filename
+            new_base_name = re.sub(r'\d+', pad_ints, base_name)
+            new_path = os.path.join(dir, new_base_name)
+            os.rename(old_path, new_path)
+    
+    for fname in os.listdir(dir):
+        if fname.endswith('_noalpha.png'):
+            file_path = os.path.join(dir, fname)
+            os.remove(file_path)
+
+def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vol',view_commands = [],volume_names = None,remove_individual_figures=True,create_gif=False,**chimera_kwargs):
 
     def prep_kwargs(kwargs_dict,idx):
         out_dict = {}
@@ -118,6 +148,13 @@ def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vo
 
     if(image_shape is not None):
         concat_images(outputs,os.path.join(output_dir,f'all_{vol_prefix}.png'),image_shape)
+
+    if(create_gif):
+        #gif_output = os.path.join(output_dir,f'all_{vol_prefix}.gif')
+        #images = [Image.open(x) for x in outputs]
+        #images[0].save(gif_output, save_all=True, append_images=images[1:], duration=100, loop=0, transparency=0, disposal=2)
+        #print(f"GIF saved to {gif_output}")
+        create_gif_frames(output_dir,vol_prefix)
 
     if(remove_individual_figures):
         for f in outputs:
@@ -230,6 +267,44 @@ def igg_1d():
 
     save_volumes_figure(interleaved_vols,'data/final_figures/igg_1d',(2,10),vol_prefix='reconstructed_vol',view_commands=igg1d_view,level=levels,color=colors)
 
+def igg_1d_2():
+    igg1d_view = ['view orient',
+            'zoom 1',
+            'lighting soft',
+            'turn y 80',
+            'turn x 100',
+            'turn z 20',
+            'move x -10',
+    ]
+
+    vols=[f'data/scratch_data/igg_1d/images/snr0.01/downsample_L128/result_data/cryobench_output/all_volumes/vol{i:04}.mrc' for i in range(0,100,5)]
+    save_volumes_figure(vols,'data/final_figures/igg_1d/presentation',create_gif=True,vol_prefix='reconstructed_vols',view_commands=igg1d_view,level=1.72,color="#72b1ff")
+    
+    igg1d_view = ['view orient',
+        'zoom 1',
+        'lighting soft',
+        'turn y 80',
+        'turn x 100',
+        ]
+    vols = [f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,5)]
+    mean_vol = readVols(vols)
+    mean_vol = Volume(mean_vol.asnumpy().mean(axis=0))
+    mean_vol.save('tmp_mean.mrc',overwrite=True)
+    save_volumes_figure(['tmp_mean.mrc'],'data/final_figures/igg_1d/presentation',vol_prefix='mean_gt_backproj',view_commands=igg1d_view,remove_individual_figures=False,level=0.003,color='#b2ffff')
+    os.remove('tmp_mean.mrc')
+
+    igg1d_view = ['view orient',
+            'zoom 1',
+            'lighting soft',
+            'turn y 80',
+            'turn x 100',
+            'move x -10',
+    ]
+
+
+    save_volumes_figure(vols,'data/final_figures/igg_1d/presentation',create_gif=True,remove_individual_figures=False,vol_prefix='gt_vols_only',view_commands=igg1d_view,level=0.003,color='#b2ffff')
+
+
 def covar_fsc_simulation():
 
     micky_view = ['view orient',
@@ -286,4 +361,5 @@ if __name__ == "__main__":
     #discrete_sim()
     #igg_1d()
     #covar_fsc_simulation()
-    empiar10076()
+    #empiar10076()
+    igg_1d_2()

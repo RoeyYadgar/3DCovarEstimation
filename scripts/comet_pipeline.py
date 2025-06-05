@@ -102,9 +102,10 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
         for fig_name,fig_path in analysis_figures.items():
             exp.log_image(image_data = fig_path,name=fig_name)
 
-        #Run cryobench analysis (compares to GT latent embedding and volume states)
-        cryobench_analyze(output_dir,gt_dir=gt_dir,gt_latent=gt_latent,gt_labels=gt_labels,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
-        log_cryobench_analysis_output(exp,output_dir,gt_dir,gt_latent,gt_labels)
+        if(gt_dir is not None or gt_latent is not None or gt_labels is not None):
+            #Run cryobench analysis (compares to GT latent embedding and volume states)
+            cryobench_analyze(output_dir,gt_dir=gt_dir,gt_latent=gt_latent,gt_labels=gt_labels,num_vols=num_vols,mask=mask if os.path.isfile(mask) else None)
+            log_cryobench_analysis_output(exp,output_dir,gt_dir,gt_latent,gt_labels)
 
     if(not disable_comet):
         exp.log_parameters(training_kwargs)

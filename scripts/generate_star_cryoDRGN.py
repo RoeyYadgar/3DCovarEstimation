@@ -64,6 +64,7 @@ if __name__ == "__main__":
     offset_columns = ["rlnOriginXAngst","rlnOriginYAngst"]
     for i,col in enumerate(offset_columns):
         particles_block[col] = offsets[:,i] * pixel_size * image_size #offsets is in fraction,required multplication by the pixel and image size to get the offset in angs 
+        particles_block[col.replace('Angst','')] = offsets[:,i] * image_size
     
     labels_path = os.path.join(dataset_dir,'labels.pkl')
     if(os.path.isfile(labels_path)):
