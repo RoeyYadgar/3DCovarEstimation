@@ -346,10 +346,14 @@ class CovarPoseTrainer(CovarTrainer):
             mask_forward = mask_forward > self.mask_threshold 
             soft_mask = centered_ifft2(centered_fft2(mask_forward)  * self.softening_kernel_fourier).real
 
+
+            projected_eigenvecs = vol_forward(self._covar(dummy_var=None).detach(),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain)
+
             def obj_func(phase_shifted_image):
                 preprocessed_images = phase_shifted_image - mean_forward
+                #TODO: handle different coss functions
 
-                return self.cost_func(self._covar(dummy_var=None).detach(),preprocessed_images,self.nufft_plans,filters,self.noise_var,
+                return raw_cost_maximum_liklihood_fourier_domain(projected_eigenvecs,preprocessed_images,self.noise_var,
                                       apply_mean_const_term=True,mean_aggregate=False)
 
 
@@ -431,7 +435,7 @@ class CovarPoseTrainer(CovarTrainer):
                         #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
                         idx = torch.arange(i,min(i + batch_size,len(self.dataset)),device=self.device)
                         self.dataset.pts_rot[idx.cpu()] = self.pose(idx)[0].detach().cpu()
-                        self.dataset.offsets[idx.cpu()] = self.pose.get_offsets()[idx.cpu()].detach().cpu()
+                        self.dataset.offsets[idx.cpu()] = self.pose.get_offsets()[idx.cpu()].detach().cpu().to(self.dataset.offsets.dtype) #REMOVE dtype conversion
                 if(not self.isDDP):
                     reconstructed_mean = reconstruct_mean_from_halfsets(self.dataset,mask=self.get_mean_module().volume_mask)
                 else:
@@ -693,18 +697,29 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
     return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 
 def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False,mean_aggregate=True):
-    batch_size = images.shape[0]
     rank = vols.shape[0]
-    L = images.shape[-1]
 
     projected_eigenvecs = vol_forward(vols,nufft_plans,filters,fourier_domain=True)
 
+    cost_val = raw_cost_maximum_liklihood_fourier_domain(projected_eigenvecs,images,noise_var,apply_mean_const_term=apply_mean_const_term,mean_aggregate=mean_aggregate)
+
+    if(fourier_reg is not None and reg_scale != 0):
+        vols_fourier = vols * torch.sqrt(fourier_reg)
+        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
+        cost_val += reg_scale * reg_cost
+
+    return cost_val
+
+def raw_cost_maximum_liklihood_fourier_domain(projected_eigenvecs,images,noise_var,apply_mean_const_term=False,mean_aggregate=True):
+    batch_size = images.shape[0]
+    rank = projected_eigenvecs.shape[1]
+    
     images = images.reshape((batch_size,-1,1))
     projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
 
     projcted_images = torch.matmul(projected_eigenvecs.conj(),images) #size (batch, rank,1)
 
-    m = torch.eye(rank,device=vols.device,dtype=vols.dtype).unsqueeze(0) + projected_eigenvecs.conj() @ projected_eigenvecs.transpose(1,2) / noise_var
+    m = torch.eye(rank,device=projected_eigenvecs.device,dtype=projected_eigenvecs.dtype).unsqueeze(0) + projected_eigenvecs.conj() @ projected_eigenvecs.transpose(1,2) / noise_var
     mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
     projcted_images_transformed = torch.linalg.solve(m/mean_m.reshape(-1,1,1),projcted_images) / mean_m.reshape(-1,1,1) #size (batch, rank,1)
     ml_exp_term = - 1/(noise_var**2) * torch.matmul(projcted_images.transpose(1,2).conj(),projcted_images_transformed).squeeze()
@@ -716,13 +731,7 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
 
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real if mean_aggregate else 0.5*(ml_exp_term + ml_noise_term).real
 
-    if(fourier_reg is not None and reg_scale != 0):
-        vols_fourier = vols * torch.sqrt(fourier_reg)
-        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
-        cost_val += reg_scale * reg_cost
-
     return cost_val
-
 
 def frobeniusNorm(vecs):
     #Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
