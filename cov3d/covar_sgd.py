@@ -86,6 +86,11 @@ class CovarTrainer():
         if(self.use_orthogonal_projection):
             self.covar.orthogonal_projection()
 
+        #Apply masking on covar vectors
+        with torch.no_grad():
+            mask = self.dataset.mask.to(self.device) > 0.3
+            self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
+
         return cost_val
 
     def prepare_batch(self,batch):
@@ -408,6 +413,11 @@ class CovarPoseTrainer(CovarTrainer):
         if(self.use_orthogonal_projection):
             self.covar.orthogonal_projection()
 
+        #Apply masking on covar vectors
+        with torch.no_grad():
+            mask = self.dataset.mask.to(self.device) > 0.3
+            self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
+
         self._updated_idx[idx] = 1
 
         return cost_val
@@ -546,10 +556,13 @@ def update_fourier_reg(trainer1,trainer2):
     eigenvecs2 = trainer2.covar.eigenvecs
     eigenvecs2 = eigenvecs2[0] * (eigenvecs2[1]**0.5).reshape(-1,1,1,1)
 
-    new_fourier_reg_tensor = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,trainer1.optimize_in_fourier_domain,mask=trainer1.dataset.mask)
+    new_fourier_reg_tensor,covariance_fsc = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,trainer1.optimize_in_fourier_domain,mask=trainer1.dataset.mask)
 
     trainer1.update_fourier_reg_halfsets(new_fourier_reg_tensor)
     trainer2.update_fourier_reg_halfsets(new_fourier_reg_tensor)
+
+    if(trainer1.logTraining):
+        trainer1.training_log['covariance_fsc_halfset'] = covariance_fsc
 
 def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourier_reg,L,optimize_in_fourier_domain,mask=None):
 
@@ -560,21 +573,19 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     averaged_filter_gain[averaged_filter_gain == torch.inf] = averaged_filter_gain[averaged_filter_gain != torch.inf][-1]
     averaged_filter_gain = (averaged_filter_gain @ averaged_filter_gain.T)
 
-    #averaged_filter_gain += 1e-12
     filter_gain_shell_correction = averaged_filter_gain
 
-    #Find a unitary transformation that transforms one set to the other (since these eigenvecs might not be 'aligned')
     if(mask is not None):
         mask = mask.clone().to(eigenvecs1.device)
         eigenvecs1 = eigenvecs1 * mask
         eigenvecs2 = eigenvecs2 * mask
 
-    eigenvecs_fsc = covar_fsc(eigenvecs1,eigenvecs2)
+    covariance_fsc = covar_fsc(eigenvecs1,eigenvecs2)
     fsc_epsilon = 1e-6
-    eigenvecs_fsc[eigenvecs_fsc < fsc_epsilon] = fsc_epsilon
-    eigenvecs_fsc[eigenvecs_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
+    covariance_fsc[covariance_fsc < fsc_epsilon] = fsc_epsilon
+    covariance_fsc[covariance_fsc > 1-fsc_epsilon] = 1-fsc_epsilon
     
-    new_fourier_reg = 1/((eigenvecs_fsc / (1 - eigenvecs_fsc))*filter_gain_shell_correction)
+    new_fourier_reg = 1/((covariance_fsc / (1 - covariance_fsc))*filter_gain_shell_correction)
     new_fourier_reg[new_fourier_reg < 0] = 0
 
     #This is a heuristic approach to get a rank 1 approx of the 'regulariztaion matrix' which allows much faster computation of the regularizaiton term
@@ -584,7 +595,7 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
         #When optimizing in spatial domain regularization needs to be scaled by L^2
         new_fourier_reg /= L ** 2
 
-    return new_fourier_reg
+    return new_fourier_reg,covariance_fsc
 
 def cost(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False,mean_aggregate=True):
     batch_size = images.shape[0]

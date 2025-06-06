@@ -81,8 +81,10 @@ def ddp_train(rank,world_size,covar_model,dataset,batch_size_per_proc,optimize_p
             #eigenvecs_list will have the same eigenvecs in each distributed group (i.e. [eigenvecs1,...,eigenvecs1,eigenvesc2,...,eigenvecs2])
             eigenvecs1 = eigenvecs_list[0]
             eigenvecs2 = eigenvecs_list[-1]
-            new_fourier_reg_term = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.resolution,trainer.optimize_in_fourier_domain,trainer.dataset.mask)
+            new_fourier_reg_term,covariance_fsc = compute_updated_fourier_reg(eigenvecs1,eigenvecs2,trainer.filter_gain/2,trainer.fourier_reg,covar_model.module.resolution,trainer.optimize_in_fourier_domain,trainer.dataset.mask)
             trainer.update_fourier_reg_halfsets(new_fourier_reg_term)
+            if(trainer.logTraining):
+                trainer.training_log['covariance_fsc_halfset'] = covariance_fsc
 
         #Train a single model on the whole dataset
         with torch.no_grad():

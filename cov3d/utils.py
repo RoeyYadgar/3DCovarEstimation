@@ -328,3 +328,6 @@ def readVols(vols,in_list=True):
 
     return volumes
     
+
+def saveVol(vols : torch.tensor,path : str):
+    Volume(vols.cpu().numpy()).save(path,overwrite=True)
