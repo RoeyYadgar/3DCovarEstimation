@@ -4,6 +4,8 @@ import os
 from umap import UMAP
 from sklearn.cluster import KMeans
 from matplotlib import pyplot as plt
+from matplotlib import gridspec
+import seaborn as sns
 import pickle
 import click
 from aspire.volume import Volume
@@ -25,21 +27,34 @@ def create_scatter_figure(coords,cluster_coords,labels,scatter_size=0.1):
     plt.ylim(y_min - 0.1 * y_delta, y_max + 0.1 * y_delta)
     return fig
 
-def create_umap_figure(umap_coords,cluster_coords=None,labels=None,**scatter_kwargs):
-    fig = create_scatter_figure(umap_coords,cluster_coords,labels,**scatter_kwargs)
+def create_hist_figure(coords,cluster_coords=None,**scater_kwargs):
+    fig = sns.jointplot(x=coords[:,0],y=coords[:,1],kind='hex',**scater_kwargs).figure
+    if(cluster_coords is not None):
+        for i in range(cluster_coords.shape[0]):
+            plt.annotate(str(i),(cluster_coords[i,0],cluster_coords[i,1]),fontweight='bold')
+
+    x_min, x_max = np.percentile(coords[:,0], [0.5, 99.5])
+    x_delta = x_max - x_min
+    y_min, y_max = np.percentile(coords[:,1], [0.5, 99.5])
+    y_delta = y_max-y_min
+    plt.xlim(x_min - 0.1 * x_delta, x_max + 0.1 * x_delta)
+    plt.ylim(y_min - 0.1 * y_delta, y_max + 0.1 * y_delta)
+    return fig
+
+def create_umap_figure(umap_coords,cluster_coords=None,labels=None,fig_type='scatter',**scatter_kwargs):
+    fig = create_scatter_figure(umap_coords,cluster_coords,labels,**scatter_kwargs) if fig_type=='scatter' else create_hist_figure(umap_coords,cluster_coords,**scatter_kwargs)
     plt.xlabel('UMAP 1')
     plt.ylabel('UMAP 2')
     return {'umap' : fig}
 
-def create_pc_figure(pc_coords,cluster_coords=None,labels=None,num_pcs = 5,**scatter_kwargs):
+def create_pc_figure(pc_coords,cluster_coords=None,labels=None,num_pcs = 5,fig_type='scatter',**scatter_kwargs):
     figures = {}
     num_pcs = min(num_pcs,pc_coords.shape[1])
     for i in range(num_pcs):
         for j in range(i+1,num_pcs):
-            if(cluster_coords is not None):
-                fig = create_scatter_figure(pc_coords[:,[i,j]],cluster_coords[:,[i,j]],labels,**scatter_kwargs)
-            else:
-                fig = create_scatter_figure(pc_coords[:,[i,j]],None,labels,**scatter_kwargs)
+            clust = cluster_coords[:,[i,j]] if cluster_coords is not None else None        
+            fig = create_scatter_figure(pc_coords[:,[i,j]],clust,labels,**scatter_kwargs) if fig_type=='scatter' else create_hist_figure(pc_coords[:,[i,j]],clust,**scatter_kwargs) 
+            
             plt.xlabel(f'PC {i}')
             plt.ylabel(f'PC {j}')
             figures[f'pc_{i}_{j}'] = fig
@@ -63,6 +78,50 @@ def create_covar_fsc_figure(fsc):
     axs[1].set_xlabel('Resolution index')
     axs[1].set_ylabel('FSC')
     return fig
+
+def plot_volume_projections(volumes):
+    """
+    Plot k x 3 projections (mean along axis) for a k x n x n x n tensor of volumes.
+    Positive values shown in red, negative in blue, zero as white.
+    Adds black horizontal bars between volume rows.
+    """
+    k = volumes.shape[0]
+    fig = plt.figure(figsize=(12, 4 * k + k - 1))  # Add extra height for black bars
+
+    total_rows = 2 * k - 1  # One row per volume, plus black bars between
+    spec = gridspec.GridSpec(total_rows, 3, height_ratios=[0.05 if i % 2 else 1 for i in range(total_rows)],
+                              hspace=0.0, wspace=0.0)
+
+    for i in range(k):
+        vol = volumes[i]
+
+        # Projections
+        proj_x = vol.mean(axis=0)  # yz
+        proj_y = vol.mean(axis=1)  # xz
+        proj_z = vol.mean(axis=2)  # xy
+        projections = [proj_x, proj_y, proj_z]
+
+        row_idx = 2 * i  # Actual plot row (even index)
+
+        for j, proj in enumerate(projections):
+            ax = fig.add_subplot(spec[row_idx, j])
+
+            vmax = np.percentile(np.abs(proj), 99)
+            ax.imshow(proj, cmap='bwr', vmin=-vmax, vmax=vmax, interpolation='none')
+            ax.set_title(f'Vol {i+1}, Proj {["X", "Y", "Z"][j]}', fontsize=10)
+            ax.axis('off')
+
+        # Add black bar (a blank Axes filled with black)
+        if i < k - 1:
+            for j in range(3):
+                bar_ax = fig.add_subplot(spec[row_idx + 1, j])
+                bar_ax.set_facecolor('black')
+                bar_ax.set_xticks([])
+                bar_ax.set_yticks([])
+                bar_ax.axis('off')
+
+    return fig
+
 
 @click.command()
 @click.option('-i','--result-data',type=str,help='path to pkl output of the algorithm')
@@ -90,6 +149,7 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,la
 
     if(output_dir is None):
         output_dir = os.path.join(os.path.split(result_data)[0],'output')
+        print(f'Writing analysis output to {output_dir}')
     os.makedirs(output_dir,exist_ok=True)
 
     coords_keys = ['coords_est']
@@ -108,8 +168,9 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,la
             print('analyze_with_gt was set to True but coords_GT is not present in result_data - skipping analysis with gt coordinates')
 
     figure_paths = {}
-    for coords_key,coords_covar_inv_key,analysis_dir,fig_prefix,eigenvols_key in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix,eigenvols_keys):
+    for coords_key,_,analysis_dir,fig_prefix,eigenvols_key in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix,eigenvols_keys):
         analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters if latent_coords is None else latent_coords,gt_labels)
+        figures['eigenvol_projections'] = plot_volume_projections(data.get(eigenvols_key))
         fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data.get(eigenvols_key))
         figure_paths.update({fig_prefix+k : v for k,v in fig_path.items()})
         if(not skip_reconstruction):
