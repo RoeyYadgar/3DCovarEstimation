@@ -28,12 +28,12 @@ def generate_alg_params(alg_fixed_params, alg_var_params):
     alg_var_params = [dict(zip(keys, values)) for values in itertools.product(*alg_var_params.values())]
     for param in alg_var_params:
         alg_params.append({**alg_fixed_params, **param})
-        param_description.append(', '.join([f'{k}={v}' for k, v in param.items()]))
+        param_description.append(', '.join([f'{k}={v}' if not os.path.isfile(v) else f'{k}={os.path.split(v)[1]}' for k, v in param.items()]))
 
     return alg_params,param_description
 
 
-def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_analysis=True):
+def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_analysis=True,unique_output_dir=False):
 
     for L, dataset in datasets.items():
         for i, data in enumerate(dataset):
@@ -45,7 +45,18 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
                     alg_param['mask'] = data['mask']
                 if('output-dir' in alg_param.keys()):
                     alg_param['output-dir'] = os.path.join(os.path.split(alg_param['starfile'])[0],alg_param['output-dir'])
-                command = 'python scripts/comet_pipeline.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
+                if(unique_output_dir):
+                    alg_param['output-dir'] = os.path.join(os.path.split(alg_param['starfile'])[0],'output_' + param_description.replace(', ','_'))
+
+                def keyvalue2cli(key,value):
+                    if(value is None):
+                        return f'--{key}'
+                    elif(isinstance(value, bool)):
+                        return f'--{key}' if value else ''
+                    else:
+                        return f'--{key} {value}'
+                
+                command = 'python scripts/comet_pipeline.py ' + ' '.join([keyvalue2cli(k,v) for k, v in alg_param.items()])
                 
                 if(run_analysis):
                     command += ' --run-analysis'
@@ -53,7 +64,8 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
                         command += f" --gt-latent {data['gt_latent']}"
                     if(data['gt_dir'] is not None):
                         command += f" --gt-dir {data['gt_dir']}"
-                    command += f" --gt-labels {data['gt_labels']}"
+                    if(data['gt_labels'] is not None):
+                        command += f" --gt-labels {data['gt_labels']}"
                 if(RUN_COMMANDS):
                     os.system(command)
                 else:
@@ -76,7 +88,8 @@ def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 1
                     command += f" --gt-latent {data['gt_latent']}"
                 if(data['gt_dir'] is not None):
                     command += f" --gt-dir {data['gt_dir']}"
-                command += f" --gt-labels {data['gt_labels']}"
+                if(data['gt_labels'] is not None):
+                    command += f" --gt-labels {data['gt_labels']}"
             if(RUN_COMMANDS):
                 os.system(command)
             else:
@@ -218,6 +231,10 @@ empiar_experiment = Experiment(
     run_prefix = 'Empiar_final',
     datasets = ['empiar10076']
 )
+
+def run_alg_from_exp(exp : Experiment,**kwargs):
+    alg_params_list, alg_param_description = generate_alg_params(exp.alg_fixed_params, exp.alg_var_params)
+    run_alg(exp.datasets, dataset_names, exp.run_prefix, alg_params_list, alg_param_description,**kwargs)
 
 @click.command()
 @click.option('--skip-reconstruction',is_flag=True,help='Skip reconstruction step')
