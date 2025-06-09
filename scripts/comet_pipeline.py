@@ -112,15 +112,22 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
         exp.log_metrics({"eigenval_est" : data_dict["eigenval_est"]})
 
         if('eigenvals_GT' in data_dict.keys()):
-            metrics = {"frobenius_norm_error" : training_data['log_fro_err'][-1],
-                    "eigen_vector_cosine_sim" : training_data['log_cosine_sim'][-1],
+            metrics = {"frobenius_norm_error" : training_data['fro_err'][-1],
+                    "eigen_vector_cosine_sim" : training_data['cosine_sim'][-1],
                     "covar_fsc" : training_data['covar_fsc_mean'][-1],
                     "eigenvals_GT" : data_dict["eigenvals_GT"],
                     }
             exp.log_metrics(metrics)
-            fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['log_fro_err'])]
+            fro_log = [exp.log_metric(name='fro_norm_err',value=v,step=i) for i,v in enumerate(training_data['fro_err'])]
             fsc_log = [exp.log_metric(name='covar_fsc',value=v,step=i) for i,v in enumerate(training_data['covar_fsc_mean'])]
-            epoch_ind_log = [exp.log_metric(name='log_epoch_ind',value=v,step=i) for i,v in enumerate(training_data['log_epoch_ind'])]
+            epoch_ind_log = [exp.log_metric(name='log_epoch_ind',value=v,step=i) for i,v in enumerate(training_data['epoch_ind'])]
+
+
+        if('rot_angle_dist' in training_data.keys()):
+            #If GT pose is present
+            metric = [exp.log_metric(name='rot_angle_dist',value=v,step=i) for i,v in enumerate(training_data['rot_angle_dist'])]
+            metric = [exp.log_metric(name='offsets_mean_dist',value=v,step=i) for i,v in enumerate(training_data['offsets_mean_dist'])]
+
 
         
         data_artifact = comet_ml.Artifact("produced_data","data")
