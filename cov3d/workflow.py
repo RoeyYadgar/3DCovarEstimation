@@ -2,16 +2,13 @@ import numpy as np
 import torch
 from os import path
 import pickle
-from matplotlib import pyplot as plt
 import aspire
-from umap import UMAP
-from sklearn.metrics import auc
 import click
 from cov3d.utils import *
 from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset,GTData
 from cov3d.covar import Covar,CovarFourier,Mean
-from cov3d.poses import PoseModule,pose_cryoDRGN2APIRE
+from cov3d.poses import PoseModule,pose_cryoDRGN2APIRE,pose_ASPIRE2cryoDRGN
 from cov3d.covar_distributed import trainParallel
 from cov3d.wiener_coords import latentMAP
 
@@ -245,6 +242,13 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
         #TODO: output pose to file
         dataset.pts_rot = dataset.compute_pts_rot(pose.get_rotvecs().cpu())
         dataset.preprocess_from_modules(mean,pose)
+
+        refined_pose = pose_ASPIRE2cryoDRGN(Rotation.from_rotvec(pose.get_rotvecs().cpu().numpy()).matrices,
+                                            pose.get_offsets().cpu().numpy(),L)
+        with open(path.join(output_dir,'refined_poses.pkl'),'wb') as fid:
+            pickle.dump(refined_pose,fid)
+        mean_volume_est = Volume(mean.get_volume_spatial_domain().detach().cpu().numpy())
+        mean_volume_est.save(path.join(output_dir,'mean_est.mrc'),overwrite=True)
     
     #Compute wiener coordinates using estimated and ground truth eigenvectors
     eigen_est,eigenval_est= cov.eigenvecs
@@ -263,6 +267,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
 
     data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
                 'coords_est' : coords_est.cpu().numpy(), 'coords_covar_inv_est' : coords_covar_inv_est.numpy(),
+                'mean_est' : mean_volume_est.asnumpy(),
                 'starfile' : os.path.abspath(dataset.starfile), 'data_sign_inverted' : dataset.data_inverted}
     if(is_gt_eigenvols):
         data_dict = {**data_dict,
