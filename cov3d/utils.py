@@ -14,7 +14,7 @@ from aspire.reconstruction import MeanEstimator
 import aspire
 import multiprocessing
 import pickle
-from cov3d.wiener_coords import mahalanobis_threshold
+from cov3d.wiener_coords import mahalanobis_distance,mahalanobis_threshold
 from cov3d.projection_funcs import centered_fft2,centered_fft3
 
 
@@ -312,6 +312,42 @@ def relionReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,q=
         print(f'Reconstructing state {i} with {torch.sum(index_under_threshold)} images')
         output_file = os.path.join(volumes_dir,f'volume{i:04}.mrc')
         relionReconstruct(starfile,output_file,overwrite=True,mrcs_index=index_under_threshold.cpu().numpy(),invert=result['data_sign_inverted'])
+
+def reprojectVolumeFromEmbedding(inputfile,outputfolder,embedding_positions):
+    with open(inputfile,'rb') as f:
+        data = pickle.load(f)
+    volumes_dir = os.path.join(outputfolder,'reprojected_volumes')
+    os.makedirs(volumes_dir,exist_ok=True)
+    eigenvecs = data['eigen_est']
+    mean_volume = data['mean_est']
+    reprojected_volumes = np.tensordot(embedding_positions, eigenvecs, axes=([1], [0]))  + mean_volume
+
+    for i,vol in enumerate(reprojected_volumes):
+        output_file = os.path.join(volumes_dir,f'volume{i:04}.mrc')
+        Volume(vol).save(output_file,overwrite=True)
+
+
+def relionReconstructFromEmbeddingDisjointSets(inputfile,outputfolder,embedding_positions):
+    with open(inputfile,'rb') as f:
+        result = pickle.load(f)
+    zs = torch.tensor(result['coords_est'])
+    cov_zs = torch.tensor(result['coords_covar_inv_est'])
+    starfile = result['starfile']
+    volumes_dir = os.path.join(outputfolder,'all_volumes_relion')
+    os.makedirs(volumes_dir,exist_ok=True)
+    mahal_distance = torch.zeros(zs.shape[0],embedding_positions.shape[0])
+    for i,embedding_position in enumerate(torch.tensor(embedding_positions)):
+        #Find closest point in zs
+        embed_pos_index = torch.argmin(torch.norm(embedding_position - zs,dim=1))
+        #Compute closest neighbors
+        mahal_distance[:,i] = mahalanobis_distance(zs,zs[embed_pos_index],cov_zs[embed_pos_index])
+
+    closest_embedding = mahal_distance.argmin(dim=1)
+    for i,embedding_position in enumerate(torch.tensor(embedding_positions)):
+        image_idx = (closest_embedding == i)
+        print(f'Reconstructing state {i} with {torch.sum(image_idx)} images')
+        output_file = os.path.join(volumes_dir,f'volume{i:04}.mrc')
+        relionReconstruct(starfile,output_file,overwrite=True,mrcs_index=image_idx.cpu().numpy(),invert=result['data_sign_inverted'])
 
 
 def readVols(vols,in_list=True):

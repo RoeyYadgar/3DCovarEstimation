@@ -11,7 +11,16 @@ import click
 from aspire.volume import Volume
 from cov3d.recovar_utils import recovarReconstructFromEmbedding
 from cov3d.fsc_utils import covar_fsc
+from cov3d import utils
 
+def get_embedding_reconstruct_func(method):
+    methods = { 'recovar' : recovarReconstructFromEmbedding,
+                'relion' : utils.relionReconstructFromEmbedding,
+                'reprojection' : utils.reprojectVolumeFromEmbedding,
+                'relion_disjoint' : utils.relionReconstructFromEmbeddingDisjointSets,
+               }
+    
+    return methods[method]
 
 def create_scatter_figure(coords,cluster_coords,labels,scatter_size=0.1):
     fig = plt.figure()
@@ -129,12 +138,14 @@ def plot_volume_projections(volumes):
 @click.option('--analyze-with-gt',is_flag=True,help='whether to also perform analysis with embedding from gt eigenvolumes (if availalbe)')
 @click.option('--num-clusters',type=int,default=40,help='number of k-means clusters used to reconstruct from embedding')
 @click.option('--latent-coords',type=str,default=None,help='path to pkl containing latent coords to be used as cluster centers instead of k-means')
+@click.option('--reconstruct-method',type=str,default='recovar',help='which volume reconstruction method to use')
 @click.option('--skip-reconstruction',is_flag=True,help='whether to skip reconstruction of k-means cluster centers')
+@click.option('--skip-coor-analysis',is_flag=True,help='whether to skip coordinate analysis (kmeans clustering & umap)')
 @click.option('--gt-labels',default=None,help='path to pkl file containing gt labels. if provided used for coloring embedding figures')
-def analyze_cli(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,skip_reconstruction=False,gt_labels=None):
-    analyze(result_data,output_dir,analyze_with_gt=analyze_with_gt,num_clusters=num_clusters,latent_coords=latent_coords,skip_reconstruction=skip_reconstruction,gt_labels=gt_labels)
+def analyze_cli(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,reconstruct_method='recovar',skip_reconstruction=False,skip_coor_analysis=False,gt_labels=None):
+    analyze(result_data,output_dir,analyze_with_gt=analyze_with_gt,num_clusters=num_clusters,latent_coords=latent_coords,reconstruct_method=reconstruct_method,skip_reconstruction=skip_reconstruction,skip_coor_analysis=skip_coor_analysis,gt_labels=gt_labels)
 
-def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,skip_reconstruction=False,gt_labels=None):
+def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,reconstruct_method='recovar',skip_reconstruction=False,skip_coor_analysis=False,gt_labels=None):
     with open(result_data,'rb') as f:
         data = pickle.load(f)
 
@@ -169,13 +180,18 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,la
 
     figure_paths = {}
     for coords_key,_,analysis_dir,fig_prefix,eigenvols_key in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix,eigenvols_keys):
-        analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters if latent_coords is None else latent_coords,gt_labels)
-        figures['eigenvol_projections'] = plot_volume_projections(data.get(eigenvols_key))
-        fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data.get(eigenvols_key))
-        figure_paths.update({fig_prefix+k : v for k,v in fig_path.items()})
+        if(not skip_coor_analysis):
+            analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters if latent_coords is None else latent_coords,gt_labels)
+            figures['eigenvol_projections'] = plot_volume_projections(data.get(eigenvols_key))
+            fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data.get(eigenvols_key))
+            figure_paths.update({fig_prefix+k : v for k,v in fig_path.items()})
+            cluster_coords = analysis_data['cluster_coords']
+        else:
+            cluster_coords = latent_coords
         if(not skip_reconstruction):
-            #TODO: handle GT reconstruction - right now recovarReconstructomFromEmbedding will still use est embedding
-            recovarReconstructFromEmbedding(result_data,os.path.join(output_dir,analysis_dir),analysis_data['cluster_coords'])
+            reconstruct_func = get_embedding_reconstruct_func(reconstruct_method)
+            reconstruct_func(result_data,os.path.join(output_dir,analysis_dir),cluster_coords)
+
 
     if(analyze_with_gt and data.get('eigenvectors_GT') is not None):
         #Compare covariance FSC between ground truth and estimated eigenvectors
