@@ -14,6 +14,7 @@ class AnalyzeViewer:
         menubar = tk.Menu(self.master)
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label="Open", command=self._open_new_file)
+        filemenu.add_command(label="Load latent coords",command = self._load_latent_coords)
         filemenu.add_command(label="Save",command=self._save_cluster_coords)
         menubar.add_cascade(label="File", menu=filemenu)
         self.master.config(menu=menubar)
@@ -147,6 +148,18 @@ class AnalyzeViewer:
         if path:
             with open(path, 'wb') as f:
                 pickle.dump(self.cluster_coords, f)
+
+    def _load_latent_coords(self):
+        path = filedialog.askopenfilename(defaultextension='.pkl', filetypes=[('Pickle files', '*.pkl')],initialdir=self.dir,initialfile='latent_coords.pkl')
+        if path:
+            with open(path, 'rb') as f:
+                self.cluster_coords = pickle.load(f)
+
+            self.umap_cluster_coords = np.zeros((len(self.cluster_coords),self.umap_coords.shape[1]))
+            for i,cluster_center in enumerate(self.cluster_coords):
+                idx = np.where(np.all(self.coords == cluster_center, axis=1))[0][0]
+                self.umap_cluster_coords[i] = self.umap_coords[idx]
+            self._draw_figure()
 
     def _on_close(self):
         self.master.quit()
