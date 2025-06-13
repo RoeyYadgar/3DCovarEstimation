@@ -12,6 +12,7 @@ from aspire.volume import Volume
 from cov3d.recovar_utils import recovarReconstructFromEmbedding
 from cov3d.fsc_utils import covar_fsc
 from cov3d import utils
+from cov3d.trajectory import compute_density,compute_trajectory,pick_trajectory_pairs,find_closet_idx
 
 def get_embedding_reconstruct_func(method):
     methods = { 'recovar' : recovarReconstructFromEmbedding,
@@ -141,11 +142,12 @@ def plot_volume_projections(volumes):
 @click.option('--reconstruct-method',type=str,default='recovar',help='which volume reconstruction method to use')
 @click.option('--skip-reconstruction',is_flag=True,help='whether to skip reconstruction of k-means cluster centers')
 @click.option('--skip-coor-analysis',is_flag=True,help='whether to skip coordinate analysis (kmeans clustering & umap)')
+@click.option('--num-trajectories',type=int,default=0,help='Number of trajectories to compute (default 0)')
 @click.option('--gt-labels',default=None,help='path to pkl file containing gt labels. if provided used for coloring embedding figures')
-def analyze_cli(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,reconstruct_method='recovar',skip_reconstruction=False,skip_coor_analysis=False,gt_labels=None):
-    analyze(result_data,output_dir,analyze_with_gt=analyze_with_gt,num_clusters=num_clusters,latent_coords=latent_coords,reconstruct_method=reconstruct_method,skip_reconstruction=skip_reconstruction,skip_coor_analysis=skip_coor_analysis,gt_labels=gt_labels)
+def analyze_cli(result_data,**kwargs):
+    analyze(result_data,**kwargs)
 
-def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,reconstruct_method='recovar',skip_reconstruction=False,skip_coor_analysis=False,gt_labels=None):
+def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,latent_coords=None,reconstruct_method='recovar',skip_reconstruction=False,skip_coor_analysis=False,num_trajectories=0,gt_labels=None):
     with open(result_data,'rb') as f:
         data = pickle.load(f)
 
@@ -181,7 +183,7 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,la
     figure_paths = {}
     for coords_key,_,analysis_dir,fig_prefix,eigenvols_key in zip(coords_keys,coords_covar_inv_keys,analysis_output_dir,figure_prefix,eigenvols_keys):
         if(not skip_coor_analysis):
-            analysis_data,figures = analyze_coordinates(data[coords_key],num_clusters if latent_coords is None else latent_coords,gt_labels)
+            analysis_data,figures,umap_reducer = analyze_coordinates(data[coords_key],num_clusters if latent_coords is None else latent_coords,gt_labels)
             figures['eigenvol_projections'] = plot_volume_projections(data.get(eigenvols_key))
             fig_path = save_analysis_result(os.path.join(output_dir,analysis_dir),analysis_data,figures,eigenvols = data.get(eigenvols_key))
             figure_paths.update({fig_prefix+k : v for k,v in fig_path.items()})
@@ -191,6 +193,30 @@ def analyze(result_data,output_dir=None,analyze_with_gt=False,num_clusters=40,la
         if(not skip_reconstruction):
             reconstruct_func = get_embedding_reconstruct_func(reconstruct_method)
             reconstruct_func(result_data,os.path.join(output_dir,analysis_dir),cluster_coords)
+        if(num_trajectories > 0):
+            print('Computing trajectories')
+            coords = data[coords_key]
+            start,end = pick_trajectory_pairs(cluster_coords,num_trajectories)
+            start_ind = [find_closet_idx(coords,s)[1] for s in start]
+            end_ind = [find_closet_idx(coords,s)[1] for s in end]
+            coords_density,knn_indices = compute_density(coords)
+            trajectories = compute_trajectory(coords,coords_density,start_ind,end_ind,knn_indices=knn_indices)
+
+            for i,traj in enumerate(trajectories):
+                #Save trajectory figures
+                traj_dir = os.path.join(output_dir,analysis_dir,f'trajectory_{i+1}')
+                umap_trajectory = umap_reducer.transform(traj)
+                figures = {
+                    **create_umap_figure(analysis_data['umap_coords'],umap_trajectory,gt_labels),
+                    **create_pc_figure(coords,traj,gt_labels)
+                }
+                save_analysis_result(traj_dir,figures=figures)
+                with open(os.path.join(traj_dir,'trajectory.pkl'),'wb') as f:
+                    pickle.dump(traj,f)
+                reconstruct_func = get_embedding_reconstruct_func(reconstruct_method)
+                reconstruct_func(result_data,traj_dir,traj)
+
+                
 
 
     if(analyze_with_gt and data.get('eigenvectors_GT') is not None):
@@ -238,13 +264,14 @@ def analyze_coordinates(coords,num_clusters,gt_labels):
         'umap_cluster_coords' : umap_cluster_coords
     }
 
-    return data,figures
+    return data,figures,reducer
 
-def save_analysis_result(dir,data,figures,eigenvols = None):
+def save_analysis_result(dir,data=None,figures=None,eigenvols = None):
     os.makedirs(dir,exist_ok=True)
 
-    with open(os.path.join(dir,'data.pkl'),'wb') as f:
-        pickle.dump(data,f)
+    if(data is not None):
+        with open(os.path.join(dir,'data.pkl'),'wb') as f:
+            pickle.dump(data,f)
 
     if(eigenvols is not None):
         for i,vol in enumerate(eigenvols):
@@ -252,10 +279,11 @@ def save_analysis_result(dir,data,figures,eigenvols = None):
             Volume(-1 * vol).save(os.path.join(dir, f'eigenvol_neg{i:03d}.mrc'),overwrite=True)
 
     figure_paths = {}
-    for fig_name,fig in figures.items():
-        figure_path = os.path.join(dir,f'{fig_name}.jpg')
-        fig.savefig(figure_path)
-        figure_paths[fig_name] = figure_path
+    if(figures is not None):
+        for fig_name,fig in figures.items():
+            figure_path = os.path.join(dir,f'{fig_name}.jpg')
+            fig.savefig(figure_path)
+            figure_paths[fig_name] = figure_path
 
     return figure_paths
 
