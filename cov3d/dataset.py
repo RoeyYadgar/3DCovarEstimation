@@ -99,8 +99,14 @@ class CovarDataset(Dataset):
                 idx = idx.to(device)
                 images = images.to(device)
                 filters = self.unique_filters[filters].to(device) if len(self.unique_filters) > 0 else None
+                if(pose_module.use_contrast):
+                    #If pose module containts contrasts - correct images
+                    pts_rot,phase_shift,contrasts = pose_module(idx)
+                    images = images / contrasts.reshape(-1,1,1)
+                else:
+                    pts_rot,phase_shift = pose_module(idx)
                 self.images[idx] = preprocess_image_batch(images,nufft_plan,filters,
-                                                          pose_module(idx),mean_volume,
+                                                          (pts_rot,phase_shift),mean_volume,
                                                           mask,mask_threshold,softening_kernel_fourier,fourier_domain=not self._in_spatial_domain).cpu()
                 
                 pbar.update(1)
@@ -276,6 +282,7 @@ class GTData:
     mean : torch.Tensor = None
     rotations : torch.Tensor = None
     offsets : torch.Tensor = None
+    contrasts: torch.Tensor = None
 
     def __post_init__(self):
         if self.eigenvecs is not None:
@@ -286,11 +293,14 @@ class GTData:
             self.rotations = torch.tensor(self.rotations)
         if self.offsets is not None:
             self.offsets = torch.tensor(self.offsets)
+        if self.contrasts is not None:
+            self.contrasts = torch.tensor(self.contrasts)
 
 
     def half_split(self, permutation = None):
         rotations_present = self.rotations is not None
         offsets_present = self.offsets is not None
+        contrasts_present = self.contrasts is not None
         if not (rotations_present or offsets_present):
             return self, self
         
@@ -301,20 +311,24 @@ class GTData:
 
         rotations1 = self.rotations[perm[0]] if rotations_present else None
         offsets1 = self.offsets[perm[0]] if offsets_present else None
+        contrasts1 = self.contrasts[perm[0]] if contrasts_present else None
         rotations2 = self.rotations[perm[1]] if rotations_present else None
         offsets2 = self.offsets[perm[1]] if offsets_present else None
+        contrasts2 = self.contrasts[perm[1]] if contrasts_present else None
 
         gt1 = GTData(
             eigenvecs=self.eigenvecs,
             mean=self.mean,
             rotations=rotations1,
-            offsets=offsets1
+            offsets=offsets1,
+            contrasts=contrasts1,
         )
         gt2 = GTData(
             eigenvecs=self.eigenvecs,
             mean=self.mean,
             rotations=rotations2,
-            offsets=offsets2
+            offsets=offsets2,
+            contrasts=contrasts2,
         )
         return gt1, gt2
         

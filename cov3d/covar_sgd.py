@@ -398,7 +398,14 @@ class CovarPoseTrainer(CovarTrainer):
         for _ in range(self.num_rep):
             self.optimizer.zero_grad()
             self.pose_optimizer.zero_grad()
-            preprocessed_images = preprocess_image_batch(images,self.nufft_plans,filters,self.pose(idx),self.mean(dummy_var=None),
+
+            if(self.get_pose_module().use_contrast):
+                #If we optimize over contrasts scale filters
+                pts_rot,phase_shift,contrasts = self.pose(idx)
+                filters = filters * contrasts.reshape(-1,1,1)
+            else:
+                pts_rot,phase_shift = self.pose(idx)
+            preprocessed_images = preprocess_image_batch(images,self.nufft_plans,filters,(pts_rot,phase_shift),self.mean(dummy_var=None),
                                                          self.mask,self.mask_threshold,self.softening_kernel_fourier,
                                                          fourier_domain=self.optimize_in_fourier_domain)
 
@@ -523,6 +530,11 @@ class CovarPoseTrainer(CovarTrainer):
                     mean_fsc = mean_fsc[:mean_gt.shape[-1]//2].mean()
                     self.training_log["mean_vol_norm_err"].append(torch.norm(mean_gt - mean_est).cpu().numpy()/torch.norm(mean_gt).cpu().numpy())
                     self.training_log["mean_vol_fsc"].append(mean_fsc.cpu().numpy())
+                if(self.gt_data.contrasts is not None and self.get_pose_module().use_contrast):
+                    cont = self.get_pose_module().get_contrasts()
+                    cont_gt = self.gt_data.contrasts
+                    cont_mean_err = torch.norm(cont.cpu()-cont_gt,dim=1).mean().numpy()
+                    self.training_log["contrast_mean_dist"].append(cont_mean_err)
         
 
     def _get_pbar_desc(self, epoch):
@@ -532,6 +544,8 @@ class CovarPoseTrainer(CovarTrainer):
                 pbar_description += f" , mean angle dist : {self.training_log['rot_angle_dist'][-1]:.2e}"
             if(self.gt_data.offsets is not None):
                 pbar_description += f" , offset mean : {self.training_log['offsets_mean_dist'][-1]:.2e}"
+            if(self.gt_data.contrasts is not None and self.get_pose_module().use_contrast):
+                pbar_description += f" , contrast meean error: {self.training_log['contrast_mean_dist'][-1]:.2e}"
             if(self.gt_data.mean is not None):
                 pbar_description += f" , mean vol norm err : {self.training_log['mean_vol_norm_err'][-1]:.2e}"
                 pbar_description += f" , mean vol fsc : {self.training_log['mean_vol_fsc'][-1]:.2e}"

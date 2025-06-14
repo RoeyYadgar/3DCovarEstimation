@@ -62,10 +62,11 @@ def offset_to_phase_shift(offsets, resolution = None, phase_shift_grid = None):
     return phase_shift
 
 class PoseModule(torch.nn.Module):
-    def __init__(self, init_rotvecs,offsets, resolution, dtype=torch.float32):
+    def __init__(self, init_rotvecs,offsets, resolution, dtype=torch.float32, use_contrast=False):
         super().__init__()
         self.resolution = resolution
         self.dtype = dtype
+        self.use_contrast = use_contrast
         # convert to tensor if it's not already
         init_rotvecs = torch.as_tensor(init_rotvecs, dtype=dtype)
         offsets = torch.as_tensor(offsets, dtype=dtype)
@@ -79,6 +80,9 @@ class PoseModule(torch.nn.Module):
         self.rotvec.weight.data.copy_(init_rotvecs)
         self.offsets = torch.nn.Embedding(num_embeddings=n, embedding_dim=2, sparse=True,
                                           _weight=offsets)
+        if(self.use_contrast):
+            self.contrasts = torch.nn.Embedding(num_embeddings=n, embedding_dim=1, sparse=True,
+                                          _weight=torch.ones((n,1),dtype=dtype))
 
         self._init_grid(dtype)
 
@@ -107,7 +111,11 @@ class PoseModule(torch.nn.Module):
         offsets = -self.offsets(index)
         phase_shift = offset_to_phase_shift(offsets, resolution=self.resolution,
                                             phase_shift_grid=(self.phase_shift_grid_x, self.phase_shift_grid_y))
-        return pts_rot, phase_shift
+        
+        if(not self.use_contrast):
+            return pts_rot, phase_shift
+        else:
+            return pts_rot, phase_shift, self.contrasts(index)
     
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
@@ -136,6 +144,16 @@ class PoseModule(torch.nn.Module):
             with torch.no_grad():
                 self.offsets.weight[idx] = offsets
 
+    def get_contrasts(self):
+        return self.contrasts.weight.data
+    
+
+    def set_contrasts(self,contrasts,idx = None):
+        if idx is None:
+            self.contrasts.weight.data.copy_(contrasts)
+        else:
+            with torch.no_grad():
+                self.contrasts.weight[idx] = contrasts
 
     def split_module(self, permutation=None):
         '''
@@ -157,8 +175,14 @@ class PoseModule(torch.nn.Module):
         rotvecs2 = self.rotvec.weight.data[perm[1]].detach().clone()
         offsets2 = self.offsets.weight.data[perm[1]].detach().clone()
 
-        module1 = PoseModule(rotvecs1, offsets1, self.resolution, dtype=dtype)
-        module2 = PoseModule(rotvecs2, offsets2, self.resolution, dtype=dtype)
+        use_contrast = self.use_contrast
+
+        module1 = PoseModule(rotvecs1, offsets1, self.resolution, dtype=dtype,use_contrast=use_contrast)
+        module2 = PoseModule(rotvecs2, offsets2, self.resolution, dtype=dtype,use_contrast=use_contrast)
+
+        if(use_contrast):
+            module1.set_contrasts(self.contrasts.weight.data[perm[0]].detach().clone())
+            module2.set_contrasts(self.contrasts.weight.data[perm[1]].detach().clone())
 
         # Move to same device as original
         module1 = module1.to(device)
@@ -177,6 +201,9 @@ class PoseModule(torch.nn.Module):
         dtype = module1.rotvec.weight.dtype
         resolution = module1.resolution
 
+        assert module1.use_contrast == module2.use_contrast, "Both modules must have the same value for use_contrast"
+        use_contrast = module1.use_contrast
+
         # Concatenate the weights from both modules
         rotvecs = torch.cat([module1.rotvec.weight.data.detach(), module2.rotvec.weight.data.detach()], dim=0)
         offsets = torch.cat([module1.offsets.weight.data.detach(), module2.offsets.weight.data.detach()], dim=0)
@@ -185,7 +212,13 @@ class PoseModule(torch.nn.Module):
         rotvecs[permutation] = rotvecs.clone()
         offsets[permutation] = offsets.clone()
 
-        merged_module = PoseModule(rotvecs, offsets, resolution, dtype=dtype)
+        merged_module = PoseModule(rotvecs, offsets, resolution, dtype=dtype,use_contrast=use_contrast)
+
+        if(use_contrast):
+            contrats = torch.cat([module1.contrasts.weight.data.detach(), module2.contrasts.weight.data.detach()], dim=0)
+            contrats[permutation] = contrats.clone()
+            merged_module.set_contrasts(contrats)
+
         merged_module = merged_module.to(device)
         return merged_module
             
@@ -297,3 +330,9 @@ def out_of_plane_rot_error(rot1, rot2):
     angles = np.arccos(np.clip(np.sum(out_of_planes_1 * out_of_planes_2, -1), -1.0, 1.0)) * 180.0 / np.pi
 
     return angles, np.mean(angles), np.median(angles)
+
+def offset_mean_error(offsets1,offsets2,L= None):
+    mean_err = torch.norm(offsets1- offsets2,dim=1).mean()
+    if(L is not None):
+        mean_err /= L
+    return mean_err
