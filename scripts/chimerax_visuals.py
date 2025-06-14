@@ -6,6 +6,7 @@ from cov3d.utils import readVols
 from aspire.volume import Volume
 from PIL import Image
 from PIL import ImageDraw, ImageFont
+import argparse
 
 CHIMERAX_PATH = '/usr/bin/chimerax'
 
@@ -111,7 +112,10 @@ def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vo
 
     if(isinstance(volume_path,str)):
         if(os.path.isdir(volume_path)):
+            print(f'Using volumes {[v for v in os.listdir(volume_path) if ".mrc" in v]} in directory {volume_path}')
             volume_path = [os.path.join(volume_path,v) for v in os.listdir(volume_path) if '.mrc' in v]
+        elif any(char in volume_path for char in ['*', '?', '[']): #If volume is a file pattern
+            volume_path = sorted(glob.glob(volume_path))
 
     init_CXC()
     CXC.set_view(view_commands)
@@ -150,11 +154,11 @@ def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vo
         concat_images(outputs,os.path.join(output_dir,f'all_{vol_prefix}.png'),image_shape)
 
     if(create_gif):
-        #gif_output = os.path.join(output_dir,f'all_{vol_prefix}.gif')
-        #images = [Image.open(x) for x in outputs]
-        #images[0].save(gif_output, save_all=True, append_images=images[1:], duration=100, loop=0, transparency=0, disposal=2)
-        #print(f"GIF saved to {gif_output}")
-        create_gif_frames(output_dir,vol_prefix)
+        gif_output = os.path.join(output_dir,f'{vol_prefix}.gif')
+        images = [Image.open(x) for x in outputs]
+        images[0].save(gif_output, save_all=True, append_images=images[1:], duration=500, loop=0, transparency=0, disposal=2)
+        print(f"GIF saved to {gif_output}")
+        #create_gif_frames(output_dir,vol_prefix)
 
     if(remove_individual_figures):
         for f in outputs:
@@ -223,6 +227,24 @@ def put_text_on_image(image_path,text,output_path):
     draw.text((x, y), text, fill="black", font=font)
     img.save(output_path)
 
+
+def parse_view(view_path):
+    with open(view_path, 'r') as f:
+        view = [line.strip() for line in f if line.strip()]
+    return view
+
+
+def generate_trajectory_gif(volume_path,output_dir=None,view_path=None,vol_level=None):
+
+    if(output_dir is None):
+        if(isinstance(volume_path,list)):
+            output_dir = os.path.commonpath(volume_path)
+        else:
+            output_dir = os.path.dirname(volume_path) if (os.path.isdir(volume_path)) else os.path.dirname(os.path.dirname(volume_path))
+
+    view = parse_view(view_path)
+
+    save_volumes_figure(volume_path=volume_path,output_dir=output_dir,view_commands=view,level=vol_level,create_gif=True,vol_prefix='trajectory')
 
 def discrete_sim():
     view = ['lighting soft intensity -0.5']
@@ -362,4 +384,17 @@ if __name__ == "__main__":
     #igg_1d()
     #covar_fsc_simulation()
     #empiar10076()
-    igg_1d_2()
+    #igg_1d_2()
+    parser = argparse.ArgumentParser(description="Generate trajectory GIF from volumes using ChimeraX.")
+    parser.add_argument('volume_path', type=str, nargs='+', help='Path to volume files (can include wildcards or multiple files).')
+    parser.add_argument('view_path', type=str, help='Path to ChimeraX view commands file.')
+    parser.add_argument('--vol-level', type=float, required=True, help='Volume level for visualization.')
+    parser.add_argument('--output-dir', type=str, default=None, help='Directory to save output GIF and images.')
+
+    args = parser.parse_args()
+    generate_trajectory_gif(
+        volume_path=args.volume_path if (len(args.volume_path) > 1) else args.volume_path[0],
+        output_dir=args.output_dir,
+        view_path=args.view_path,
+        vol_level=args.vol_level
+    )
