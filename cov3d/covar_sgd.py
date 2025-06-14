@@ -8,7 +8,7 @@ from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
-from cov3d.poses import PoseModule,out_of_plane_rot_error,estimate_image_offsets_newton
+from cov3d.poses import PoseModule,out_of_plane_rot_error,offset_mean_error,estimate_image_offsets_newton
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
 from cov3d.dataset import create_dataloader,get_dataloader_batch_size
 
@@ -327,6 +327,11 @@ class CovarPoseTrainer(CovarTrainer):
         offsets_list = [torch.zeros_like(offsets) for _ in range(torch.distributed.get_world_size())]
         torch.distributed.all_gather(offsets_list,offsets)
 
+        if(self.get_pose_module().use_contrast):
+            contrasts = self.get_pose_module().get_contrasts()
+            contrasts_list = [torch.zeros_like(contrasts) for _ in range(torch.distributed.get_world_size())]
+            torch.distributed.all_gather(contrasts_list,contrasts)
+
         idx_to_update = torch.zeros_like(self._updated_idx)
         for i in range(len(updated_idx_list)):
             #If idx_to_update is already set to 1, we don't need to update it again (this means that a previous node has already updated this index (can happen when len(dataset) % world_size != 0))
@@ -336,6 +341,8 @@ class CovarPoseTrainer(CovarTrainer):
             #rotvecs and offsets point to the same memory location in the pose module - so we can just update them here
             rotvecs[updated_idx_list[i] > 0] = rotvec_list[i][updated_idx_list[i] > 0]
             offsets[updated_idx_list[i] > 0] = offsets_list[i][updated_idx_list[i] > 0]
+            if(self.get_pose_module().use_contrast):
+                contrasts[updated_idx_list[i] > 0] = contrasts_list[i][updated_idx_list[i] > 0]
 
         #Reset updated_idx
         self._updated_idx = torch.zeros_like(self._updated_idx)
@@ -522,7 +529,7 @@ class CovarPoseTrainer(CovarTrainer):
                 if(self.gt_data.offsets is not None):
                     offsets_est = self.get_pose_module().get_offsets()
                     offsets_gt = self.gt_data.offsets
-                    self.training_log["offsets_mean_dist"].append(torch.norm(offsets_est.cpu()-offsets_gt,dim=1).mean().numpy()/self.covar.resolution)
+                    self.training_log["offsets_mean_dist"].append(offset_mean_error(offsets_est.cpu(),offsets_gt,L=self.covar.resolution))
                 if(self.gt_data.mean is not None):
                     mean_gt = self.gt_data.mean.to(self.device)
                     mean_est = self.get_mean_module().get_volume_spatial_domain()
@@ -851,7 +858,7 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         if(not optimize_pose):
             trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath,gt_data=gt_data)
         else:
-            pose = PoseModule.merge_modules(pose1,pose2,permutation)
+            pose.update_from_modules(pose1,pose2,permutation)
             #TODO: merge mean module instead of taking the first one
             trainer_final = CovarPoseTrainer(covar_model,full_dataloader,covar_model.device,mean_model,pose,savepath,gt_data=gt_data)
 

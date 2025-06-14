@@ -8,7 +8,7 @@ from cov3d.utils import *
 from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset,GTData
 from cov3d.covar import Covar,CovarFourier,Mean
-from cov3d.poses import PoseModule,pose_cryoDRGN2APIRE,pose_ASPIRE2cryoDRGN
+from cov3d.poses import PoseModule,pose_cryoDRGN2APIRE,pose_ASPIRE2cryoDRGN,out_of_plane_rot_error,offset_mean_error
 from cov3d.covar_distributed import trainParallel
 from cov3d.wiener_coords import latentMAP
 
@@ -223,6 +223,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
                     volume_mask=torch.tensor(mask.asnumpy()),
                     upsampling_factor=upsampling_factor)
         pose = PoseModule(dataset.rot_vecs,dataset.offsets,L)
+        init_pose = (torch.tensor(Rotation.from_rotvec(dataset.rot_vecs.numpy())),dataset.offsets.clone())
     else:
         mean = None
         pose = None
@@ -238,11 +239,19 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
             gt_data=gt_data,**default_training_kwargs)
     
     if(optimize_pose):
+        pose = pose.cpu()
+        #Print how signficat the refined pose was changed from the given initial pose
+        rot_change = out_of_plane_rot_error(torch.tensor(Rotation.from_rotvec(pose.get_rotvecs().numpy())),
+                                            init_pose[0])[1]
+        print(f'Rotation out-of-plane change: {rot_change} degrees')
+        offset_change = offset_mean_error(pose.get_offsets(),init_pose[1])
+        print(f'Image offset change: {offset_change} pixels')
+        
         #Update dataset with estimated pose and apply preprocessing
-        #TODO: output pose to file
         dataset.pts_rot = dataset.compute_pts_rot(pose.get_rotvecs().cpu())
         dataset.preprocess_from_modules(mean,pose)
 
+        #Dump refined pose and mean volume
         refined_pose = pose_ASPIRE2cryoDRGN(Rotation.from_rotvec(pose.get_rotvecs().cpu().numpy()).matrices,
                                             pose.get_offsets().cpu().numpy(),L)
         with open(path.join(output_dir,'refined_poses.pkl'),'wb') as fid:

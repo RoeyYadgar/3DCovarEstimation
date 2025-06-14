@@ -221,7 +221,31 @@ class PoseModule(torch.nn.Module):
 
         merged_module = merged_module.to(device)
         return merged_module
-            
+    
+    def update_from_modules(self,module1, module2, permutation):
+        """
+        Updates module from two sub module instances.
+        reordered according to the given permutation.
+        """
+
+        assert module1.use_contrast == module2.use_contrast, "Both modules must have the same value for use_contrast"
+        use_contrast = module1.use_contrast
+
+        # Concatenate the weights from both modules
+        rotvecs = torch.cat([module1.rotvec.weight.data.detach(), module2.rotvec.weight.data.detach()], dim=0)
+        offsets = torch.cat([module1.offsets.weight.data.detach(), module2.offsets.weight.data.detach()], dim=0)
+
+        # Reorder according to permutation
+        rotvecs[permutation] = rotvecs.clone()
+        offsets[permutation] = offsets.clone()
+
+        self.set_rotvecs(rotvecs)
+        self.set_offsets(offsets)
+
+        if(use_contrast):
+            contrats = torch.cat([module1.contrasts.weight.data.detach(), module2.contrasts.weight.data.detach()], dim=0)
+            contrats[permutation] = contrats.clone()
+            self.set_contrasts(contrats)            
 
 
 def estimate_image_offsets_correlation(images, reference, upsampling=4,mask=None):
@@ -335,4 +359,4 @@ def offset_mean_error(offsets1,offsets2,L= None):
     mean_err = torch.norm(offsets1- offsets2,dim=1).mean()
     if(L is not None):
         mean_err /= L
-    return mean_err
+    return mean_err.item()
