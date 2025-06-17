@@ -307,6 +307,9 @@ class CovarPoseTrainer(CovarTrainer):
         if(self.offset_est_method != 'SGD'):
             for param in self.get_pose_module().offsets.parameters():
                 param.requires_grad = False
+            if(self.get_pose_module().use_contrast):
+                for param in self.get_pose_module().contrasts.parameters():
+                    param.requires_grad = False
 
     def get_mean_module(self):
         return self.mean if not self.isDDP else self.mean.module
@@ -363,6 +366,14 @@ class CovarPoseTrainer(CovarTrainer):
 
 
             projected_eigenvecs = vol_forward(self._covar(dummy_var=None).detach(),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain)
+
+            if(self.get_pose_module().use_contrast):
+                latent_coords,_,_ = compute_latentMAP_batch(images-mean_forward,projected_eigenvecs,self.dataset.noise_var)
+                
+                predicted_images = mean_forward + torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1),dim=1)
+
+                contrast_est = (torch.sum(predicted_images.conj() * images,dim=(-1,-2)) / torch.norm(predicted_images,dim=(-1,-2))**2).real
+                self.get_pose_module().set_contrasts(contrast_est.unsqueeze(-1),idx=idx)
 
             def obj_func(phase_shifted_image):
                 preprocessed_images = phase_shifted_image - mean_forward
