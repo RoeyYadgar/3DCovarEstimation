@@ -95,21 +95,16 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
     pbar = tqdm(total=math.ceil(coords.shape[0]/batch_size), desc=f'Computing latent coordinates')
     for i in range(0,coords.shape[0],batch_size):
         images,pts_rot,filter_indices,_ = dataset[start_ind + i:min(start_ind + i + batch_size,end_ind)]
-        num_ims = images.shape[0]
         pts_rot = pts_rot.to(device)
-        images = images.to(device).reshape(num_ims,-1)
+        images = images.to(device)
         batch_filters = filters[filter_indices].to(device) if len(filters) > 0 else None
         nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
         
         eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters)
 
-        eigen_forward = eigen_forward.reshape((num_ims,rank,-1))
+        latent_coords,m,_ = compute_latentMAP_batch(images,eigen_forward,dataset.noise_var,eigenvals_inv)
+        coords[i:(i+batch_size)] = latent_coords.squeeze(-1)
 
-        m = torch.bmm(eigen_forward,eigen_forward.transpose(-1,-2)) / dataset.noise_var + eigenvals_inv
-        im_coor = torch.bmm(eigen_forward,images.unsqueeze(-1)) / dataset.noise_var
-        #There can be numerical instability with inverting the matrix m due to small entries - correct it here by normalizing the matrix by trace(m)/size(m) before inversion
-        mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
-        coords[i:(i+batch_size)] = torch.linalg.solve(m/mean_m.reshape(-1,1,1),im_coor).squeeze(-1) / mean_m.reshape(-1,1)
         if(return_coords_covar):
             coords_covar_inv[i:(i+batch_size)] = m.to('cpu')
 
@@ -123,6 +118,24 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
     else:
         return coords,coords_covar_inv
     
+
+def compute_latentMAP_batch(images,eigen_forward,noise_var,eigenvals_inv = None):
+    n = images.shape[0]
+    r = eigen_forward.shape[1]
+    if(eigenvals_inv is None):
+        eigenvals_inv = torch.eye(r,device=eigen_forward.device,dtype=eigen_forward.dtype)
+    images = images.reshape(n,-1,1)
+    eigen_forward = eigen_forward.reshape(n,r,-1)
+
+    m = eigen_forward.conj() @ eigen_forward.transpose(1,2) / noise_var + eigenvals_inv
+    
+    projected_images = torch.matmul(eigen_forward.conj(),images) / noise_var #size (batch, rank,1)
+
+    #There can be numerical instability with inverting the matrix m due to small entries - correct it here by normalizing the matrix by trace(m)/size(m) before inversion
+    mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1])
+    latent_coords = torch.linalg.solve(m/mean_m.reshape(-1,1,1),projected_images) / mean_m.reshape(-1,1,1)#size (batch, rank,1)
+
+    return latent_coords,m,projected_images
 
 def mahalanobis_distance(coords,coords_mean,coords_covar_inv):
     mean_centered_coords = coords - coords_mean

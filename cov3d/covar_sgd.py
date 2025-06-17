@@ -11,6 +11,7 @@ from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_sh
 from cov3d.poses import PoseModule,out_of_plane_rot_error,offset_mean_error,estimate_image_offsets_newton
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
 from cov3d.dataset import create_dataloader,get_dataloader_batch_size
+from cov3d.wiener_coords import compute_latentMAP_batch
 
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
@@ -745,18 +746,9 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     return cost_val
 
 def raw_cost_maximum_liklihood_fourier_domain(projected_eigenvecs,images,noise_var,apply_mean_const_term=False,mean_aggregate=True):
-    batch_size = images.shape[0]
-    rank = projected_eigenvecs.shape[1]
     
-    images = images.reshape((batch_size,-1,1))
-    projected_eigenvecs = projected_eigenvecs.reshape((batch_size,rank,-1))
-
-    projcted_images = torch.matmul(projected_eigenvecs.conj(),images) #size (batch, rank,1)
-
-    m = torch.eye(rank,device=projected_eigenvecs.device,dtype=projected_eigenvecs.dtype).unsqueeze(0) + projected_eigenvecs.conj() @ projected_eigenvecs.transpose(1,2) / noise_var
-    mean_m = (m.diagonal(dim1=-2,dim2=-1).abs().sum(dim=1)/m.shape[-1]) 
-    projcted_images_transformed = torch.linalg.solve(m/mean_m.reshape(-1,1,1),projcted_images) / mean_m.reshape(-1,1,1) #size (batch, rank,1)
-    ml_exp_term = - 1/(noise_var**2) * torch.matmul(projcted_images.transpose(1,2).conj(),projcted_images_transformed).squeeze()
+    latent_coords, m,projected_images = compute_latentMAP_batch(images,projected_eigenvecs,noise_var)
+    ml_exp_term = -torch.matmul(projected_images.transpose(1,2).conj(),latent_coords).squeeze()
 
     ml_noise_term = torch.logdet(m)  #+(L**2) * torch.log(torch.tensor(noise_var)) term which is constant
     if(apply_mean_const_term):
