@@ -282,6 +282,8 @@ class CovarPoseTrainer(CovarTrainer):
                 self.training_log.update({
                     "offsets_mean_dist" : []
                     })
+            if(self.gt_data.contrasts is not None and self.get_pose_module().use_contrast):
+                self.training_log.update({"contrast_mean_dist" : []})
             if(self.gt_data.mean is not None):
                 self.training_log.update({
                     "mean_vol_norm_err" : [],
