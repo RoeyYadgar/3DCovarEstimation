@@ -314,7 +314,7 @@ class CovarPoseTrainer(CovarTrainer):
     def get_mean_module(self):
         return self.mean if not self.isDDP else self.mean.module
     
-    def get_pose_module(self):
+    def get_pose_module(self) -> PoseModule:
         return self.pose
     
     def _ddp_sync_pose_module(self):
@@ -373,6 +373,7 @@ class CovarPoseTrainer(CovarTrainer):
                 predicted_images = mean_forward + torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1),dim=1)
 
                 contrast_est = (torch.sum(predicted_images.conj() * images,dim=(-1,-2)) / torch.norm(predicted_images,dim=(-1,-2))**2).real
+                contrast_est = contrast_est.clamp(0.5,1.5)
                 self.get_pose_module().set_contrasts(contrast_est.unsqueeze(-1),idx=idx)
 
             def obj_func(phase_shifted_image):
@@ -460,7 +461,7 @@ class CovarPoseTrainer(CovarTrainer):
         with open(log_file, "a") as f:
             f.write(f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB\n")
 
-        if(epoch % self.mean_update_frequency == 0):
+        if(epoch % self.mean_update_frequency == self.mean_update_frequency - 1):
             if(self.offset_est_method == 'Newton'):
                 self.correct_offsets()
             self._ddp_sync_pose_module()
