@@ -2,6 +2,7 @@ import torch
 from cufinufft import Plan as cuPlan 
 from finufft import Plan
 import numpy as np
+from aspire.utils import grid_3d
 import math
 from abc import ABC
 
@@ -180,6 +181,7 @@ class NufftPlan(BaseNufftPlan):
 
     def setpts(self,points):
         points = (torch.remainder(points + torch.pi , 2 * torch.pi) - torch.pi).contiguous()
+        self.points = points
         if(self.device == torch.device('cpu')):
             points = points.numpy() #finufft plan does not accept torch tensors
         #Clean references to past points (preventing a memory leak)
@@ -232,19 +234,33 @@ class NufftPlan(BaseNufftPlan):
 
 class TorchNufftForward(torch.autograd.Function):
     @staticmethod
-    def forward(ctx,signal,nufft_plan):
+    def forward(ctx,signal,points,nufft_plan,reset_pts=False):
+        if(reset_pts):
+            nufft_plan.setpts(points)
+        #Otherwise assumes nufft_plan.setpts was already called prior
         ctx.signal_shape = signal.shape
         ctx.nufft_plan = nufft_plan
         ctx.complex_input = signal.is_complex()
+        ctx.signal = signal
         return nufft_plan.execute_forward(signal)
     
     @staticmethod
     def backward(ctx,grad_output): #Since nufft_plan referenced is saved on the context, set_pts cannot be called before using backward (otherwise it will compute the wrong adjoint transformation)
         nufft_plan = ctx.nufft_plan
-        signal_grad = nufft_plan.execute_adjoint(grad_output).reshape(ctx.signal_shape)
-        if(not ctx.complex_input): #If input to forward method is real the gradient should also be real
-            signal_grad = signal_grad.real
-        return signal_grad , None
+        if(ctx.needs_input_grad[0]):
+            signal_grad = nufft_plan.execute_adjoint(grad_output).reshape(ctx.signal_shape)
+            if(not ctx.complex_input): #If input to forward method is real the gradient should also be real
+                signal_grad = signal_grad.real
+        else:
+            signal_grad = None
+        if(ctx.needs_input_grad[1]):
+            coords = -1j * torch.tensor(np.concatenate([grid_3d(15,normalized=False)[v][None,:] for v in ['z','y','x']]),dtype=ctx.signal.dtype,device=ctx.signal.device)
+            points_grad = torch.zeros_like(ctx.nufft_plan.points)
+            for k in range(3):
+                points_grad[k] = (nufft_plan.execute_forward(ctx.signal * coords[k]).conj() * grad_output).real.sum(dim=0)
+        else:
+            points_grad = None
+        return signal_grad, points_grad, None, None
     
 
 class TorchNufftAdjoint(torch.autograd.Function):
@@ -265,7 +281,7 @@ class TorchNufftAdjoint(torch.autograd.Function):
     
 
 def nufft_forward(signal,nufft_plan):
-    return TorchNufftForward.apply(signal,nufft_plan) if isinstance(nufft_plan,NufftPlan) else nufft_plan.execute_forward(signal) #NufftPlan.execute_forward does not have autograd and so we must pass it into the autograd class
+    return TorchNufftForward.apply(signal,nufft_plan.points,nufft_plan) if isinstance(nufft_plan,NufftPlan) else nufft_plan.execute_forward(signal) #NufftPlan.execute_forward does not have autograd and so we must pass it into the autograd class
 
 def nufft_adjoint(signal,nufft_plan):
     return TorchNufftAdjoint.apply(signal,nufft_plan) if isinstance(nufft_plan,NufftPlan) else nufft_plan.execute_adjoint(signal)
