@@ -121,7 +121,34 @@ class NufftPlanDiscretized(BaseNufftPlan):
         )[0]
         return torch.complex(adjoint_signal[:,0],adjoint_signal[:,1])
 
-            
+    def execute_adjoint_unaggregated(self, signal):
+        """
+        Adjoint of the NUFFT projection operator.
+        Takes sampled Fourier values and maps them back to a 3D Fourier volume.
+        Output shape: (n, L, L, L)
+        """
+        assert self.use_half_grid == False, "half_grid not supported with adjoint operator"
+
+        L = self.sz[0]
+        volume_L = L * self.upsample_factor
+        
+        # Split complex signal into real and imag channels
+        signal_real = signal.real
+        signal_imag = signal.imag
+        signal_cat = torch.cat((signal_real.unsqueeze(0), signal_imag.unsqueeze(0)), dim=0)  # shape: (2,n, L, L) or (or (2,n,L/2,L) if self.use_half_grid=True)
+        signal_cat = signal_cat.unsqueeze(0)
+
+        dummy_input = torch.ones(signal.shape[0],2,volume_L,volume_L,volume_L,dtype=signal_cat.dtype,device=signal.device,requires_grad=True)
+        dummy_output = torch.nn.functional.grid_sample(input=dummy_input,grid=self.points.transpose(0,1),mode=self.mode,align_corners=True)
+
+        adjoint_signal = torch.autograd.grad(
+            outputs=dummy_output,
+            inputs=dummy_input,
+            grad_outputs=signal_cat.transpose(0,2),
+            retain_graph=False,
+            create_graph=False
+        )[0]
+        return torch.complex(adjoint_signal[:,0],adjoint_signal[:,1])
 
     
 class NufftPlan(BaseNufftPlan):
