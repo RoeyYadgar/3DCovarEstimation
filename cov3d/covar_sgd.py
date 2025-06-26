@@ -12,6 +12,7 @@ from cov3d.poses import PoseModule,out_of_plane_rot_error,offset_mean_error,esti
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
 from cov3d.dataset import create_dataloader,get_dataloader_batch_size
 from cov3d.wiener_coords import compute_latentMAP_batch
+from cov3d.newton_opt import BlockwiseLBFGS
 
 class CovarTrainer():
     def __init__(self,covar,train_data,device,save_path = None,gt_data=None,training_log_freq = 50):
@@ -294,6 +295,7 @@ class CovarPoseTrainer(CovarTrainer):
         self.mean_fourier_reg = None
         self.scheduler_patiece = 3
         self.mean_est_method = 'Reconstruction'
+        #self.mean_est_method = 'wefwe'
         self.offset_est_method = 'Newton'
         self.mean_update_frequency = 5
 
@@ -377,6 +379,8 @@ class CovarPoseTrainer(CovarTrainer):
                 self.get_pose_module().set_contrasts(contrast_est.unsqueeze(-1),idx=idx)
 
             def obj_func(phase_shifted_image):
+                if(not self.optimize_in_fourier_domain):
+                    phase_shifted_image = centered_ifft2(phase_shifted_image).real
                 preprocessed_images = phase_shifted_image - mean_forward
                 #TODO: handle different coss functions
 
@@ -502,7 +506,7 @@ class CovarPoseTrainer(CovarTrainer):
 
     def restart_optimizer(self):
         super().restart_optimizer()
-        self.pose_optimizer = torch.optim.SparseAdam([{'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio * self.lr}])
+        self.pose_optimizer = BlockwiseLBFGS([{'params' : self.pose.parameters(),'lr' : 1,'step_size_limit' : 1e-1}])
 
     def compute_fourier_reg_term(self,eigenvecs):
         super().compute_fourier_reg_term(eigenvecs)

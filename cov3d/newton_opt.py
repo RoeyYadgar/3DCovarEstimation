@@ -77,4 +77,111 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
 
 
 
-        
+import torch
+from torch.optim.optimizer import Optimizer
+from collections import deque
+
+class BlockwiseLBFGS(Optimizer):
+    def __init__(self, params, lr=1.0, history_size=10,step_size_limit=None):
+        if lr <= 0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        defaults = dict(lr=lr,step_size_limit=step_size_limit)
+        super(BlockwiseLBFGS, self).__init__(params, defaults)
+
+        self.history_size = history_size
+
+        # Each param is assumed to be a single nn.Embedding
+        self.state = self._init_state()
+
+    def _init_state(self):
+        return {
+            's_history': {},  # row_id -> deque of s vectors (delta_x)
+            'y_history': {},  # row_id -> deque of y vectors (delta_grad)
+            'prev_x': {},     # row_id -> previous x vector
+            'prev_grad': {}   # row_id -> previous grad vector
+        }
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """
+        closure: a function that reevaluates the model and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        assert len(self.param_groups) == 1
+        group = self.param_groups[0]
+        param = group['params'][0]
+        lr = group['lr']
+        step_size_limit = group['step_size_limit']
+        weight = param  # n × d
+        grad = param.grad  # same shape
+
+        if grad is None:
+            return loss
+
+        n, d = weight.shape
+        device = weight.device
+        dtype = weight.dtype
+
+        # Get indices of rows that were used (i.e., got non-zero grad)
+        if hasattr(param, 'grad_indices'):  # optional if you're tracking which indices were used
+            indices = param.grad_indices
+        else:
+            indices = grad._indices()[0] if grad.is_sparse else torch.nonzero(grad.norm(dim=1), as_tuple=True)[0]
+
+        for i in indices:
+            i = i.item()
+            x_i = weight[i]
+            g_i = grad[i]
+
+            # History storage
+            s_hist = self.state['s_history'].setdefault(i, deque(maxlen=self.history_size))
+            y_hist = self.state['y_history'].setdefault(i, deque(maxlen=self.history_size))
+            x_prev = self.state['prev_x'].get(i, None)
+            g_prev = self.state['prev_grad'].get(i, None)
+
+            # Save current for next time
+            self.state['prev_x'][i] = x_i.detach().clone()
+            self.state['prev_grad'][i] = g_i.detach().clone()
+
+            if x_prev is not None and g_prev is not None:
+                s = x_i.detach() - x_prev
+                y = g_i.detach() - g_prev
+                if torch.dot(s, y) > 1e-10:  # ensure curvature condition
+                    s_hist.append(s)
+                    y_hist.append(y)
+
+            # L-BFGS two-loop recursion
+            q = g_i.detach()
+            alphas = []
+            rho_list = []
+
+            for s, y in reversed(list(zip(s_hist, y_hist))):
+                rho = 1.0 / torch.dot(y, s)
+                alpha = rho * torch.dot(s, q)
+                q = q - alpha * y
+                alphas.append(alpha)
+                rho_list.append(rho)
+
+            # Initial Hessian approximation: scalar times identity
+            if s_hist:
+                y_last = y_hist[-1]
+                s_last = s_hist[-1]
+                H0 = torch.dot(s_last, y_last) / torch.dot(y_last, y_last)
+            else:
+                H0 = 1.0
+
+            r = H0 * q
+
+            for s, y, alpha, rho in zip(s_hist, y_hist, reversed(alphas), reversed(rho_list)):
+                beta = rho * torch.dot(y, r)
+                r = r + s * (alpha - beta)
+
+            step = lr * r
+            if(step_size_limit is not None):
+                step = torch.clamp(step,-step_size_limit,step_size_limit)
+            # Apply update
+            weight[i].data -= step
+        return loss
