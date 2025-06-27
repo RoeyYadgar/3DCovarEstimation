@@ -355,12 +355,17 @@ def readVols(vols,in_list=True):
     numvols = len(volfiles)
     vol_size = Volume.load(volfiles[0]).shape[-1]
     volumes = Volume(np.zeros((numvols,vol_size,vol_size,vol_size),dtype=np.float32))
+    pixel_size = [0 for i in range(numvols)]
 
     for i,volfile in enumerate(volfiles):
-        volumes[i] = Volume.load(volfile)
+        v = Volume.load(volfile)
+        volumes[i] = v
+        pixel_size[i] = v.pixel_size
+
+    assert all(p == pixel_size[0] for p in pixel_size), "All pixel sizes must be the same"
 
     if(not in_list):
-        return Volume(np.concatenate(volumes))
+        return Volume(np.concatenate(volumes),pixel_size=pixel_size[0])
 
     return volumes
     

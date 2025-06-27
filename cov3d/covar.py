@@ -50,7 +50,7 @@ class Mean(VolumeBase):
     def __init__(self,volume_init,resolution,dtype=torch.float32,fourier_domain=False,volume_mask=None,upsampling_factor=2):
         super().__init__(resolution=resolution,dtype=dtype,fourier_domain=fourier_domain,upsampling_factor=upsampling_factor)
 
-        volume,log_volume_amplitude = self._get_mean_representation(volume_init)
+        volume,log_volume_amplitude = self._get_mean_representation(volume_init.squeeze(0).unsqueeze(0))
         self.volume = torch.nn.Parameter(volume)
         self.log_volume_amplitude = torch.nn.Parameter(log_volume_amplitude)
 

@@ -9,7 +9,7 @@ from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward
 from cov3d.dataset import CovarDataset,GTData
 from cov3d.poses import pose_ASPIRE2cryoDRGN
-from cov3d.workflow import covar_processing
+from cov3d.workflow import covar_processing,load_mask
 from cov3d.analyze import analyze
 from cov3d.utils import volsCovarEigenvec,readVols
 import os
@@ -158,9 +158,10 @@ def display_source(source,output_path,num_ims = 2,display_clean=False):
         state_inds = np.where(source.states == i)[0][:num_ims]
         clean_images = source._clean_images[state_inds].numpy() if display_clean else source.images[state_inds].asnumpy()
         for j in range(num_ims):
-            axs[(j,i)].imshow(clean_images[j],cmap='gray',vmin=im_min,vmax=im_max)
-            axs[(j,i)].set_xticks([])  # Remove x-axis ticks
-            axs[(j,i)].set_yticks([]) 
+            axs_idx = (j,i) if num_vols > 1 else j
+            axs[axs_idx].imshow(clean_images[j],cmap='gray',vmin=im_min,vmax=im_max)
+            axs[axs_idx].set_xticks([])  # Remove x-axis ticks
+            axs[axs_idx].set_yticks([]) 
     fig.savefig(output_path,bbox_inches='tight', pad_inches=0.1)
 
 
@@ -239,16 +240,8 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
                                     latent_coords=os.path.join(dir_name,'state_centers.pkl'))
 
 
-def simulate_noisy_rots(folder_name,snr,rots_std,offsets_std,L=64,r=5,no_ctf=False,vols = None,mask=None):
+def simulate_noisy_rots(folder_name,snr=None,noise_var=None,rots_std=0,offsets_std=0,L=64,r=5,n=100000,no_ctf=False,vols = None,mask=None):
     os.makedirs(folder_name,exist_ok=True)
-
-    n = 100000
-    pixel_size = 3 * 128/ L
-
-    if(not no_ctf):
-        filters = [RadialCTFFilter(defocus=d,pixel_size=pixel_size) for d in np.linspace(8e3, 2.5e4, 927)]
-    else:
-        filters = [ArrayFilter(np.ones((L,L)))]
 
     if(vols is None):
         voxels = LegacyVolume(L=int(L*0.7),C=r+1,K=64,dtype=np.float32,pixel_size=pixel_size).generate()
@@ -256,16 +249,27 @@ def simulate_noisy_rots(folder_name,snr,rots_std,offsets_std,L=64,r=5,no_ctf=Fal
         pad_width = (L - voxels.shape[1]) // 2
         padded_voxels[:, pad_width:pad_width+voxels.shape[1], pad_width:pad_width+voxels.shape[2], pad_width:pad_width+voxels.shape[3]] = voxels
         voxels = Volume(padded_voxels)
-        voxels.save(os.path.join(folder_name,'gt_vols.mrc'),overwrite=True) 
+        voxels.save(os.path.join(folder_name,'gt_vols.mrc'),overwrite=True)
+        pixel_size = 3 * 128/ L
     else:
         voxels = Volume.load(vols) if isinstance(vols,str) else readVols(vols,in_list=False)
         if(voxels.resolution > L):
             voxels = voxels.downsample(L)
+        pixel_size = voxels.pixel_size
+
+
+    if(not no_ctf):
+        #filters = [RadialCTFFilter(defocus=d,pixel_size=pixel_size) for d in np.linspace(8e3, 2.5e4, 927)]
+        filters = [RadialCTFFilter(defocus=d,pixel_size=pixel_size) for d in  np.random.lognormal(np.log(20000),0.3,size=(928))]
+    else:
+        filters = [ArrayFilter(np.ones((L,L)))]
 
     sim = SimulatedSource(n,vols=voxels,unique_filters=filters,noise_var = 0,rotations_std = rots_std,offsets_std = offsets_std)
     var = torch.var(sim._clean_images).item()    
 
-    noise_var = var / snr
+    assert (snr is None) + (noise_var is None) == 1
+    if(noise_var is None):
+        noise_var = var / snr
     sim.noise_var = noise_var
     noise_var = sim.noise_var
 
@@ -278,7 +282,7 @@ def simulate_noisy_rots(folder_name,snr,rots_std,offsets_std,L=64,r=5,no_ctf=Fal
     Volume(mean,pixel_size=pixel_size).save(os.path.join(output_dir,'mean_est.mrc'),overwrite=True)
     voxels.save(os.path.join(output_dir,'class_vols.mrc'),overwrite=True)
     vectorsGT = volsCovarEigenvec(voxels)
-    dataset = CovarDataset(sim,noise_var,mean_volume=None,mask=None,apply_preprocessing=False)
+    dataset = CovarDataset(sim,noise_var,mean_volume=mean,mask=load_mask(mask,L),apply_preprocessing=False)
     dataset.starfile = os.path.join(folder_name,'particles.star')
 
     gt_data = GTData(vectorsGT,mean,sim._rotations,sim._offsets)
@@ -297,6 +301,6 @@ def simulate_noisy_rots(folder_name,snr,rots_std,offsets_std,L=64,r=5,no_ctf=Fal
 if __name__=="__main__":
     #simulateExp('data/rank5_converges_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
     [f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,10)]
-    simulate_noisy_rots('data/pose_opt_exp',snr=0.1,rots_std = 0.1,offsets_std=0.008,r=5,
+    simulate_noisy_rots('data/pose_opt_exp_offsets_snr0.1',snr=0.1,rots_std = 0.1,offsets_std=0.008,r=5,
                         vols = [f'data/scratch_data/igg_1d/vols/128_org/{int(i):03}.mrc' for i in np.linspace(0,100,6,endpoint=False)],
-                        mask=None)
+                        mask='data/scratch_data/igg_1d/init_mask/mask.mrc')
