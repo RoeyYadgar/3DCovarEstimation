@@ -295,8 +295,8 @@ class CovarPoseTrainer(CovarTrainer):
         self.mean_fourier_reg = None
         self.scheduler_patiece = 3
         self.mean_est_method = 'Reconstruction'
-        #self.mean_est_method = 'wefwe'
         self.offset_est_method = 'Newton'
+        self.rotation_est_method = 'SGD'
         self.mean_update_frequency = 5
 
         if(self.mean_est_method != 'SGD'):
@@ -506,7 +506,10 @@ class CovarPoseTrainer(CovarTrainer):
 
     def restart_optimizer(self):
         super().restart_optimizer()
-        self.pose_optimizer = BlockwiseLBFGS([{'params' : self.pose.parameters(),'lr' : 1,'step_size_limit' : 1e-1}])
+        if(self.rotation_est_method == 'SGD'):
+            self.pose_optimizer = torch.optim.SparseAdam([{'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio * self.lr}])
+        elif(self.rotation_est_method == 'LBFGS'):
+            self.pose_optimizer = BlockwiseLBFGS([{'params' : self.pose.parameters(),'lr' : 1,'step_size_limit' : 1e-1}])
 
     def compute_fourier_reg_term(self,eigenvecs):
         super().compute_fourier_reg_term(eigenvecs)
@@ -774,6 +777,28 @@ def raw_cost_maximum_liklihood_fourier_domain(projected_eigenvecs,images,noise_v
     cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real if mean_aggregate else 0.5*(ml_exp_term + ml_noise_term).real
 
     return cost_val
+
+
+def raw_cost_posterior_maximum_liklihood_fourier_domain(projected_eigenvecs,images,noise_var,apply_mean_const_term=False,mean_aggregate=True):
+    latent_coords, m, _ = compute_latentMAP_batch(images,projected_eigenvecs,noise_var)
+
+    projected_eigenvecs = projected_eigenvecs.reshape(m.shape[0],m.shape[-1],-1)
+    images = images.reshape(m.shape[0],-1,1)
+    images = images - projected_eigenvecs.transpose(1,2) @ latent_coords
+
+
+    latent_coords,m_posterior,projected_images = compute_latentMAP_batch(images,projected_eigenvecs,noise_var,eigenvals_inv=m)
+
+    ml_exp_term = 1/noise_var * torch.norm(images,dim=(1,2)) ** 2 -torch.matmul(projected_images.transpose(1,2).conj(),latent_coords).squeeze()
+
+    ml_noise_term = torch.logdet(m_posterior) - torch.logdet(m)  #+(L**2) * torch.log(torch.tensor(noise_var)) term which is constant
+    
+    #ml_noise_term += (L**2 - rank) * torch.log(noise_var)
+
+    cost_val = 0.5*torch.mean(ml_exp_term + ml_noise_term).real if mean_aggregate else 0.5*(ml_exp_term + ml_noise_term).real
+
+    return cost_val
+
 
 def frobeniusNorm(vecs):
     #Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
