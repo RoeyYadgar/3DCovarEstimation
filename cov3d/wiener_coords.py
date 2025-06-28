@@ -35,7 +35,7 @@ def wiener_coords(dataset,eigenvecs,eigenvals,batch_size = 1024,start_ind = None
         pts_rot = pts_rot.to(device)
         images = images.to(device).reshape(num_ims,-1)
         batch_filters = filters[filter_indices].to(device) if len(filters) > 0 else None
-        nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        nufft_plans.setpts(pts_rot)
         
         eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters)
         if(return_eigen_forward):
@@ -98,7 +98,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
         pts_rot = pts_rot.to(device)
         images = images.to(device)
         batch_filters = filters[filter_indices].to(device) if len(filters) > 0 else None
-        nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        nufft_plans.setpts(pts_rot)
         
         eigen_forward = vol_forward(eigenvecs,nufft_plans,batch_filters)
 

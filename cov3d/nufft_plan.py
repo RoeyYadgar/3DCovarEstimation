@@ -37,15 +37,22 @@ class NufftPlanDiscretized(BaseNufftPlan):
     Uses pytorch's `grid_sample` function to interpolate from the fourier tranform of the given volume.
     Assumes input volume is already given in frequency domain.
     """
-    def __init__(self,sz,upsample_factor=1,mode='bilinear',use_half_grid = True):
+    def __init__(self,sz,upsample_factor=1,mode='bilinear',use_half_grid = False):
+        assert use_half_grid == False, "half_grid not supported with NufftPlanDiscretized" #TODO: fix issue with use_half_grid and cropped nufft points
         self.sz = sz
         self.upsample_factor = upsample_factor
         self.mode = mode
         self.use_half_grid = use_half_grid
 
     def setpts(self,points):
+        """
+        points - (N,3,L,L)
+        """
         L = self.sz[0]
-        self.points = points.transpose(-2,-1).reshape(1,-1,L,L,3)
+
+        #The size points could be different if we want to compute a cropped nufft points
+        self.points_L = int(points.shape[-1] ** 0.5)
+        self.points = points.transpose(-2,-1).reshape(1,-1,self.points_L,self.points_L,3)
         self.points = self.points.flip(-1) #grid_sample uses xyz convention unlike the zyx given by aspire's `rotated_grids`
         self.points = get_half_fourier_grid(self.points,(2,3)) if self.use_half_grid else self.points
 
@@ -62,7 +69,7 @@ class NufftPlanDiscretized(BaseNufftPlan):
         """
         Assumes volume is given in fourier domain with shape (N,L,L,L) either as complex tensor or as tuple pair of real and imag tensors
         """
-        L = self.sz[0]
+        L = self.points_L
         #For some reason grid_sample does not support complex data. Instead the real and imaginary parts are splitted into different 'channels'
         if(isinstance(volume,tuple)):
             volume_real = volume[0].unsqueeze(1)
@@ -71,7 +78,7 @@ class NufftPlanDiscretized(BaseNufftPlan):
             volume = volume.unsqueeze(1)
             volume_real = volume.real
             volume_imag = volume.imag
-        volume_L = L*self.upsample_factor #Size of volume can be different than the L since might have been upsampled (or downsampled)
+        volume_L = volume_real.shape[-1] #Size of volume can be different than the L since might have been upsampled (or downsampled)
         volume_real_imag_split = torch.cat((volume_real,volume_imag),dim=1).reshape(-1,volume_L,volume_L,volume_L) #Shape of (N*2,volume_L,volume_L,volume_L)
         #Grid sample's batch is used when we need to sample different volumes with different grids, here however we want to sample all volumes with different grids so we use the grid_sample channels instead.
         output = torch.nn.functional.grid_sample(input=volume_real_imag_split.unsqueeze(0),grid=self.points,mode=self.mode,align_corners=True) #Shape of (1,N*2,n,L,L) (or (1,N*2,n,L/2,L) if self.use_half_grid=True)
@@ -180,6 +187,10 @@ class NufftPlan(BaseNufftPlan):
 
 
     def setpts(self,points):
+        """
+        points - (N,3,...)
+        """
+        points = points.transpose(0,1).reshape((3,-1))
         points = (torch.remainder(points + torch.pi , 2 * torch.pi) - torch.pi).contiguous()
         self.points = points
         if(self.device == torch.device('cpu')):
