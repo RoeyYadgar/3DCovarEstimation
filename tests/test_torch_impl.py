@@ -42,7 +42,7 @@ class TestTorchImpl(unittest.TestCase):
             unique_filters=[RadialCTFFilter(defocus=d,pixel_size=3) for d in np.linspace(8e3, 2.5e4, 7)],
             noise_adder=WhiteNoiseAdder(noise_var)
         )
-        self.dataset = CovarDataset(self.sim,noise_var=noise_var,mean_volume=Volume(np.zeros((self.img_size,)*3,dtype=np.float32)))
+        self.dataset = CovarDataset(self.sim,noise_var=noise_var,apply_preprocessing=False)
         self.vectorsGT = torch.tensor(volsCovarEigenvec(self.vols))
         rots = self.sim.rotations[:]
         pts_rot = rotated_grids(self.img_size,rots)
@@ -61,12 +61,12 @@ class TestTorchImpl(unittest.TestCase):
 
 
         vols = torch.randn((rank,self.img_size,self.img_size,self.img_size),dtype = torch.float32,requires_grad = True,device=self.device)
-        images,pts_rot,filter_inds = self.dataset[:num_ims]
+        images,pts_rot,filter_inds,_ = self.dataset[:num_ims]
         pts_rot = pts_rot.to(self.device)
         images = images.to(self.device)
         filters = self.dataset.unique_filters[filter_inds].to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
-        plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        plan.setpts(pts_rot)
 
         cost_val = cost(vols,images,plan,filters,noise_var,reg_scale = reg)
         cost_val.backward()
@@ -102,7 +102,7 @@ class TestTorchImpl(unittest.TestCase):
         vols = torch.tensor(LegacyVolume(L=self.img_size,C=rank,dtype=np.float32,).generate().asnumpy().reshape(rank,self.img_size,self.img_size,self.img_size),dtype=torch.float32,requires_grad=True,device=self.device)
 
         plan = nufft_plan.NufftPlan((self.img_size,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
-        plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        plan.setpts(pts_rot)
 
         images = torch.zeros(num_ims,self.img_size,self.img_size,device = self.device,dtype=torch.float32)
         for i in range(num_ims):
@@ -121,7 +121,7 @@ class TestTorchImpl(unittest.TestCase):
         
 
         plan = nufft_plan.NufftPlan((img_size_ds,)*3,batch_size = rank,dtype = torch.float32,device=self.device)
-        plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        plan.setpts(pts_rot)
 
 
         images_ds = torch.zeros(num_ims,img_size_ds,img_size_ds,device = self.device,dtype=torch.float32)
@@ -201,9 +201,8 @@ class TestTorchImpl(unittest.TestCase):
         #covar = Covar(self.img_size,rank=rank,upsampling_factor=upsampling_factor,vectors=torch.tensor(self.vols[:rank].asnumpy()))
         covar = Covar(self.img_size,rank=rank,upsampling_factor=upsampling_factor)
         
-        ims,pts_rot,filter_inds = self.dataset[:batch_size]
+        ims,pts_rot,filter_inds,_ = self.dataset[:batch_size]
         filters = self.dataset.unique_filters[filter_inds]
-        pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
 
         vectorsGT_rpsd = rpsd(*self.vectorsGT.reshape((-1,self.img_size,self.img_size,self.img_size)))
         fourier_reg = (self.dataset.noise_var) / (torch.mean(expand_fourier_shell(vectorsGT_rpsd,self.img_size,3),dim=0))
@@ -221,9 +220,8 @@ class TestTorchImpl(unittest.TestCase):
         #Fourier domain cost
         fourier_data = self.dataset.copy()
         fourier_data.to_fourier_domain()
-        ims,pts_rot,filter_inds = fourier_data[:batch_size]
+        ims,pts_rot,filter_inds,_ = fourier_data[:batch_size]
         filters = fourier_data.unique_filters[filter_inds]
-        pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
 
         fourier_reg = (fourier_data.noise_var) / (torch.mean(expand_fourier_shell(vectorsGT_rpsd,self.img_size,3),dim=0))
         fourier_reg_radial = average_fourier_shell(fourier_reg) / (upsampling_factor ** 3)
@@ -272,9 +270,8 @@ class TestTorchImpl(unittest.TestCase):
         rank = 4
         upsampling_factor = 1
         covar = Covar(self.img_size,rank=rank,upsampling_factor=upsampling_factor)
-        ims,pts_rot,filter_inds = self.dataset[:batch_size]
+        ims,pts_rot,filter_inds,_ = self.dataset[:batch_size]
         filters = self.dataset.unique_filters[filter_inds]
-        pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
         plans = nufft_plan.NufftPlan((self.img_size,)*3,batch_size=rank)
         plans.setpts(pts_rot)
         efficient_cost = cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var*100)
@@ -284,14 +281,15 @@ class TestTorchImpl(unittest.TestCase):
         naive_cost = naive_cost_maximum_liklihood(covar.vectors,ims,plans,filters,self.dataset.noise_var*100)
         naive_cost.backward()
         grad_naive = covar.vectors.grad.clone()
+        print(naive_cost)
+        print(efficient_cost)
         torch.testing.assert_close(naive_cost,efficient_cost, rtol=5e-3,atol=5e-3)
         torch.testing.assert_close(grad_efficient,grad_naive, rtol=5e-3,atol=5e-3)
 
     
         self.dataset.to_fourier_domain()
-        ims,pts_rot,filter_inds = self.dataset[:batch_size]
+        ims,pts_rot,filter_inds,_ = self.dataset[:batch_size]
         filters = self.dataset.unique_filters[filter_inds]
-        pts_rot = pts_rot.transpose(0,1).reshape((3,-1))
         plans = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=upsampling_factor,mode='bilinear')
         plans.setpts(pts_rot)
         
