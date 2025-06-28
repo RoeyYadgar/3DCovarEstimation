@@ -90,7 +90,7 @@ class CovarDataset(Dataset):
             mask = mean_module.get_volume_mask()
             mean_volume = mean_module(None)
             idx = torch.arange(min(batch_size,len(self)),device=device)
-            nufft_plan.setpts(pose_module(idx)[0].transpose(0,1).reshape((3,-1)))
+            nufft_plan.setpts(pose_module(idx)[0])
             mask_threshold = get_mask_threshold(mask,nufft_plan) if mask is not None else 0
             pbar = tqdm(total=np.ceil(len(self)/batch_size), desc=f'Applying preprocessing on dataset images')
             for i in range(0,len(self),batch_size): 
@@ -151,7 +151,7 @@ class CovarDataset(Dataset):
             pts_rot = pts_rot.to(device)
             filters = self.unique_filters[filter_indices].to(device) if self.unique_filters is not None else None
 
-            nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+            nufft_plan.setpts(pts_rot)
 
             gain_tensor += im_backward(torch.complex(filters,torch.zeros_like(filters)),nufft_plan,filters,fourier_domain=True).squeeze().abs()
 

@@ -86,7 +86,7 @@ class SimulatedSource():
                 filter_indices = self.filter_indices[batch_ind]
                 filters = unique_filters[filter_indices].to(device)
 
-                nufft_plan.setpts(ptsrot.transpose(0,1).reshape((3,-1)))
+                nufft_plan.setpts(ptsrot)
                 projected_volume = vol_forward(volumes[i].unsqueeze(0),nufft_plan,filters).squeeze(1)
 
                 clean_images[batch_ind] = projected_volume.cpu()

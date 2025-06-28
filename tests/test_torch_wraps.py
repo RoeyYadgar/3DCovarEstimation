@@ -37,8 +37,7 @@ class TestTorchWraps(unittest.TestCase):
         )
 
         rots = self.sim.rotations[:]
-        pts_rot = rotated_grids(self.img_size,rots)
-        self.pts_rot = pts_rot.reshape((3,-1))
+        self.pts_rot = rotated_grids(self.img_size,rots).reshape((3,len(rots),-1))
 
         self.device = torch.device("cuda:0")
         
@@ -53,10 +52,10 @@ class TestTorchWraps(unittest.TestCase):
 
     def test_nufft_forward(self):
         vols = self.vols      
-        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+        pts_rot = self.pts_rot[:,0][None,:]
 
         #singleton validation
-        nufft_forward_aspire = aspire_nufft(vols[0].asnumpy(),pts_rot).reshape(1,-1)
+        nufft_forward_aspire = aspire_nufft(vols[0].asnumpy(),pts_rot[0]).reshape(1,-1)
 
         vol_torch = torch.tensor(vols[0].asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device = self.device)
@@ -78,7 +77,7 @@ class TestTorchWraps(unittest.TestCase):
         np.testing.assert_array_less(np.linalg.norm(nufft_forward_disc - nufft_forward_torch)/np.linalg.norm(nufft_forward_torch),0.2)
 
         #stack validation
-        nufft_forward_aspire = aspire_nufft(vols,pts_rot)
+        nufft_forward_aspire = aspire_nufft(vols,pts_rot[0])
 
         vol_torch = torch.tensor(vols.asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,vols.shape[0],device = self.device)
@@ -101,12 +100,12 @@ class TestTorchWraps(unittest.TestCase):
         num_ims = 5
 
         #singleton validation
-        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+        pts_rot = self.pts_rot[:,0][None,:]
         images = self.sim.images[0]
         from aspire.numeric import fft, xp
         from aspire.image import Image
         images = Image(xp.asnumpy(fft.centered_fft2(xp.asarray(images))))
-        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1,-1)),pts_rot,(self.img_size,)*3)
+        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1,-1)),pts_rot[0],(self.img_size,)*3)
         threshold = np.mean(np.abs(nufft_adjoint_aspire.real))*0.1
 
 
@@ -133,23 +132,23 @@ class TestTorchWraps(unittest.TestCase):
 
 
         # Stack validation
-        pts_rot = self.pts_rot[:, :self.img_size ** 2 * num_ims]
+        pts_rot = self.pts_rot[:, :num_ims]
         images = self.sim.images[:num_ims]
         images = Image(xp.asnumpy(fft.centered_fft2(xp.asarray(images))))
         threshold = np.mean(np.abs(nufft_adjoint_aspire.real))*0.1
-        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1, -1)), pts_rot, (self.img_size,) * 3)
+        nufft_adjoint_aspire = aspire_anufft(images.asnumpy().reshape((1, -1)), pts_rot.reshape(3,-1), (self.img_size,) * 3)
         threshold = np.mean(np.abs(nufft_adjoint_aspire.real))*0.1
 
         im_torch = torch.tensor(images.asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,) * 3, 1, device=self.device)
-        plan.setpts(torch.tensor(pts_rot.copy(), device=self.device))
+        plan.setpts(torch.tensor(pts_rot.copy(), device=self.device).transpose(0,1))
         nufft_adjoint_torch = nufft_plan.nufft_adjoint(im_torch.reshape(num_ims,-1), plan)
         nufft_adjoint_torch = nufft_adjoint_torch.cpu().numpy()[0]
 
         np.testing.assert_allclose(nufft_adjoint_torch, nufft_adjoint_aspire, rtol=1e-2, atol=threshold)
 
         # Stack validation with NufftPlanDiscretized
-        pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(), device=self.device) + torch.pi, 2 * torch.pi) - torch.pi)
+        pts_rot_torch = (torch.remainder(torch.tensor(pts_rot.copy(), device=self.device).transpose(0,1) + torch.pi, 2 * torch.pi) - torch.pi)
         plan_disc = nufft_plan.NufftPlanDiscretized((self.img_size,) * 3, upsample_factor=us, mode='bilinear')
         plan_disc.setpts(pts_rot_torch)
         nufft_adjoint_disc = plan_disc.execute_adjoint(im_torch)
@@ -158,7 +157,7 @@ class TestTorchWraps(unittest.TestCase):
         np.testing.assert_allclose(nufft_adjoint_disc.real * (us * self.img_size) ** 3 /  m.grid_correction.numpy(), nufft_adjoint_aspire.real, rtol=1e-2, atol=threshold * 3)
 
     def test_grad_forward(self):
-        pts_rot = np.float64(self.pts_rot[:,:self.img_size ** 2])
+        pts_rot = np.float64(self.pts_rot[:,0][None,:])
         vol = torch.randn((self.img_size,)*3,dtype = torch.double, device = self.device) * 0.1
         vol.requires_grad = True
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,dtype=torch.float64,device = self.device)
@@ -170,7 +169,7 @@ class TestTorchWraps(unittest.TestCase):
 
 
     def test_grad_adjoint(self):
-        pts_rot = np.float64(self.pts_rot[:,:self.img_size ** 2])
+        pts_rot = np.float64(self.pts_rot[:,0][None,:])
         im = torch.randn((self.img_size,)*2,dtype = torch.double, device = self.device)
         im.requires_grad = True
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,dtype=torch.float64,device = self.device)
@@ -179,11 +178,10 @@ class TestTorchWraps(unittest.TestCase):
 
 
     def test_vol_project(self):
-        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+        pts_rot = self.pts_rot[:,0][None,:]
 
         vol_forward_aspire = self.sim.vol_forward(self.vols[0],0,1)
 
-        pts_rot = self.pts_rot[:,:self.img_size ** 2]
         vol_torch = torch.tensor(self.vols[0].asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device = self.device)
         plan.setpts(torch.tensor(pts_rot.copy(),device=self.device))
@@ -194,7 +192,7 @@ class TestTorchWraps(unittest.TestCase):
 
     def test_im_backproject(self):
   
-        pts_rot = self.pts_rot[:,:self.img_size ** 2]
+        pts_rot = self.pts_rot[:,0][None,:]
         imgs = self.sim.images[0]
         im_backproject_aspire = self.sim.im_backward(imgs,0).asnumpy()
 
@@ -219,7 +217,7 @@ class TestTorchWraps(unittest.TestCase):
         rots = sim.rotations[:]
         pts_rot = rotated_grids(self.img_size,rots)
         pts_rot = pts_rot.reshape((3,-1))
-        pts_rot = pts_rot[:,:self.img_size ** 2]
+        pts_rot = pts_rot[None,:]
         filter = torch.tensor(sim.unique_filters[0].evaluate_grid(self.img_size)).unsqueeze(0).to(self.device)
         vol_forward_aspire = sim.vol_forward(self.vols[0],0,1)
 
@@ -235,7 +233,7 @@ class TestTorchWraps(unittest.TestCase):
         vol = torch.tensor(self.vols[0].asnumpy(),device=self.device)
         rot = np.array([np.eye(3)],self.vols.dtype)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device=self.device)
-        plan.setpts(torch.tensor(rotated_grids(self.img_size,rot).copy(),device=self.device).reshape((3,-1)))
+        plan.setpts(torch.tensor(rotated_grids(self.img_size,rot).copy(),device=self.device).reshape((1,3,-1)))
         
         vol_forward = projection_funcs.vol_forward(vol,plan)
         vol_forward_fourier = projection_funcs.centered_fft2(vol_forward)[0]
@@ -248,13 +246,13 @@ class TestTorchWraps(unittest.TestCase):
 
     def test_batch_nufft_grad(self):
         batch_size = 8
-        pts_rot = self.pts_rot[:,:batch_size * self.img_size ** 2].reshape((3,batch_size,-1))
+        pts_rot = self.pts_rot[:,:batch_size]
         pts_rot = torch.tensor(pts_rot.copy(),device=self.device).transpose(0,1)
         vol_torch = torch.tensor(self.vols.asnumpy(),device=self.device,requires_grad=True)
         num_vols = vol_torch.shape[0]
         plans = [nufft_plan.NufftPlan((self.img_size,)*3,num_vols,device = self.device) for i in range(batch_size)]
         for i in range(batch_size):
-            plans[i].setpts(pts_rot[i])
+            plans[i].setpts(pts_rot[i].unsqueeze(0))
         vol_forward = torch.zeros((batch_size,num_vols,self.img_size,self.img_size),dtype=vol_torch.dtype,device=self.device)
         for i in range(batch_size):
             vol_forward[i] = projection_funcs.vol_forward(vol_torch,plans[i])
@@ -265,7 +263,7 @@ class TestTorchWraps(unittest.TestCase):
 
         vol_torch = torch.tensor(self.vols.asnumpy(),device=self.device,requires_grad=True)
         batch_plans = nufft_plan.NufftPlan((self.img_size,)*3,num_vols,device = self.device)
-        batch_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        batch_plans.setpts(pts_rot)
         batch_vol_forward = projection_funcs.vol_forward(vol_torch,batch_plans)
 
         v2 = torch.norm(batch_vol_forward)
@@ -300,6 +298,33 @@ class TestTorchWraps(unittest.TestCase):
         aspire_shifted_images = Image(images.numpy()).shift(-offsets).asnumpy()
 
         torch.testing.assert_close(module_shifted_images,torch.tensor(aspire_shifted_images),rtol=1e-3,atol=1e-3)
+
+
+    def test_downsample_nufft(self):
+        rotations = self.sim.rotations
+        init_rotvec = torch.tensor(Rotation.from_matrix(rotations).as_rotvec(),dtype=torch.float32)
+        pose_module = PoseModule(init_rotvec,torch.zeros(len(init_rotvec),2),self.img_size)
+        index = torch.tensor([5,13,192,153])
+
+        volume = torch.randn((self.img_size,)*3,dtype=torch.float32)
+        nufft_plans = nufft_plan.NufftPlanDiscretized(volume.shape,upsample_factor=2,mode='bilinear')
+
+        volume = projection_funcs.centered_fft3(volume,padding_size=(self.img_size*2,)*3).unsqueeze(0)
+        nufft_plans.setpts(pose_module(index)[0])
+        v1 = nufft_plans.execute_forward(volume)
+
+        v1_forward = projection_funcs.vol_forward(volume,nufft_plans,fourier_domain=True)
+
+        nufft_plans.setpts(pose_module(index,ds_resolution=self.img_size//2)[0])
+        v2 = nufft_plans.execute_forward(volume)
+        v2_forward = projection_funcs.vol_forward(volume,nufft_plans,fourier_domain=True)
+
+        v1 = projection_funcs.crop_image(v1,self.img_size//2)
+        print(v1_forward.shape)
+        v1_forward = projection_funcs.crop_image(v1_forward,self.img_size//2)
+
+        torch.testing.assert_close(v1,v2,rtol=5e-3,atol=5e-3)
+        torch.testing.assert_close(v1_forward,v2_forward,rtol=5e-3,atol=5e-3)
 
 if __name__ == "__main__":
     

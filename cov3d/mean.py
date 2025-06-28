@@ -45,7 +45,7 @@ def reconstruct_mean(dataset : Union[CovarDataset,DataLoader],init_vol = None,ma
         pts_rot = pts_rot.to(device)
         filters = dataset.unique_filters[filter_indices].to(device) if dataset.unique_filters is not None else None
 
-        nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        nufft_plan.setpts(pts_rot)
 
         backproj_im += im_backward(images,nufft_plan,filters,fourier_domain=True)[0]
         backproj_ctf += im_backward(torch.complex(filters,torch.zeros_like(filters)),nufft_plan,filters,fourier_domain=True)[0]
