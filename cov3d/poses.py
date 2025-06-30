@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from cov3d.projection_funcs import centered_fft2,centered_ifft2
+from cov3d.projection_funcs import centered_fft2,centered_ifft2,crop_image
 from cov3d.newton_opt import BlockNewtonOptimizer
 from aspire.utils import grid_2d
 
@@ -100,18 +100,35 @@ class PoseModule(torch.nn.Module):
 
         self.phase_shift_grid_x,self.phase_shift_grid_y = get_phase_shift_grid(self.resolution, dtype=self.dtype)
 
-    def forward(self, index):
+    def _downsample_grid(self,ds_resolution):
+        if(ds_resolution == self.resolution):
+            return self.xy_rot_grid, self.phase_shift_grid_x, self.phase_shift_grid_y
+        
+        xy_rot_grid = crop_image(self.xy_rot_grid.reshape(3,self.resolution,self.resolution),ds_resolution).reshape(3,-1)
+        phase_shift_grid_x = crop_image(self.phase_shift_grid_x,ds_resolution)
+        phase_shift_grid_y = crop_image(self.phase_shift_grid_y,ds_resolution)
+
+        return xy_rot_grid, phase_shift_grid_x, phase_shift_grid_y
+
+
+    def forward(self, index, ds_resolution = None):
+        
+        if(ds_resolution is None):
+            ds_resolution = self.resolution
+
+        xy_rot_grid, phase_shift_grid_x, phase_shift_grid_y = self._downsample_grid(ds_resolution)
+
         rot_mat = rodrigues_rotation_matrix(self.rotvec(index))
         pts_rot = torch.flip(torch.matmul(
             rot_mat.reshape(len(index)*3, 3),
-            self.xy_rot_grid
-        ).reshape(len(index), 3, self.resolution**2), dims=[1])
-        pts_rot = pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
+            xy_rot_grid
+        ).reshape(len(index), 3, ds_resolution**2), dims=[1])
+        pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi) #After rotating the grids some of the points can be outside the [-pi , pi]^3 cube
 
         offsets = -self.offsets(index)
-        phase_shift = offset_to_phase_shift(offsets, resolution=self.resolution,
-                                            phase_shift_grid=(self.phase_shift_grid_x, self.phase_shift_grid_y))
-        
+        phase_shift = offset_to_phase_shift(offsets,
+                                            phase_shift_grid=(phase_shift_grid_x, phase_shift_grid_y))
+
         if(not self.use_contrast):
             return pts_rot, phase_shift
         else:
