@@ -39,6 +39,11 @@ def crop_tensor(tensor,size,dims=None):
     return tensor[slice_ind_full]
 
 
+def crop_image(images, L_crop):
+    L = images.shape[-1]
+    img_idx = torch.arange(-(L_crop//2),L_crop//2 + L_crop % 2) + L // 2
+    return images[..., img_idx, :][..., img_idx].reshape(*images.shape[:-2], L_crop, L_crop)
+
 def centered_fft2(image,im_dim = [-1,-2],padding_size = None):
     return _centered_fft(torch.fft.fft2,image,im_dim,padding_size)
 
@@ -63,7 +68,7 @@ def preprocess_image_batch(images,nufft_plan,filters,pose,mean_volume,mask = Non
     Shifts images, subtracts projected mean volume and applies masking on a batch of images
     """
     pts_rot,phase_shift = pose
-    nufft_plan.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+    nufft_plan.setpts(pts_rot)
 
     if(not fourier_domain):
         images = centered_fft2(images)
@@ -115,10 +120,10 @@ def vol_forward(volume,plan,filters = None,fourier_domain = False):
         return volume_forward
     elif(isinstance(plan,BaseNufftPlan)):
         vol_nufft = nufft_forward(volume,plan)
-        vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,L,L)).transpose(0,1).clone()
+        vol_nufft = vol_nufft.reshape((*volume.shape[:-3],-1,vol_nufft.shape[-2],vol_nufft.shape[-1])).transpose(0,1).clone()
         batch_size = vol_nufft.shape[1]
         
-        if(L % 2 == 0):
+        if(vol_nufft.shape[-1] % 2 == 0):
             #vol_nufft_clone = vol_nufft.clone()
             vol_nufft[:,:,0,:] = 0
             vol_nufft[:,:,:,0] = 0

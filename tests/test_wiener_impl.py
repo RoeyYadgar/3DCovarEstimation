@@ -1,7 +1,8 @@
 import unittest
 from aspire.volume import Volume,LegacyVolume
 from aspire.source import Simulation
-from cov3d.covar_sgd import CovarDataset,Covar
+from cov3d.dataset import CovarDataset
+from cov3d.covar import Covar
 from aspire.operators import RadialCTFFilter
 from aspire.denoising import src_wiener_coords
 import time
