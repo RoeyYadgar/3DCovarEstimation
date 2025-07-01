@@ -55,7 +55,7 @@ class TestTorchWraps(unittest.TestCase):
         pts_rot = self.pts_rot[:,0][None,:]
 
         #singleton validation
-        nufft_forward_aspire = aspire_nufft(vols[0].asnumpy(),pts_rot[0]).reshape(1,-1)
+        nufft_forward_aspire = aspire_nufft(vols[0].asnumpy(),pts_rot[0]).reshape(1,1,self.img_size,-1)
 
         vol_torch = torch.tensor(vols[0].asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,device = self.device)
@@ -68,7 +68,7 @@ class TestTorchWraps(unittest.TestCase):
         plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=us,mode='bilinear')
         plan.setpts(pts_rot_torch)
         nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch,padding_size=(self.img_size*us,)*3))
-        nufft_forward_disc = nufft_forward_disc.reshape(1,-1).cpu().numpy()
+        nufft_forward_disc = nufft_forward_disc.cpu().numpy()
 
 
         threshold = np.mean(np.abs(nufft_forward_aspire))        
@@ -77,7 +77,7 @@ class TestTorchWraps(unittest.TestCase):
         np.testing.assert_array_less(np.linalg.norm(nufft_forward_disc - nufft_forward_torch)/np.linalg.norm(nufft_forward_torch),0.2)
 
         #stack validation
-        nufft_forward_aspire = aspire_nufft(vols,pts_rot[0])
+        nufft_forward_aspire = aspire_nufft(vols,pts_rot[0]).reshape(vols.shape[0],1,self.img_size,-1)
 
         vol_torch = torch.tensor(vols.asnumpy()).to(self.device)
         plan = nufft_plan.NufftPlan((self.img_size,)*3,vols.shape[0],device = self.device)
@@ -89,7 +89,7 @@ class TestTorchWraps(unittest.TestCase):
         plan = nufft_plan.NufftPlanDiscretized((self.img_size,)*3,upsample_factor=us)
         plan.setpts(pts_rot_torch)
         nufft_forward_disc = plan.execute_forward(projection_funcs.centered_fft3(vol_torch,padding_size=(self.img_size*us,)*3))
-        nufft_forward_disc = nufft_forward_disc.reshape(vols.shape[0],-1).cpu().numpy()
+        nufft_forward_disc = nufft_forward_disc.cpu().numpy()
 
         np.testing.assert_allclose(nufft_forward_torch,nufft_forward_aspire,rtol = 1e-3,atol=threshold*0.01)
         print(np.linalg.norm(nufft_forward_disc - nufft_forward_torch)/np.linalg.norm(nufft_forward_torch))
@@ -161,7 +161,7 @@ class TestTorchWraps(unittest.TestCase):
         vol = torch.randn((self.img_size,)*3,dtype = torch.double, device = self.device) * 0.1
         vol.requires_grad = True
         plan = nufft_plan.NufftPlan((self.img_size,)*3,1,dtype=torch.float64,device = self.device)
-        pts_rot = torch.tensor(pts_rot.copy(),device=self.device,requires_grad=True).reshape(3,-1)
+        pts_rot = torch.tensor(pts_rot.copy(),device=self.device,requires_grad=True)
         pts_rot = (torch.remainder(pts_rot + torch.pi , 2 * torch.pi) - torch.pi).contiguous()
         plan.setpts(pts_rot)
         
