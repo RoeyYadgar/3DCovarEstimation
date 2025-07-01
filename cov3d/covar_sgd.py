@@ -6,7 +6,7 @@ from tqdm import tqdm
 import copy
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2,lowpass_volume
+from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2,crop_image,lowpass_volume
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 from cov3d.poses import PoseModule,out_of_plane_rot_error,in_plane_rot_error,offset_mean_error,estimate_image_offsets_newton
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
@@ -80,7 +80,7 @@ class CovarTrainer():
             return None
     
     def run_batch(self,images,pts_rot,filters):
-        self.nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        self.nufft_plans.setpts(pts_rot)
         self.optimizer.zero_grad()
         cost_val = self.cost_func(self._covar(dummy_var=None),images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
         cost_val.backward()
@@ -311,6 +311,7 @@ class CovarPoseTrainer(CovarTrainer):
 
         self.mean_fourier_reg = None
         self.scheduler_patiece = 3
+        self.downsample_factor = min(3,int(np.log2(self.covar.resolution / 32)))
         self.mean_est_method = 'Reconstruction'
         self.offset_est_method = 'Newton'
         self.rotation_est_method = 'SGD'
@@ -329,6 +330,10 @@ class CovarPoseTrainer(CovarTrainer):
             if(self.get_pose_module().use_contrast):
                 for param in self.get_pose_module().contrasts.parameters():
                     param.requires_grad = False
+
+    @property
+    def downsample_size(self):
+        return int(2 ** (-self.downsample_factor) * self.pose.resolution)
 
     def get_mean_module(self):
         return self.mean if not self.isDDP else self.mean.module
@@ -376,12 +381,19 @@ class CovarPoseTrainer(CovarTrainer):
     def correct_offsets(self):
         for batch in tqdm(self.train_data,desc='Correcting offsets'):
             images,idx,filters = self.prepare_batch(batch)
-            self.nufft_plans.setpts(self.pose(idx)[0].detach().transpose(0,1).reshape((3,-1)))
+
+            softening_kernel_fourier = self.softening_kernel_fourier
+            if(self.downsample_size != self.pose.resolution):
+                images = crop_image(images,self.downsample_size)
+                filters = crop_image(filters,self.downsample_size)
+                softening_kernel_fourier = crop_image(softening_kernel_fourier,self.downsample_size)
+
+            self.nufft_plans.setpts(self.pose(idx,ds_resolution=self.downsample_size)[0].detach())
             mean_forward = vol_forward(self.mean(dummy_var=None),self.nufft_plans,filters=filters,fourier_domain=self.optimize_in_fourier_domain).squeeze(1).detach()
 
             mask_forward = vol_forward(self.mask,self.nufft_plans,filters=None,fourier_domain=False).squeeze(1)
             mask_forward = mask_forward > self.mask_threshold 
-            soft_mask = centered_ifft2(centered_fft2(mask_forward)  * self.softening_kernel_fourier).real
+            soft_mask = centered_ifft2(centered_fft2(mask_forward)  * softening_kernel_fourier).real
 
 
             projected_eigenvecs = vol_forward(self._covar(dummy_var=None).detach(),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain)
@@ -441,14 +453,25 @@ class CovarPoseTrainer(CovarTrainer):
             self.optimizer.zero_grad()
             self.pose_optimizer.zero_grad()
 
+            #Currenly no actual downsampling is taking place
+            downsample_size = self.covar.resolution
+
             if(self.get_pose_module().use_contrast):
                 #If we optimize over contrasts scale filters
-                pts_rot,phase_shift,contrasts = self.pose(idx)
+                pts_rot,phase_shift,contrasts = self.pose(idx,ds_resolution=downsample_size)
                 filters = filters * contrasts.reshape(-1,1,1)
             else:
-                pts_rot,phase_shift = self.pose(idx)
+                pts_rot,phase_shift = self.pose(idx,ds_resolution=downsample_size)
+
+            softening_kernel_fourier = self.softening_kernel_fourier
+            if(downsample_size != self.pose.resolution):
+                images = crop_image(images,downsample_size)
+                filters = crop_image(filters,downsample_size)
+                softening_kernel_fourier = crop_image(softening_kernel_fourier,downsample_size)
+
+
             preprocessed_images = preprocess_image_batch(images,self.nufft_plans,filters,(pts_rot,phase_shift),self.mean(dummy_var=None),
-                                                         self.mask,self.mask_threshold,self.softening_kernel_fourier,
+                                                         self.mask,self.mask_threshold,softening_kernel_fourier,
                                                          fourier_domain=self.optimize_in_fourier_domain)
 
             cost_val = self.cost_func(self._covar(dummy_var=None),preprocessed_images,self.nufft_plans,filters,self.noise_var,self.reg_scale,self.fourier_reg,apply_mean_const_term=True) #Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
@@ -462,10 +485,12 @@ class CovarPoseTrainer(CovarTrainer):
         if(self.use_orthogonal_projection):
             self.covar.orthogonal_projection()
 
-        #Apply masking on covar vectors
         with torch.no_grad():
-            mask = self.dataset.mask.to(self.device) > 0.3
-            self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
+            #mask = self.dataset.mask.to(self.device) > 0.3
+            #self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
+
+            lowpassed_vecs = lowpass_volume(self.covar.vectors.data,self.downsample_size // 2)
+            self.covar.vectors.data.copy_(lowpassed_vecs)
 
         self._updated_idx[idx] = 1
 
@@ -513,7 +538,7 @@ class CovarPoseTrainer(CovarTrainer):
 
         with torch.no_grad():
             idx = torch.arange(self.batch_size,device=self.device)
-            self.nufft_plans.setpts(self.pose(idx)[0].transpose(0,1).reshape((3,-1)))
+            self.nufft_plans.setpts(self.pose(idx)[0])
             self.mask_threshold = get_mask_threshold(self.mask,self.nufft_plans)
 
     def complete_training(self):
@@ -526,6 +551,12 @@ class CovarPoseTrainer(CovarTrainer):
             self.pose_optimizer = torch.optim.SparseAdam([{'params' : self.pose.parameters(),'lr' : self.pose_lr_ratio * self.lr}])
         elif(self.rotation_est_method == 'LBFGS'):
             self.pose_optimizer = BlockwiseLBFGS([{'params' : self.pose.parameters(),'lr' : 1,'step_size_limit' : 1e-1}])
+
+    def train_epochs(self, max_epochs, **training_kwargs):
+        while(self.downsample_factor >= 0):
+            super().train_epochs(max_epochs, **training_kwargs)
+            self.downsample_factor -= 1
+        self.downsample_factor = 0
 
     def compute_fourier_reg_term(self,eigenvecs):
         super().compute_fourier_reg_term(eigenvecs)
@@ -852,7 +883,7 @@ def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
         pts_rot = pts_rot.to(device)
         images = images.to(device)
         batch_filters = filters[filter_indices] if len(filters) > 0 else None
-        nufft_plans.setpts(pts_rot.transpose(0,1).reshape((3,-1)))
+        nufft_plans.setpts(pts_rot)
         cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,reg_scale=reg_scale,fourier_reg=fourier_reg) * batch_size
         cost_val += cost_term
    
