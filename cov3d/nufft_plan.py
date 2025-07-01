@@ -46,7 +46,7 @@ class NufftPlanDiscretized(BaseNufftPlan):
 
     def setpts(self,points):
         """
-        points - (N,3,L,L)
+        points - (N,3,L**2)
         """
         L = self.sz[0]
 
@@ -188,8 +188,10 @@ class NufftPlan(BaseNufftPlan):
 
     def setpts(self,points):
         """
-        points - (N,3,...)
+        points - (N,3,L**2)
         """
+        self.points_N = points.shape[0]
+        self.points_L = int(points.shape[-1] ** 0.5)
         points = points.transpose(0,1).reshape((3,-1))
         points = (torch.remainder(points + torch.pi , 2 * torch.pi) - torch.pi).contiguous()
         self.points = points
@@ -220,7 +222,7 @@ class NufftPlan(BaseNufftPlan):
             forward_signal = forward_signal[:orig_batch]
         if(self.device == torch.device('cpu')):
             forward_signal = torch.from_numpy(forward_signal)
-        return forward_signal
+        return forward_signal.reshape((self.batch_size,self.points_N,self.points_L,self.points_L))
     
     def execute_adjoint(self,signal):
         zero_pad = False
@@ -240,7 +242,7 @@ class NufftPlan(BaseNufftPlan):
             adjoint_signal = adjoint_signal[:orig_batch]
         if(self.device == torch.device('cpu')):
             adjoint_signal = torch.from_numpy(adjoint_signal)
-        return adjoint_signal
+        return adjoint_signal.reshape((self.batch_size,*self.sz))
         
 
 class TorchNufftForward(torch.autograd.Function):
