@@ -6,7 +6,7 @@ from tqdm import tqdm
 import copy
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2
+from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2,lowpass_volume
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 from cov3d.poses import PoseModule,out_of_plane_rot_error,offset_mean_error,estimate_image_offsets_newton
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
@@ -40,6 +40,8 @@ class CovarTrainer():
                 self.training_log.update({
                     "cosine_sim": [],
                     "fro_err": [],
+                    "fro_err_half_res" : [],
+                    "fro_err_quarter_res" : [],
                     "covar_fsc_mean": []
                 })
             
@@ -87,11 +89,6 @@ class CovarTrainer():
 
         if(self.use_orthogonal_projection):
             self.covar.orthogonal_projection()
-
-        #Apply masking on covar vectors
-        with torch.no_grad():
-            mask = self.dataset.mask.to(self.device) > 0.3
-            self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
 
         return cost_val
 
@@ -191,6 +188,11 @@ class CovarTrainer():
             self.scheduler.step(self.cost_in_epoch)
             print(f'New learning rate set to {self.scheduler.get_last_lr()}')
 
+            #Apply masking on covar vectors
+            with torch.no_grad():
+                mask = self.dataset.mask.to(self.device) > 0.3
+                self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
+
             if(self.logTraining and self.save_path is not None):
                 self.training_log['epoch_run_time'].append(epoch_end_time - epoch_start_time)
                 self.save_result()
@@ -229,16 +231,30 @@ class CovarTrainer():
             with torch.no_grad():
                 L = self.covar.resolution
                 vectors = self.covar.get_vectors_spatial_domain()
-                vectorsGT = self.vectorsGT.to(self.device)
+                vectorsGT = self.vectorsGT.to(self.device).reshape(self.vectorsGT.shape[0],L,L,L)
                 self.training_log["covar_fsc_mean"].append(
-                    (covar_fsc(vectorsGT.reshape((vectorsGT.shape[0], L, L, L)), vectors))[:L // 2, :L // 2].mean().cpu().numpy()
+                    (covar_fsc(vectorsGT,vectors)[:L // 2, :L // 2].mean().cpu().numpy())
                 )
+                self.training_log["fro_err"].append(
+                    (frobeniusNormDiff(vectorsGT, vectors) / frobeniusNorm(vectorsGT)).cpu().numpy()
+                )
+
+                vectors_lowpass = lowpass_volume(vectors,L//4)
+                vectors_GT_lowpass = lowpass_volume(vectorsGT,L//4)
+                self.training_log["fro_err_half_res"].append(
+                    (frobeniusNormDiff(vectors_GT_lowpass, vectors_lowpass) / frobeniusNorm(vectors_GT_lowpass)).cpu().numpy()
+                )
+
+                vectors_lowpass = lowpass_volume(vectors,L//8)
+                vectors_GT_lowpass = lowpass_volume(vectorsGT,L//8)
+                self.training_log["fro_err_quarter_res"].append(
+                    (frobeniusNormDiff(vectors_GT_lowpass, vectors_lowpass) / frobeniusNorm(vectors_GT_lowpass)).cpu().numpy()
+                )
+
                 vectors = vectors.reshape((vectors.shape[0], -1))
                 vectorsGT = vectorsGT.reshape((vectorsGT.shape[0], -1))
                 self.training_log["cosine_sim"].append(cosineSimilarity(vectors.detach(), vectorsGT))
-                self.training_log["fro_err"].append(
-                    (frobeniusNormDiff(vectorsGT, vectors) / frobeniusNorm(vectorsGT)).cpu().numpy()
-            )
+
                 
     def _get_pbar_desc(self, epoch):
         pbar_description = f"Epoch {epoch} , " + "cost value : {:.2e}".format(self.cost_in_epoch)
@@ -802,11 +818,14 @@ def raw_cost_posterior_maximum_liklihood_fourier_domain(projected_eigenvecs,imag
 
 def frobeniusNorm(vecs):
     #Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
+    vecs = vecs.reshape(vecs.shape[0],-1)
     vecs_inn_prod = torch.matmul(vecs,vecs.transpose(0,1).conj())
     return torch.sqrt(torch.sum(torch.pow(vecs_inn_prod,2)))
 
 def frobeniusNormDiff(vec1,vec2):
     #returns the frobenius norm of the diffrence of two symmetric matrices given by their eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
+    vec1 = vec1.reshape(vec1.shape[0],-1)
+    vec2 = vec2.reshape(vec2.shape[0],-1)
     
     normdiff_squared = torch.pow(frobeniusNorm(vec1),2) + torch.pow(frobeniusNorm(vec2),2)  - 2*torch.sum(torch.pow(torch.matmul(vec1,vec2.transpose(0,1).conj()),2))
     
