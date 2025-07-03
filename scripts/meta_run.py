@@ -66,6 +66,9 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
                         command += f" --gt-dir {data['gt_dir']}"
                     if(data['gt_labels'] is not None):
                         command += f" --gt-labels {data['gt_labels']}"
+                    if(data['gt_pose'] is not None):
+                        command += f" --gt-pose {data['gt_pose']}"
+
                 if(RUN_COMMANDS):
                     os.system(command)
                 else:
@@ -90,6 +93,8 @@ def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 1
                     command += f" --gt-dir {data['gt_dir']}"
                 if(data['gt_labels'] is not None):
                     command += f" --gt-labels {data['gt_labels']}"
+                if(data['gt_pose'] is not None):
+                    command += f" --gt-pose {data['gt_pose']}"
             if(RUN_COMMANDS):
                 os.system(command)
             else:
@@ -149,6 +154,17 @@ gt_labels = [
     'Tomotwin-100/gt_latents.pkl',
     "empiar10076/downsample_L128/filtered_labels.pkl",
 ]
+
+gt_pose = [
+    'igg_1d/images/snr0.01/downsample_L128/poses.pkl',
+    'igg_1d/images/snr0.001/downsample_L128/poses.pkl',
+    'igg_rl/images/snr0.01/downsample_L128/poses.pkl',
+    'Ribosembly/images/downsample_L128/poses.pkl',
+    'Spike-MD/images/snr0.1/downsample_L128/poses.pkl',
+    'Tomotwin-100/images/snr0.01/downsample_L128/poses.pkl',
+    "empiar10076/downsample_L128/poses.pkl", #Not actually GT but treated as for reference
+]
+
 datasets_L128 = [dataset.replace("L64", "L128") for dataset in datasets_L64]
 
 
@@ -248,8 +264,8 @@ def main(skip_reconstruction,print_run,run_recovar):
     if(skip_reconstruction):
         gt_dir = [None for _ in gt_dir]
 
-    dataset_vars = ['dataset','mask','gt_dir','gt_latent','gt_labels']
-    dataset_values = [datasets_L64,dataset_masks,gt_dir,gt_latent,gt_labels]
+    dataset_vars = ['dataset','mask','gt_dir','gt_latent','gt_labels','gt_pose']
+    dataset_values = [datasets_L64,dataset_masks,gt_dir,gt_latent,gt_labels,gt_pose]
     datasets = {}
     #datasets[64] = [dict(zip(dataset_vars,get_full_path(values))) for values in zip(*dataset_values)]
     dataset_values[0] = datasets_L128
