@@ -116,6 +116,10 @@ class Covar(VolumeBase):
         else:
             vectors = torch.clone(vectors)
 
+        self._init_parameters(vectors)
+
+    def _init_parameters(self,vectors):
+
         vectors,log_sqrt_eigenvals = self._get_eigenvecs_representation(vectors)
         self.vectors = torch.nn.Parameter(vectors)
         self.log_sqrt_eigenvals = torch.nn.Parameter(log_sqrt_eigenvals)
@@ -192,33 +196,27 @@ class CovarFourier(Covar):
     ''' Used to optimize the covariance eigenvecs in Fourier domain. 
     Differs from Covar with `fourier_domain=True` by keeping the underlying vectors in Fourier domain directly.
     '''
-    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = False,upsampling_factor=2,vectors = None):
-        torch.nn.Module.__init__(self)
-        self.resolution = resolution
-        self.rank = rank
-        self.pixel_var_estimate = pixel_var_estimate
-        self.dtype = dtype
-        self.upsampling_factor = upsampling_factor
+    def __init__(self,resolution,rank,dtype = torch.float32,pixel_var_estimate = 1,fourier_domain = True,upsampling_factor=2,vectors = None):
+        assert fourier_domain, "CovarFourier should always be in Fourier domain."
+        super().__init__(resolution=resolution,rank=rank,dtype=dtype,pixel_var_estimate=pixel_var_estimate,fourier_domain=fourier_domain,upsampling_factor=upsampling_factor,vectors=vectors)
 
-        if(vectors is None):
-            vectors = self.init_random_vectors(rank) if (not isinstance(pixel_var_estimate,torch.Tensor) or pixel_var_estimate.ndim == 0) else self.init_random_vectors_from_psd(rank,pixel_var_estimate) 
-        else:
-            vectors = torch.clone(vectors)
-        
+    def _init_parameters(self, vectors):        
         vectors = centered_fft3(vectors,padding_size=(self.resolution*self.upsampling_factor,)*3)
+        vectors, log_sqrt_eigenvals = self._get_eigenvecs_representation(vectors)
 
-        self.grid_correction = None
         #Params are split into real and imaginary parts since DDP does not support complex params for some reason.
         self._vectors_real = torch.nn.Parameter(vectors.real)
         self._vectors_imag = torch.nn.Parameter(vectors.imag)
-        self._in_spatial_domain = False
+        self.log_sqrt_eigenvals = torch.nn.Parameter(log_sqrt_eigenvals)
 
     def set_vectors(self,vectors):
         if(not vectors.is_complex()):
             vectors = centered_fft3(vectors, padding_size=(self.resolution * self.upsampling_factor,) * 3)
+        vectors, log_sqrt_eigenvals = self._get_eigenvecs_representation(vectors)
         # Store real and imaginary parts separately
         self._vectors_real.data.copy_(vectors.real)
         self._vectors_imag.data.copy_(vectors.imag)
+        self.log_sqrt_eigenvals.data.copy_(log_sqrt_eigenvals)
 
     def get_vectors_spatial_domain(self):
         spatial_vectors = centered_ifft3(torch.complex(self._vectors_real, self._vectors_imag)).real
@@ -231,6 +229,9 @@ class CovarFourier(Covar):
     def device(self):
         return self._vectors_real.device
     
-    @property
-    def grad_scale_factor(self):
-        return (self.pixel_var_estimate * (self.resolution ** 3)) ** 0.5
+    def grad_lr_factor(self):
+        return [
+            {'params' : self._vectors_real , 'lr' : self.resolution ** 1.5},
+            {'params' : self._vectors_imag , 'lr' : self.resolution ** 1.5},
+            {'params' : self.log_sqrt_eigenvals , 'lr' : 1}
+        ]
