@@ -207,7 +207,7 @@ class CovarTrainer():
             self.dataset.to_spatial_domain()
 
     def compute_fourier_reg_term(self,eigenvecs):
-        eigen_rpsd = rpsd(*eigenvecs)
+        eigen_rpsd = rpsd(*eigenvecs) * (self.covar.upsampling_factor ** 3)
         self.fourier_reg = (self.noise_var) / upsample_and_expand_fourier_shell(eigen_rpsd,self.covar.resolution * self.covar.upsampling_factor,3)
 
     def update_fourier_reg_halfsets(self,fourier_reg):
@@ -718,8 +718,8 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
 
     if(fourier_reg is not None and reg_scale != 0):
         vols_fourier = centered_fft3(vols)
-        vols_fourier*= torch.sqrt(fourier_reg)
-        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
+        vols_fourier*= torch.sqrt(fourier_reg/noise_var)
+        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / 2
         cost_val += reg_scale * reg_cost
 
     return cost_val
@@ -774,8 +774,8 @@ def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_
     cost_val = raw_cost_maximum_liklihood_fourier_domain(projected_eigenvecs,images,noise_var,apply_mean_const_term=apply_mean_const_term,mean_aggregate=mean_aggregate)
 
     if(fourier_reg is not None and reg_scale != 0):
-        vols_fourier = vols * torch.sqrt(fourier_reg)
-        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / (2*noise_var)
+        vols_fourier = vols * torch.sqrt(fourier_reg/noise_var)
+        reg_cost = torch.sum(torch.norm(vols_fourier.reshape((rank,-1)),dim=1)**2) / 2
         cost_val += reg_scale * reg_cost
 
     return cost_val
