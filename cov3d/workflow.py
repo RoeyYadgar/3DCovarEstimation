@@ -200,7 +200,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
 
     #Perform optimization for eigenvectors estimation
     default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 20,
-                            'lr' : 1e-5,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
+                            'lr' : 1e-6,'optim_type' : 'Adam', #TODO : refine learning rate and reg values
                             'reg' : 1,
                             'orthogonal_projection' : False,'nufft_disc' : 'bilinear',
                             'num_reg_update_iters' : 1, 'use_halfsets' : True,'objective_func' : 'ml'}
@@ -256,8 +256,9 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
                                             pose.get_offsets().cpu().numpy(),L)
         with open(path.join(output_dir,'refined_poses.pkl'),'wb') as fid:
             pickle.dump(refined_pose,fid)
-        mean_volume_est = Volume(mean.get_volume_spatial_domain().detach().cpu().numpy())
-        mean_volume_est.save(path.join(output_dir,'mean_est.mrc'),overwrite=True)
+        if(pose.use_contrast):
+            with open(path.join(output_dir,'contrast.pkl'),'wb') as fid:
+                pickle.dump(pose.get_contrasts(),fid)
     
     #Compute wiener coordinates using estimated and ground truth eigenvectors
     eigen_est,eigenval_est= cov.eigenvecs
@@ -276,7 +277,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
 
     data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
                 'coords_est' : coords_est.cpu().numpy(), 'coords_covar_inv_est' : coords_covar_inv_est.numpy(),
-                'mean_est' : mean_volume_est.asnumpy(),
+                'mean_est' : mean_volume_est.asnumpy() if mean_volume_est is not None else None,
                 'starfile' : os.path.abspath(dataset.starfile), 'data_sign_inverted' : dataset.data_inverted}
     if(is_gt_eigenvols):
         data_dict = {**data_dict,

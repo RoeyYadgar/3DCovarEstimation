@@ -170,7 +170,7 @@ class Covar(VolumeBase):
     def grad_lr_factor(self):
         return [
             {'params' : self.vectors , 'lr' : 1},
-            {'params' : self.log_sqrt_eigenvals , 'lr' : 1}
+            {'params' : self.log_sqrt_eigenvals , 'lr' : 100}
         ]
         
     def get_vectors_fourier_domain(self):
@@ -219,11 +219,11 @@ class CovarFourier(Covar):
         self.log_sqrt_eigenvals.data.copy_(log_sqrt_eigenvals)
 
     def get_vectors_spatial_domain(self):
-        spatial_vectors = centered_ifft3(torch.complex(self._vectors_real, self._vectors_imag)).real
-        return crop_tensor(spatial_vectors, (self.resolution,) * 3,dims=[-1,-2,-3]) / self.grid_correction if self.grid_correction is not None else crop_tensor(spatial_vectors, (self.resolution,) * 3,dims=[-1,-2,-3])
+        spatial_vectors = centered_ifft3(self.get_vectors_fourier_domain()).real
+        return crop_tensor(spatial_vectors, (self.resolution,) * 3,dims=[-1,-2,-3])
     
     def get_vectors_fourier_domain(self):
-        return torch.complex(self._vectors_real, self._vectors_imag)
+        return torch.complex(self._vectors_real, self._vectors_imag) * torch.exp(self.log_sqrt_eigenvals).reshape(-1,1,1,1)
     
     @property
     def device(self):
@@ -231,7 +231,7 @@ class CovarFourier(Covar):
     
     def grad_lr_factor(self):
         return [
-            {'params' : self._vectors_real , 'lr' : self.resolution ** 1.5},
-            {'params' : self._vectors_imag , 'lr' : self.resolution ** 1.5},
-            {'params' : self.log_sqrt_eigenvals , 'lr' : 1}
+            {'params' : self._vectors_real , 'lr' : 1},
+            {'params' : self._vectors_imag , 'lr' : 1},
+            {'params' : self.log_sqrt_eigenvals , 'lr' : 100}
         ]
