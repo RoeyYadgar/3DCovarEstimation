@@ -372,3 +372,10 @@ def readVols(vols,in_list=True):
 
 def saveVol(vols : torch.tensor,path : str):
     Volume(vols.cpu().numpy()).save(path,overwrite=True)
+
+def create_mask_from_vols(vols : Volume, threshold : float):
+    """
+    Creates a simple binary mask from volumes
+    """
+
+    return Volume(vols.asnumpy().mean(axis=0) > threshold)

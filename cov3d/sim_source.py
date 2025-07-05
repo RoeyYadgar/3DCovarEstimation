@@ -184,7 +184,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
     pixel_size = 3 * 128/ L
 
     if(not no_ctf):
-        filters = [RadialCTFFilter(defocus=d,pixel_size=pixel_size) for d in np.linspace(8e3, 2.5e4, 927)]
+        filters = [RadialCTFFilter(defocus=d,pixel_size=pixel_size) for d in  np.random.lognormal(np.log(20000),0.3,size=(928))]
     else:
         filters = [ArrayFilter(np.ones((L,L)))]
 
@@ -196,7 +196,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
         voxels = Volume(padded_voxels)
         voxels.save(os.path.join(folder_name,'gt_vols.mrc'),overwrite=True) 
     else:
-        voxels = Volume.load(vols)
+        voxels = readVols(vols,in_list=False)
 
     sim = SimulatedSource(n,vols=voxels,unique_filters=filters,noise_var = 0)
     var = torch.var(sim._clean_images).item()
@@ -222,7 +222,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
             dataset.starfile = os.path.join(dir_name,'particles.star')     
             display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
             display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
-            data_dict,_,_ = covar_processing(dataset,r,dir_name,gt_data=gt_data,max_epochs=20,objective_func=obj,num_reg_update_iters=1)
+            data_dict,_,_ = covar_processing(dataset,r,dir_name,gt_data=gt_data,max_epochs=20,objective_func=obj,num_reg_update_iters=1,use_halfsets=False)
 
             coords_est = data_dict['coords_est']
             state_centers = np.zeros((len(voxels),coords_est.shape[1]))
@@ -299,8 +299,10 @@ def simulate_noisy_rots(folder_name,snr=None,noise_var=None,rots_std=0,offsets_s
 
 
 if __name__=="__main__":
-    #simulateExp('data/rank5_converges_test',save_source = False,vols = 'data/rank5_covar_estimate/gt_vols.mrc',mask='data/rank5_covar_estimate/mask.mrc')
-    [f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,10)]
-    simulate_noisy_rots('data/pose_opt_exp_offsets_snr0.1',snr=0.1,rots_std = 0.1,offsets_std=0.008,r=5,
-                        vols = [f'data/scratch_data/igg_1d/vols/128_org/{int(i):03}.mrc' for i in np.linspace(0,100,6,endpoint=False)],
-                        mask='data/scratch_data/igg_1d/init_mask/mask.mrc')
+    ribo_vols = [os.path.join('data/scratch_data/cryodrgn_ribosomes/ribosomes/inputs',v) for v in os.listdir('data/scratch_data/cryodrgn_ribosomes/ribosomes/inputs') if v.endswith('.mrc')]
+    print(ribo_vols)
+    simulateExp('data/scratch_data/cryodrgn_ribosomes/ribosomes',save_source = False,vols = ribo_vols,mask='data/scratch_data/cryodrgn_ribosomes/ribosomes/ribo_mask.mrc',L=128)
+    #[f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,10)]
+    #simulate_noisy_rots('data/pose_opt_exp_offsets_snr0.1',snr=0.1,rots_std = 0.1,offsets_std=0.008,r=5,
+    #                    vols = [f'data/scratch_data/igg_1d/vols/128_org/{int(i):03}.mrc' for i in np.linspace(0,100,6,endpoint=False)],
+    #                    mask='data/scratch_data/igg_1d/init_mask/mask.mrc')
