@@ -20,7 +20,11 @@ def count_mrcs_images(filename):
 
 if __name__ == "__main__":
     dataset_dir = sys.argv[1]
-    mrcs_files = sys.argv[2].split(',')
+    mrcs_files = sys.argv[2]
+    if(mrcs_files.endswith('.txt')):
+        mrcs_files = open(mrcs_files,'r').read().split('\n')
+    else:
+        mrcs_files = [mrcs_files]
     mrcs_files_len = [count_mrcs_images(os.path.join(dataset_dir,f)) for f in mrcs_files]
     #dataset_dir, mrcs_filename = os.path.split(mrcs_path)
 

@@ -78,7 +78,7 @@ def latentMAP(dataset,eigenvecs,eigenvals,batch_size=1024,start_ind = None,end_i
     if(len(eigenvals.shape) == 1):
         eigenvals = torch.diag(eigenvals)
 
-    eigenvals_inv = torch.inverse(eigenvals)
+    eigenvals_inv = torch.inverse(eigenvals + 1e-6 * torch.eye(rank,device=device,dtype=dtype)) #add a small value to avoid numerical instability
 
     if(nufft_plan == NufftPlan):
         nufft_plans = NufftPlan((L,)*3,batch_size=rank,dtype = dtype,device=device,**nufft_plan_kwargs)

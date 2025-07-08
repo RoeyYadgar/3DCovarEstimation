@@ -4,6 +4,8 @@ import os
 import click
 import numpy as np
 from aspire.source import RelionSource
+from aspire.image import Image
+from tqdm import tqdm
 '''
 This script generates a pre-processed star and mrcs file.Pre processing includes centring and downsampling images.
 '''
@@ -38,13 +40,17 @@ def preprocess_mrcs(input_star,output_mrcs,image_size):
         shifts = np.array([star['particles'].rlnOriginX,star['particles'].rlnOriginY]).T
     images = source.images[:]
     print('Loaded images')
-    images = images.shift(-shifts)
-    print('Shifted images')
-    if(image_size != orig_image_size):
-        images = images.downsample(image_size)
-        print('Downsampled images')
+    preprocessed_images = Image(np.zeros((images.shape[0],image_size,image_size),dtype=images.dtype))
+    batch_size = 10240
+    for i in tqdm(range(0, images.shape[0], batch_size), desc="Preprocessing images"):
+        idx = np.arange(i,min(i+batch_size,images.shape[0]))
+        ims = images[idx].shift(-shifts[idx])
+        #images = images.shift(-shifts)
+        if(image_size != orig_image_size):
+            preprocessed_images[idx] = ims.downsample(image_size)
+        
 
-    images.save(output_mrcs)
+    preprocessed_images.save(output_mrcs)
 
 @click.command()
 @click.option('-i','--input-star',type=str,help='input star file')
