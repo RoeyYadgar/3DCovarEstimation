@@ -355,6 +355,43 @@ def out_of_plane_rot_error(rot1, rot2):
 
     return angles, np.mean(angles), np.median(angles)
 
+
+def in_plane_rot_error(rot1, rot2):
+    """
+    Computes the in-plane rotation error (in degrees) between two sets of rotation matrices.
+    The in-plane rotation is the rotation about the z-axis (beam axis).
+    Returns:
+        angles: array of per-particle in-plane rotation errors (degrees)
+        mean_angle: mean in-plane rotation error (degrees)
+        median_angle: median in-plane rotation error (degrees)
+    """
+    # The in-plane rotation angle psi can be extracted from the rotation matrix as:
+    # psi = atan2(R[1,0], R[0,0])
+    # rot1, rot2: (..., 3, 3) tensors
+
+    # Ensure input is torch tensor
+    if not torch.is_tensor(rot1):
+        rot1 = torch.tensor(rot1)
+    if not torch.is_tensor(rot2):
+        rot2 = torch.tensor(rot2)
+
+    # Extract psi angles for each rotation
+    psi1 = torch.atan2(rot1[..., 1, 0], rot1[..., 0, 0])
+    psi2 = torch.atan2(rot2[..., 1, 0], rot2[..., 0, 0])
+
+    # Compute difference, wrap to [-pi, pi]
+    dpsi = psi1 - psi2
+    dpsi = (dpsi + np.pi) % (2 * np.pi) - np.pi
+
+    angles = torch.abs(dpsi) * 180.0 / np.pi
+    angles = angles.cpu().numpy()
+
+    mean_angle = np.mean(angles)
+    median_angle = np.median(angles)
+
+    return angles, mean_angle, median_angle
+
+
 def offset_mean_error(offsets1,offsets2,L= None):
     mean_err = torch.norm(offsets1- offsets2,dim=1).mean()
     if(L is not None):

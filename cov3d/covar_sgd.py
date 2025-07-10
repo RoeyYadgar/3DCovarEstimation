@@ -8,7 +8,7 @@ from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2,lowpass_volume
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
-from cov3d.poses import PoseModule,out_of_plane_rot_error,offset_mean_error,estimate_image_offsets_newton
+from cov3d.poses import PoseModule,out_of_plane_rot_error,in_plane_rot_error,offset_mean_error,estimate_image_offsets_newton
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
 from cov3d.dataset import create_dataloader,get_dataloader_batch_size
 from cov3d.wiener_coords import compute_latentMAP_batch
@@ -294,7 +294,8 @@ class CovarPoseTrainer(CovarTrainer):
         if(self.logTraining and self.gt_data is not None):
             if(self.gt_data.rotations is not None):
                 self.training_log.update({
-                    "rot_angle_dist" : []
+                    "rot_angle_dist" : [],
+                    "in_plane_rot_angle_dist" : []
                     })
             if(self.gt_data.offsets is not None):
                 self.training_log.update({
@@ -559,9 +560,10 @@ class CovarPoseTrainer(CovarTrainer):
                     rotvecs = self.get_pose_module().get_rotvecs()
                     rots_est = Rotation.from_rotvec(rotvecs.cpu().numpy())
                     rots_gt = Rotation(self.gt_data.rotations.numpy())
-                    #self.training_log["rot_angle_dist"].append(Rotation.mean_angular_distance(rots_est, rots_gt)) #TODO: implement this with pytorch
                     angle_diff = out_of_plane_rot_error(torch.tensor(rots_est.matrices), torch.tensor(rots_gt.matrices))
+                    in_plane_angle_diff = in_plane_rot_error(torch.tensor(rots_est.matrices), torch.tensor(rots_gt.matrices))
                     self.training_log["rot_angle_dist"].append(angle_diff[1])
+                    self.training_log["in_plane_rot_angle_dist"].append(in_plane_angle_diff[1])
 
 
                 if(self.gt_data.offsets is not None):
@@ -586,7 +588,7 @@ class CovarPoseTrainer(CovarTrainer):
         pbar_description = super()._get_pbar_desc(epoch)
         if(self.gt_data is not None):
             if(self.gt_data.rotations is not None):
-                pbar_description += f" , mean angle dist : {self.training_log['rot_angle_dist'][-1]:.2e}"
+                pbar_description += f" , mean angle dist out-of-plane: {self.training_log['rot_angle_dist'][-1]:.2e} , in-plane: {self.training_log['in_plane_rot_angle_dist'][-1]:.2e}"
             if(self.gt_data.offsets is not None):
                 pbar_description += f" , offset mean : {self.training_log['offsets_mean_dist'][-1]:.2e}"
             if(self.gt_data.contrasts is not None and self.get_pose_module().use_contrast):
