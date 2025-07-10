@@ -222,7 +222,7 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
             dataset.starfile = os.path.join(dir_name,'particles.star')     
             display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
             display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
-            data_dict,_,_ = covar_processing(dataset,r,dir_name,gt_data=gt_data,max_epochs=20,objective_func=obj,num_reg_update_iters=1,use_halfsets=False)
+            data_dict,_,_ = covar_processing(dataset,r,dir_name,gt_data=gt_data,max_epochs=20,objective_func=obj,num_reg_update_iters=1)
 
             coords_est = data_dict['coords_est']
             state_centers = np.zeros((len(voxels),coords_est.shape[1]))
