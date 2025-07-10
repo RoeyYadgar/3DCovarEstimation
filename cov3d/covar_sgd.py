@@ -489,9 +489,6 @@ class CovarPoseTrainer(CovarTrainer):
             self.covar.orthogonal_projection()
 
         with torch.no_grad():
-            #mask = self.dataset.mask.to(self.device) > 0.3
-            #self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
-
             lowpassed_vecs = lowpass_volume(self.covar.vectors.data,self.downsample_size // 2)
             self.covar.vectors.data.copy_(lowpassed_vecs)
 
