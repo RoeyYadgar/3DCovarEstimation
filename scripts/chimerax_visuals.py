@@ -262,15 +262,15 @@ def igg_1d():
         'turn y 80',
         'turn x 100',
         ]
-    save_volumes_figure(['data/scratch_data/igg_1d/images/snr0.01/downsample_L128/result_data/mean_est.mrc'],'data/final_figures/igg_1d/',vol_prefix='mean',view_commands=igg1d_view,remove_individual_figures=False)
-    save_eigenvolume_figure('exp_data/igg_analysis/analysis/eigenvol',10,'data/final_figures/igg_1d',(2,5),level=0.002,view_commands=igg1d_view)
+    #save_volumes_figure(['data/scratch_data/igg_1d/images/snr0.01/downsample_L128/result_data/mean_est.mrc'],'data/final_figures/igg_1d/',vol_prefix='mean',view_commands=igg1d_view,remove_individual_figures=False)
+    #save_eigenvolume_figure('exp_data/igg_analysis/analysis/eigenvol',10,'data/final_figures/igg_1d',(2,5),level=0.002,view_commands=igg1d_view)
 
     igg1d_view = ['view orient',
-            'zoom 2',
+            'zoom 4',
             'lighting soft',
             'turn y 80',
             'turn x 100',
-            'move x 50'
+            'move x -5'
             ]
     reconstructed_vols = [f'data/scratch_data/igg_1d/images/snr0.01/downsample_L128/result_data/cryobench_output/all_volumes/vol{i:04}.mrc' for i in range(0,100,10)]
     gt_vols = [f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,10)]
@@ -281,10 +281,10 @@ def igg_1d():
     k = 10
     for i in range(0, len(reconstructed_vols), k):
         interleaved_vols.extend(reconstructed_vols[i:i+k])
-        levels += [0.3]*k
+        levels += [0.632]*k
         colors += ['#ffffa0ff']*k
         interleaved_vols.extend(gt_vols[i:i+k])
-        levels += [0.003]*k
+        levels += [0.0358]*k
         colors += ['#b2ffff']*k
 
     save_volumes_figure(interleaved_vols,'data/final_figures/igg_1d',(2,10),vol_prefix='reconstructed_vol',view_commands=igg1d_view,level=levels,color=colors)
@@ -381,7 +381,7 @@ def empiar10076():
 
 if __name__ == "__main__":
     #discrete_sim()
-    #igg_1d()
+    igg_1d()
     #covar_fsc_simulation()
     #empiar10076()
     #igg_1d_2()

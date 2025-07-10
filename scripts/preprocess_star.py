@@ -38,6 +38,8 @@ def preprocess_mrcs(input_star,output_mrcs,image_size):
         shifts = np.array([star['particles'].rlnOriginXAngst,star['particles'].rlnOriginYAngst]).T / pixel_size
     elif('rlnOriginX' in star['particles'].columns):
         shifts = np.array([star['particles'].rlnOriginX,star['particles'].rlnOriginY]).T
+
+    shifts = np.flip(shifts,axis=1)
     images = source.images[:]
     print('Loaded images')
     preprocessed_images = Image(np.zeros((images.shape[0],image_size,image_size),dtype=images.dtype))

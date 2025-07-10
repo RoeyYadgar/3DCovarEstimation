@@ -103,7 +103,7 @@ def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 1
 def filter_datasets(datasets,dataset_names):
     return {k: [d for d in v if any(name in d['dataset'] for name in dataset_names)] for k, v in datasets.items()}
 
-dataset_names = ['igg_1d','igg_1d_noisiest','igg_rl','Ribosembly','Spike-MD','Tomotwin-100','Empiar10076']
+dataset_names = ['igg_1d','igg_1d_noisiest','igg_rl','Ribosembly','Spike-MD','Tomotwin-100','Empiar10076','Empiar10180']
 
 datasets_L64 = [
     "igg_1d/images/snr0.01/downsample_L64/snr0.01.star",
@@ -113,6 +113,7 @@ datasets_L64 = [
     "Spike-MD/images/snr0.1/downsample_L64/particles.star",
     "Tomotwin-100/images/snr0.01/downsample_L64/snr0.01.star",
     "empiar10076/downsample_L64/L17Combine_weight_local_preprocessed_L64.star",
+    "empiar10180/downsample_L64/particles.star",
 ]
 
 dataset_masks = [
@@ -123,6 +124,7 @@ dataset_masks = [
     "Spike-MD/init_mask/mask_128.mrc",
     "Tomotwin-100/init_mask/mask.mrc",
     "empiar10076/mask_full.mrc",
+    "empiar10180/Mask-and-Ref/global_mask.mrc",
 ]
 
 gt_dir = [
@@ -133,6 +135,7 @@ gt_dir = [
     "Spike-MD/all_vols",
     "Tomotwin-100/vols/128_org",
     "data/scratch_data/empiar10076/analysis/minor_classes",
+    None,
 ]
 
 gt_latent = [
@@ -142,7 +145,8 @@ gt_latent = [
     None,#TODO: is there GT latent for ribosembly?
     "Spike-MD/gt_latents.pkl",
     None,#TODO: is tehre GT latent for tomotwin
-    None
+    None,
+    None,
 ]
 
 gt_labels = [
@@ -153,6 +157,7 @@ gt_labels = [
     'Spike-MD/labels.pkl',
     'Tomotwin-100/gt_latents.pkl',
     "empiar10076/downsample_L128/filtered_labels.pkl",
+    None,
 ]
 
 gt_pose = [
@@ -163,6 +168,7 @@ gt_pose = [
     'Spike-MD/images/snr0.1/downsample_L128/poses.pkl',
     'Tomotwin-100/images/snr0.01/downsample_L128/poses.pkl',
     "empiar10076/downsample_L128/poses.pkl", #Not actually GT but treated as for reference
+    "empiar10180/downsample_L128/poses.pkl",
 ]
 
 datasets_L128 = [dataset.replace("L64", "L128") for dataset in datasets_L64]
