@@ -399,9 +399,8 @@ class CovarPoseTrainer(CovarTrainer):
                 if(not self.optimize_in_fourier_domain):
                     phase_shifted_image = centered_ifft2(phase_shifted_image).real
                 preprocessed_images = phase_shifted_image - mean_forward
-                #TODO: handle different coss functions
-
-                return raw_cost_maximum_liklihood_fourier_domain(projected_eigenvecs,preprocessed_images,self.noise_var,
+                
+                return self.raw_cost_func(projected_eigenvecs,preprocessed_images,self.noise_var,
                                       apply_mean_const_term=True,mean_aggregate=False)
 
 
@@ -508,7 +507,7 @@ class CovarPoseTrainer(CovarTrainer):
         super().setup_training(**kwargs)
         self.get_mean_module().init_grid_correction(kwargs.get('nufft_disc'))
         self.mask = self.get_mean_module().get_volume_mask()
-        
+        self.raw_cost_func = raw_cost_fourier_domain if kwargs.get('objective_func') == 'ls' else raw_cost_maximum_liklihood_fourier_domain
         
         self.softening_kernel_fourier = soft_edged_kernel(radius=5,L=self.get_mean_module().resolution,dim=2,in_fourier=True).to(self.device).to(self.mask.dtype)
 
@@ -729,16 +728,31 @@ def cost_maximum_liklihood(vols,images,nufft_plans,filters,noise_var,reg_scale=0
 
 
 #TODO : merge this into a single function in cost
-def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False):
-    batch_size = images.shape[0]
-    #vols can either be a 2-tuple of (real,imag) tensors or a complex tensor
-    rank = vols[0].shape[0] if isinstance(vols,tuple) else vols.shape[0]
+def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,fourier_reg = None,apply_mean_const_term=False,mean_aggregate=True):
+    rank = vols[0].shape[0]
     L = images.shape[-1]
     projected_vols = vol_forward(vols,nufft_plans,filters,fourier_domain=True)
 
+    cost_val = raw_cost_fourier_domain(projected_vols,images,noise_var,apply_mean_const_term=apply_mean_const_term,mean_aggregate=mean_aggregate)
+
+    if(fourier_reg is not None and reg_scale != 0):
+        #TODO: vols should get Covar's grid_correction reversed here
+        vols_fourier = vols * torch.sqrt(fourier_reg)
+        vols_fourier = vols_fourier.reshape((rank,-1))
+        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
+        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
+        cost_val += reg_scale * reg_cost
+        
+
+    return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
+
+
+def raw_cost_fourier_domain(projected_vols,images,noise_var,apply_mean_const_term=False,mean_aggregate=True):
+    batch_size = images.shape[0]
+    L = images.shape[-1]
 
     images = images.reshape((batch_size,1,-1))
-    projected_vols = projected_vols.reshape((batch_size,rank,-1))
+    projected_vols = projected_vols.reshape((batch_size,-1,L**2))
 
     images_projvols_term = torch.matmul(projected_vols,images.transpose(1,2).conj())
     projvols_prod_term = torch.matmul(projected_vols,projected_vols.transpose(1,2).conj())
@@ -755,18 +769,10 @@ def cost_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale = 0,
         cost_val += torch.pow(norm_squared_images,2)
         cost_val -= 2*noise_var*norm_squared_images+(noise_var * L) ** 2
 
-    cost_val = torch.mean(cost_val,dim=0)
+    cost_val = torch.mean(cost_val,dim=0) if mean_aggregate else cost_val
 
-    if(fourier_reg is not None and reg_scale != 0):
-        #TODO: vols should get Covar's grid_correction reversed here
-        vols_fourier = vols * torch.sqrt(fourier_reg)
-        vols_fourier = vols_fourier.reshape((rank,-1))
-        vols_fourier_inner_prod = vols_fourier @ vols_fourier.conj().T
-        reg_cost = torch.sum(torch.pow(vols_fourier_inner_prod.abs(),2))
-        cost_val += reg_scale * reg_cost
-        
+    return cost_val
 
-    return cost_val / (L ** 4) #Cost value in fourier domain scales with L^4 compared to spatial domain
 
 def cost_maximum_liklihood_fourier_domain(vols,images,nufft_plans,filters,noise_var,reg_scale=0,fourier_reg=None,apply_mean_const_term=False,mean_aggregate=True):
     rank = vols.shape[0]
