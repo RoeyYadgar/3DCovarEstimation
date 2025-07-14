@@ -49,6 +49,7 @@ class CovarTrainer():
         self.filter_gain = self.dataset.get_total_gain(device=self.device)
         self.num_reduced_lr_before_stop = 4
         self.scheduler_patiece = 0
+        self.apply_masking_on_epoch = True
         self.fourier_reg = None
         self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
 
@@ -189,9 +190,10 @@ class CovarTrainer():
             print(f'New learning rate set to {self.scheduler.get_last_lr()}')
 
             #Apply masking on covar vectors
-            with torch.no_grad():
-                mask = self.dataset.mask.to(self.device) > 0.3
-                self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
+            if self.apply_masking_on_epoch:
+                with torch.no_grad():
+                    mask = self.dataset.mask.to(self.device) > 0.3
+                    self.covar.vectors.data.copy_(self.covar.vectors.data*mask)
 
             if(self.logTraining and self.save_path is not None):
                 self.training_log['epoch_run_time'].append(epoch_end_time - epoch_start_time)
@@ -286,7 +288,8 @@ class CovarPoseTrainer(CovarTrainer):
         super().__init__(covar,train_data,device,save_path,gt_data,training_log_freq)
         self.mean = mean.to(self.device)
         self.pose = pose.to(self.device)
-        self.pose_lr_ratio = 0.3
+        self.pose_lr_ratio = 3
+        self.apply_masking_on_epoch = False
         self.num_rep = 1
         self.set_pose_grad_req(True)
         self._updated_idx = torch.zeros(len(self.dataset),device=self.device)
@@ -926,6 +929,7 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
 
         trainer_final.fourier_reg = trainer1.fourier_reg
         trainer_final.train(max_epochs=num_epochs,**kwargs)
-        
 
+    torch.cuda.empty_cache()
+        
     return
