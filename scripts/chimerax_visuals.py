@@ -98,7 +98,7 @@ def create_gif_frames(dir,prefix):
             file_path = os.path.join(dir, fname)
             os.remove(file_path)
 
-def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vol',view_commands = [],volume_names = None,remove_individual_figures=True,create_gif=False,**chimera_kwargs):
+def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vol',view_commands = [],volume_names = None,remove_individual_figures=True,create_gif=False,cxc_commands = None,**chimera_kwargs):
 
     def prep_kwargs(kwargs_dict,idx):
         out_dict = {}
@@ -117,8 +117,13 @@ def save_volumes_figure(volume_path,output_dir,image_shape = None,vol_prefix='vo
         elif any(char in volume_path for char in ['*', '?', '[']): #If volume is a file pattern
             volume_path = sorted(glob.glob(volume_path))
 
-    init_CXC()
+    init_CXC()        
     CXC.set_view(view_commands)
+    if(cxc_commands is not None):
+        if(isinstance(cxc_commands,str)):
+            CXC.add(cxc_commands)
+        elif(isinstance(cxc_commands,list)):
+            [CXC.add(c) for c in cxc_commands]
     if(isinstance(volume_path,str)):
         vols = Volume.load(volume_path)
         num_vols = len(vols)
