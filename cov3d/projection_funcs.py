@@ -111,6 +111,20 @@ def lowpass_volume(volume,cutoff, lowpass_shape = 'rect'):
     fourier_vol *= fourier_mask.unsqueeze(0)
     return centered_ifft3(fourier_vol).real
 
+
+def highpass_volume(volume,cutoff, highpass_shape = 'rect'):
+    fourier_vol = centered_fft3(volume)
+    L = volume.shape[-1]
+    if(highpass_shape == 'rect'):
+        fourier_mask = torch.arange(-L//2,L//2) if L % 2 == 0 else torch.arange(-L//2,L//2) + 1
+        fourier_mask = torch.abs(fourier_mask.to(volume.device)) > cutoff
+        fourier_mask = torch.einsum('i,j,k->ijk',fourier_mask,fourier_mask,fourier_mask)
+    elif(highpass_shape == 'sphere'):
+        fourier_mask = torch.tensor(grid_3d(L,normalized=False)['r'],device=volume.device)
+        fourier_mask = torch.abs(fourier_mask) > cutoff
+    fourier_vol *= fourier_mask.unsqueeze(0)
+    return centered_ifft3(fourier_vol).real
+
 def vol_forward(volume,plan,filters = None,fourier_domain = False):
     L = plan.sz[-1]
     if(type(plan) == list or type(plan) == tuple): #When mupltiple plans are given loop through them

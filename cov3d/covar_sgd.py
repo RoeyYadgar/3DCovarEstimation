@@ -6,7 +6,7 @@ from tqdm import tqdm
 import copy
 from cov3d.utils import cosineSimilarity,soft_edged_kernel,get_cpu_count
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
-from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2,crop_image,lowpass_volume
+from cov3d.projection_funcs import vol_forward,centered_fft3,preprocess_image_batch,get_mask_threshold,centered_ifft2,centered_fft2,crop_image,lowpass_volume,highpass_volume
 from cov3d.fsc_utils import rpsd,average_fourier_shell,vol_fsc,expand_fourier_shell,upsample_and_expand_fourier_shell,covar_fsc
 from cov3d.poses import PoseModule,out_of_plane_rot_error,in_plane_rot_error,offset_mean_error,estimate_image_offsets_newton
 from cov3d.mean import reconstruct_mean_from_halfsets,reconstruct_mean_from_halfsets_DDP
@@ -41,7 +41,8 @@ class CovarTrainer():
                     "cosine_sim": [],
                     "fro_err": [],
                     "fro_err_half_res" : [],
-                    "fro_err_quarter_res" : [],
+                    "fro_err_upper_half_res" : [],
+                    "fro_err_quarter_res" : [],                    
                     "covar_fsc_mean": []
                 })
             
@@ -214,8 +215,7 @@ class CovarTrainer():
 
     def update_fourier_reg_halfsets(self,fourier_reg):
         fourier_reg = fourier_reg.to(self.device)
-        if(self.objective_func == 'ls'):
-            fourier_reg = fourier_reg / self.covar.resolution ** 1.5 #TODO: figure out where this factor comes from
+        fourier_reg = fourier_reg / self.covar.resolution ** 1.5 #TODO: figure out where this factor comes from
 
         if(self.optimize_in_fourier_domain):
             #This ensures that the fourier_reg term is in the same as the upsampled size of covar
@@ -245,6 +245,12 @@ class CovarTrainer():
                 vectors_GT_lowpass = lowpass_volume(vectorsGT,L//4)
                 self.training_log["fro_err_half_res"].append(
                     (frobeniusNormDiff(vectors_GT_lowpass, vectors_lowpass) / frobeniusNorm(vectors_GT_lowpass)).cpu().numpy()
+                )
+
+                vectors_highpass = highpass_volume(vectors,L//4)
+                vectors_GT_highpass = highpass_volume(vectorsGT,L//4)
+                self.training_log["fro_err_upper_half_res"].append(
+                    (frobeniusNormDiff(vectors_GT_highpass, vectors_highpass) / frobeniusNorm(vectors_GT_highpass)).cpu().numpy()
                 )
 
                 vectors_lowpass = lowpass_volume(vectors,L//8)
