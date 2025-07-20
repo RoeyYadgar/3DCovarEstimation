@@ -60,12 +60,13 @@ def init_CXC():
     CXC = CXCFile()
 
 
-def save_volume_figure(volume_path,output_image,resolution=500,color='#ffffa0ff',level=None):
+def save_volume_figure(volume_path,output_image,resolution=500,color='#ffffa0ff',level=None,lighting='full'):
     #CXC = CXCFile()
     CXC.add(f'open {volume_path}')
     CXC.add(f'volume #1 color {color}')
     if(level is not None):
         CXC.add(f'volume all level {level}')
+    CXC.add(f'lighting {lighting}')
     CXC.add('surface dust #1')
     CXC.add(f'save {output_image} transparentBackground true width {resolution} height {resolution} supersample 3')
     CXC.add('close #1')
