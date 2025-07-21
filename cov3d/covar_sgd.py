@@ -47,7 +47,7 @@ class CovarTrainer():
                 })
             
 
-        self.filter_gain = self.dataset.get_total_gain(device=self.device)
+        self.filter_gain = self.dataset.get_total_covar_gain(device=self.device)
         self.num_reduced_lr_before_stop = 4
         self.scheduler_patiece = 0
         self.apply_masking_on_epoch = True
@@ -215,7 +215,6 @@ class CovarTrainer():
 
     def update_fourier_reg_halfsets(self,fourier_reg):
         fourier_reg = fourier_reg.to(self.device)
-        fourier_reg = fourier_reg / self.covar.resolution ** 1.5 #TODO: figure out where this factor comes from
 
         if(self.optimize_in_fourier_domain):
             #This ensures that the fourier_reg term is in the same as the upsampled size of covar
@@ -673,11 +672,9 @@ def compute_updated_fourier_reg(eigenvecs1,eigenvecs2,filter_gain,current_fourie
     if(current_fourier_reg is None):
         current_fourier_reg = torch.zeros((L,)*3,dtype=filter_gain.dtype,device=filter_gain.device)
 
-    averaged_filter_gain = average_fourier_shell(1/filter_gain).reshape(-1,1)
-    averaged_filter_gain[averaged_filter_gain == torch.inf] = averaged_filter_gain[averaged_filter_gain != torch.inf][-1]
-    averaged_filter_gain = (averaged_filter_gain @ averaged_filter_gain.T)
-
-    filter_gain_shell_correction = averaged_filter_gain
+    filter_gain_shell_correction = 1/filter_gain
+    filter_gain_shell_correction[:,L//2:] = filter_gain_shell_correction[L//2,L//2]
+    filter_gain_shell_correction[L//2:,:] = filter_gain_shell_correction[L//2,L//2]
 
     if(mask is not None):
         mask = mask.clone().to(eigenvecs1.device)

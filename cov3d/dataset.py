@@ -101,6 +101,8 @@ class CovarDataset(Dataset):
                 filters = self.unique_filters[filters].to(device) if len(self.unique_filters) > 0 else None
                 if(pose_module.use_contrast):
                     #If pose module containts contrasts - correct images
+                    #TODO: The ideal way to use it is to apply the contrast on the filters.
+                    # However, the dataset only contains the unique filters.
                     pts_rot,phase_shift,contrasts = pose_module(idx)
                     images = images / contrasts.reshape(-1,1,1)
                 else:
@@ -158,6 +160,38 @@ class CovarDataset(Dataset):
         gain_tensor /= L
 
         return gain_tensor
+
+
+    def get_total_covar_gain(self,batch_size=512,device=None):
+        """
+        Returns a 2D tensor represnting the total gain of each frequency pair in the covariance least squares problem.
+        """
+        
+        L = self.resolution
+        upsample_factor=1
+        nufft_plan = NufftPlanDiscretized((L,)*3,upsample_factor=upsample_factor,mode='nearest',use_half_grid=False)
+        device = get_torch_device() if device is None else device
+        gain_tensor = torch.zeros((L*upsample_factor,)*3,device=device,dtype=self.dtype)
+
+        s = average_fourier_shell(gain_tensor).shape[0]
+        covar_shell_gain = torch.zeros((s,s),device=device,dtype=self.dtype)
+
+        for i in range(0,len(self),batch_size):
+            _,pts_rot,filter_indices,_ = self[i:min(i+batch_size,len(self))]
+            pts_rot = pts_rot.to(device)
+            filters = self.unique_filters[filter_indices].to(device) if self.unique_filters is not None else None
+
+            nufft_plan.setpts(pts_rot)
+
+            if(L % 2 == 0):
+                filters[:,0,:] = 0
+                filters[:,:,0] = 0
+            gain_tensor = nufft_plan.execute_adjoint_unaggregated(torch.complex(filters**2,torch.zeros_like(filters))).abs() / L**2
+
+            averaged_gain_tensor = average_fourier_shell(*gain_tensor)
+            covar_shell_gain += averaged_gain_tensor.T @ averaged_gain_tensor
+
+        return covar_shell_gain
 
     def remove_vol_from_images(self,vol,coeffs = None,copy_dataset = False):
         device = vol.device
