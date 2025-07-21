@@ -311,7 +311,7 @@ class CovarPoseTrainer(CovarTrainer):
                     "offsets_mean_dist" : []
                     })
             if(self.gt_data.contrasts is not None and self.get_pose_module().use_contrast):
-                self.training_log.update({"contrast_mean_dist" : []})
+                self.training_log.update({"contrast_mean_dist" : [],"contrast_corr" : []})
             if(self.gt_data.mean is not None):
                 self.training_log.update({
                     "mean_vol_norm_err" : [],
@@ -408,12 +408,17 @@ class CovarPoseTrainer(CovarTrainer):
             projected_eigenvecs = vol_forward(self._covar(dummy_var=None).detach(),self.nufft_plans,filters,fourier_domain=self.optimize_in_fourier_domain)
 
             if(self.get_pose_module().use_contrast):
-                latent_coords,_,_ = compute_latentMAP_batch(images-mean_forward,projected_eigenvecs,self.dataset.noise_var)
-                
-                predicted_images = mean_forward + torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1),dim=1)
+                shifted_images = images * self.pose(idx,ds_resolution=self.downsample_size)[1] 
 
-                contrast_est = (torch.sum(predicted_images.conj() * images,dim=(-1,-2)) / torch.norm(predicted_images,dim=(-1,-2))**2).real
-                contrast_est = contrast_est.clamp(0.5,1.5)
+                #TODO: use eigen info in predicted images - currently does not work well
+                #latent_coords,_,_ = compute_latentMAP_batch(shifted_images-mean_forward,projected_eigenvecs,self.dataset.noise_var)
+                #predicted_images = mean_forward + torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1),dim=1)
+                predicted_images = mean_forward
+
+                predicted_images = centered_fft2(centered_ifft2(predicted_images).real * soft_mask)
+
+                contrast_est = (torch.sum(predicted_images.conj() * shifted_images,dim=(-1,-2)) / torch.norm(predicted_images,dim=(-1,-2))**2).real
+                #contrast_est = contrast_est.clamp(0.5,1.5)
                 self.get_pose_module().set_contrasts(contrast_est.unsqueeze(-1),idx=idx)
 
             def obj_func(phase_shifted_image):
@@ -617,7 +622,9 @@ class CovarPoseTrainer(CovarTrainer):
                     cont = self.get_pose_module().get_contrasts()
                     cont_gt = self.gt_data.contrasts
                     cont_mean_err = torch.norm(cont.cpu()-cont_gt,dim=1).mean().numpy()
+                    cont_corr = torch.corrcoef(torch.concat([cont.cpu(),cont_gt.cpu()],dim=1).T)[0,1].numpy()
                     self.training_log["contrast_mean_dist"].append(cont_mean_err)
+                    self.training_log["contrast_corr"].append(cont_corr)
         
 
     def _get_pbar_desc(self, epoch):
@@ -628,7 +635,7 @@ class CovarPoseTrainer(CovarTrainer):
             if(self.gt_data.offsets is not None):
                 pbar_description += f" , offset mean : {self.training_log['offsets_mean_dist'][-1]:.2e}"
             if(self.gt_data.contrasts is not None and self.get_pose_module().use_contrast):
-                pbar_description += f" , contrast meean error: {self.training_log['contrast_mean_dist'][-1]:.2e}"
+                pbar_description += f" , contrast corr: {self.training_log['contrast_corr'][-1]:.2e}"
             if(self.gt_data.mean is not None):
                 pbar_description += f" , mean vol norm err : {self.training_log['mean_vol_norm_err'][-1]:.2e}"
                 pbar_description += f" , mean vol fsc : {self.training_log['mean_vol_fsc'][-1]:.2e}"

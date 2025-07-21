@@ -160,7 +160,7 @@ def regularize_mean_from_halfsets(mean_half1,lhs1,rhs1,mean_half2,lhs2,rhs2,mask
 
     fourier_reg = 1/((mean_fsc / (1-mean_fsc)) * averaged_filter_gain)
 
-    fourier_reg = upsample_and_expand_fourier_shell(fourier_reg.unsqueeze(0),lhs1.shape[-1],3)
+    fourier_reg = upsample_and_expand_fourier_shell(fourier_reg.unsqueeze(0),lhs1.shape[-1],3) / (L ** 1) #TODO: check normalization constant
 
     mean_volume = ((lhs1 / (rhs1 + fourier_reg)) + (lhs2 / (rhs2 + fourier_reg)))/2
 
@@ -180,8 +180,9 @@ if __name__ == "__main__":
     from aspire.utils import Rotation
     import os
     #dataset_path = 'data/pose_opt_exp'
-    dataset_path = 'data/scratch_data/igg_1d/images/snr0.01/downsample_L128/relion_refinement_abinit'
+    dataset_path = 'data/scratch_data/igg_1d/images/snr0.01/downsample_L128/abinit_refine'
     dataset = pickle.load(open(os.path.join(dataset_path,'result_data/dataset.pkl'),'rb'))
+    dataset.to_fourier_domain()
 
     USE_GT = True
 
