@@ -294,7 +294,6 @@ class CovarPoseTrainer(CovarTrainer):
         self.mean = mean.to(self.device)
         self.pose = pose.to(self.device)
         self.pose_lr_ratio = 3
-        self.apply_masking_on_epoch = False
         self.num_rep = 1
         self.set_pose_grad_req(True)
         self._updated_idx = torch.zeros(len(self.dataset),device=self.device)
@@ -564,6 +563,7 @@ class CovarPoseTrainer(CovarTrainer):
 
     def train_epochs(self, max_epochs, **training_kwargs):
         while(self.downsample_factor >= 0):
+            self.apply_masking_on_epoch = self.downsample_factor == 0
             super().train_epochs(max_epochs, **training_kwargs)
             self.downsample_factor -= 1
         self.downsample_factor = 0

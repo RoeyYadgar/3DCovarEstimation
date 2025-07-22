@@ -33,16 +33,15 @@ class CovarDataset(Dataset):
 
         self.images = torch.tensor(src.images[:].asnumpy())
 
+        if(self.data_inverted):
+            self.images = -1*self.images
+
         #TODO: signal var should be estimated after removing projected mean but before applying masking
         self.estimate_filters_gain()
         self.estimate_signal_var()
         if(apply_preprocessing):
             self.preprocess_from_modules(*self.construct_mean_pose_modules(mean_volume,mask,self.rot_vecs,self.offsets))
             self.offsets[:] = 0 #After preprocessing images have no offsets
-
-        if(self.data_inverted):
-            self.images = -1*self.images
-
 
 
         self.dtype = self.images.dtype
@@ -162,7 +161,7 @@ class CovarDataset(Dataset):
         return gain_tensor
 
 
-    def get_total_covar_gain(self,batch_size=512,device=None):
+    def get_total_covar_gain(self,batch_size=256,device=None):
         """
         Returns a 2D tensor represnting the total gain of each frequency pair in the covariance least squares problem.
         """

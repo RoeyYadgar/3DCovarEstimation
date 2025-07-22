@@ -158,7 +158,8 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
         invert_data = not check_dataset_sign(mean_est,mask)
         if(invert_data):
             print('inverting dataset sign')
-            (-1 * mean_est).save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
+            mean_est = -1 * mean_est
+            mean_est.save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
             if(mean_gt is not None):
                 mean_gt *= -1
         dataset = CovarDataset(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
@@ -259,6 +260,8 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
         if(pose.use_contrast):
             with open(path.join(output_dir,'contrast.pkl'),'wb') as fid:
                 pickle.dump(pose.get_contrasts(),fid)
+
+        mean_volume_est = Volume(mean.get_volume_spatial_domain().detach().cpu().numpy())
     
     #Compute wiener coordinates using estimated and ground truth eigenvectors
     eigen_est,eigenval_est= cov.eigenvecs
@@ -278,7 +281,8 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
     data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
                 'coords_est' : coords_est.cpu().numpy(), 'coords_covar_inv_est' : coords_covar_inv_est.numpy(),
                 'mean_est' : mean_volume_est.asnumpy() if mean_volume_est is not None else None,
-                'starfile' : os.path.abspath(dataset.starfile), 'data_sign_inverted' : dataset.data_inverted}
+                'starfile' : os.path.abspath(dataset.starfile) if dataset.starfile is not None else None,
+                'data_sign_inverted' : dataset.data_inverted}
     if(is_gt_eigenvols):
         data_dict = {**data_dict,
                         'eigenvals_GT' : eigenvals_GT.cpu().numpy(),
