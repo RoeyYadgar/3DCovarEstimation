@@ -6,16 +6,22 @@ from cov3d.poses import get_phase_shift_grid,pose_cryoDRGN2APIRE
 from cov3d.projection_funcs import centered_fft2,centered_ifft2
 
 class ImageSource:
-    def __init__(self,particles_path,ctf_path,poses_path,apply_preprocessing=True):
-        self.image_source = CryoDRGNImageSource.from_file(particles_path)
+    def __init__(self,particles_path,ctf_path,poses_path,indices=None,apply_preprocessing=True):
+        self.image_source = CryoDRGNImageSource.from_file(particles_path,indices=indices)
         self.ctf_params = torch.tensor(load_ctf_for_training(self.resolution,ctf_path))
         self.freq_lattice = (torch.stack(get_phase_shift_grid(self.resolution),dim=0)/torch.pi/2).permute(1,2,0).reshape(self.resolution**2,2)
+
+        if indices is None:
+            indices = torch.arange(self.image_source.n)
+        self.indices = indices
+        self.ctf_params = self.ctf_params[indices]
+
 
         with open(poses_path,'rb') as f:
             poses = pickle.load(f)
         rots,offsets = pose_cryoDRGN2APIRE(poses,self.resolution)
-        self.rotations = torch.tensor(rots)
-        self.offsets = torch.tensor(offsets)
+        self.rotations = torch.tensor(rots)[indices]
+        self.offsets = torch.tensor(offsets)[indices]
         self.apply_preprocessing = apply_preprocessing
 
         self.whitening_filter = None
