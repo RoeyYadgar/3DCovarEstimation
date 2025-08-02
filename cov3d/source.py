@@ -19,6 +19,8 @@ class ImageSource:
         self.apply_preprocessing = apply_preprocessing
 
         self.whitening_filter = None
+        self.offset_normalization = torch.zeros(self.image_source.n)
+        self.scale_normalization = torch.ones(self.image_source.n)
         if self.apply_preprocessing:
             self._preprocess_images()
         
@@ -34,7 +36,7 @@ class ImageSource:
         freq_lattice = self.freq_lattice / ctf_params[:,0].view(-1,1,1)
         ctf = compute_ctf(freq_lattice,*torch.split(ctf_params[:,1:],1,1)).reshape(-1,self.resolution,self.resolution)
         
-        ctf = ctf if not self.apply_preprocessing else ctf * self.whitening_filter
+        return ctf if not self.apply_preprocessing else ctf * self.whitening_filter
 
     def images(self,index,fourier=False):
         images = self.image_source.images(index)
@@ -45,11 +47,12 @@ class ImageSource:
 
         if self.apply_preprocessing:
             images *= self.whitening_filter
+            images[:,self.resolution//2,self.resolution//2] -= self.offset_normalization[index] * self.resolution**2
+            images /= self.scale_normalization[index].reshape(-1,1,1)
 
         if not fourier:
-            images = centered_ifft2(images)
+            images = centered_ifft2(images).real
 
-    
         return images
 
 
@@ -72,6 +75,7 @@ class ImageSource:
         noise_psd_est = torch.zeros((self.resolution,)*2)
         for i in range(0,n,batch_size):
             idx = torch.arange(i,min(i+batch_size,n))
+            #Use original unaltered images (not self.images)
             images = self.image_source.images(idx) * mask
 
             mean_est += torch.sum(images)
@@ -86,4 +90,13 @@ class ImageSource:
 
         self.whitening_filter = (1/torch.sqrt(noise_psd_est)).unsqueeze(0)
 
+        #Per-image normalization 
+        #After setting up whitening filter, we can access self.images to get the whitened images
+        for i in range(0,n,batch_size):
+            idx = torch.arange(i,min(i+batch_size,n))
+            images = self.images(idx)
+            mean = torch.mean(images[:,mask],dim=1)
+            std = torch.std(images[:,mask],dim=1)
+            self.offset_normalization[idx] = mean
+            self.scale_normalization[idx] = std
             
