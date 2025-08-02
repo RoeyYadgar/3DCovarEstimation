@@ -168,22 +168,24 @@ class NufftPlan(BaseNufftPlan):
             self.dtype = torch.float32
             self.complex_dtype = torch.complex64
             np_dtype = np.float32
+            np_complex_dtype = np.complex64
         elif(dtype == torch.float64 or dtype == torch.complex128):
             self.dtype = torch.float64
             self.complex_dtype = torch.complex128
             np_dtype = np.float64
+            np_complex_dtype = np.complex128
             
         eps = max(eps, np.finfo(np_dtype).eps * 10) #dtype determines determines the eps bottleneck
 
         if(device == torch.device('cpu')):
-            self.forward_plan = Plan(nufft_type = 2,n_modes_or_dim=self.sz,n_trans=batch_size, eps = eps, dtype = np_dtype,**kwargs)
-            self.adjoint_plan = Plan(nufft_type = 1,n_modes_or_dim=self.sz,n_trans=batch_size, eps = eps, dtype = np_dtype,**kwargs)
+            self.forward_plan = Plan(nufft_type = 2,n_modes_or_dim=self.sz,n_trans=batch_size, eps = eps, dtype = np_complex_dtype,**kwargs)
+            self.adjoint_plan = Plan(nufft_type = 1,n_modes_or_dim=self.sz,n_trans=batch_size, eps = eps, dtype = np_complex_dtype,**kwargs)
         else: #GPU device
             #TODO : check gpu_sort effect
             default_kwargs = {'gpu_method':1,'gpu_sort' : 0}
             default_kwargs.update(kwargs)
-            self.forward_plan = cuPlan(nufft_type = 2,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,gpu_device_id = device.index,**default_kwargs)
-            self.adjoint_plan = cuPlan(nufft_type = 1,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_dtype,gpu_device_id = device.index,**default_kwargs)
+            self.forward_plan = cuPlan(nufft_type = 2,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_complex_dtype,gpu_device_id = device.index,**default_kwargs)
+            self.adjoint_plan = cuPlan(nufft_type = 1,n_modes = self.sz,n_trans=batch_size,eps = eps,dtype=np_complex_dtype,gpu_device_id = device.index,**default_kwargs)
 
 
     def setpts(self,points):

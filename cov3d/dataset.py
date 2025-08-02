@@ -17,21 +17,11 @@ from cov3d.poses import PoseModule
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False,apply_preprocessing = True):
-        self.resolution = src.L
-        self.rot_vecs = torch.tensor(Rotation(src.rotations).as_rotvec().astype(src.rotations.dtype))
-        self.offsets = torch.tensor(src.offsets,dtype=self.rot_vecs.dtype)
+        self._init_from_aspire_source(src)
         self.pts_rot = self.compute_pts_rot(self.rot_vecs)
         self.noise_var = noise_var
         self.data_inverted = invert_data
         self._in_spatial_domain = True
-
-        self.filter_indices = torch.tensor(src.filter_indices.astype(int)) #For some reason ASPIRE store filter_indices as string for some star files
-        num_filters = len(src.unique_filters)
-        self.unique_filters = torch.zeros((num_filters,src.L,src.L))
-        for i in range(num_filters):
-            self.unique_filters[i] = torch.tensor(src.unique_filters[i].evaluate_grid(src.L))
-
-        self.images = torch.tensor(src.images[:].asnumpy())
 
         if(self.data_inverted):
             self.images = -1*self.images
@@ -47,12 +37,26 @@ class CovarDataset(Dataset):
         self.dtype = self.images.dtype
         self.mask = torch.tensor(mask.asnumpy()) if mask is not None else None
 
+    def _init_from_aspire_source(self,source):
+        self.resolution = source.L
+        self.rot_vecs = torch.tensor(Rotation(source.rotations).as_rotvec().astype(source.rotations.dtype))
+        self.offsets = torch.tensor(source.offsets,dtype=self.rot_vecs.dtype)
+        self.images = torch.tensor(source.images[:].asnumpy())
+
+        filter_indices = torch.tensor(source.filter_indices.astype(int)) #For some reason ASPIRE store filter_indices as string for some star files
+        num_filters = len(source.unique_filters)
+        unique_filters = torch.zeros((num_filters,source.L,source.L))
+        for i in range(num_filters):
+            unique_filters[i] = torch.tensor(source.unique_filters[i].evaluate_grid(source.L))
+
+        self.filters = unique_filters[filter_indices]
+
         
     def __len__(self):
         return len(self.images)
     
     def __getitem__(self,idx):
-        return self.images[idx] , self.pts_rot[idx] , self.filter_indices[idx],idx
+        return self.images[idx] , self.pts_rot[idx] , self.filters[idx],idx
     
     def compute_pts_rot(self,rotvecs):
         rotations = Rotation.from_rotvec(rotvecs.numpy())
@@ -97,7 +101,7 @@ class CovarDataset(Dataset):
                 images,_,filters,_ = self[idx]
                 idx = idx.to(device)
                 images = images.to(device)
-                filters = self.unique_filters[filters].to(device) if len(self.unique_filters) > 0 else None
+                filters = filters.to(device)
                 if(pose_module.use_contrast):
                     #If pose module containts contrasts - correct images
                     #TODO: The ideal way to use it is to apply the contrast on the filters.
@@ -118,7 +122,7 @@ class CovarDataset(Dataset):
         subset = self.copy()
         subset.images = subset.images[idx]
         subset.pts_rot = subset.pts_rot[idx]
-        subset.filter_indices = subset.filter_indices[idx]
+        subset.filters = subset.filters[idx]
         subset.rot_vecs = subset.rot_vecs[idx]
         subset.offsets = subset.offsets[idx]
 
@@ -148,9 +152,9 @@ class CovarDataset(Dataset):
         gain_tensor = torch.zeros((L*upsample_factor,)*3,device=device,dtype=self.dtype)
 
         for i in range(0,len(self),batch_size):
-            _,pts_rot,filter_indices,_ = self[i:min(i+batch_size,len(self))]
+            _,pts_rot,filters,_ = self[i:min(i+batch_size,len(self))]
             pts_rot = pts_rot.to(device)
-            filters = self.unique_filters[filter_indices].to(device) if self.unique_filters is not None else None
+            filters = filters.to(device)
 
             nufft_plan.setpts(pts_rot)
 
@@ -176,9 +180,9 @@ class CovarDataset(Dataset):
         covar_shell_gain = torch.zeros((s,s),device=device,dtype=self.dtype)
 
         for i in range(0,len(self),batch_size):
-            _,pts_rot,filter_indices,_ = self[i:min(i+batch_size,len(self))]
+            _,pts_rot,filters,_ = self[i:min(i+batch_size,len(self))]
             pts_rot = pts_rot.to(device)
-            filters = self.unique_filters[filter_indices].to(device) if self.unique_filters is not None else None
+            filters = filters.to(device)
 
             nufft_plan.setpts(pts_rot)
 
@@ -191,28 +195,6 @@ class CovarDataset(Dataset):
             covar_shell_gain += averaged_gain_tensor.T @ averaged_gain_tensor
 
         return covar_shell_gain
-
-    def remove_vol_from_images(self,vol,coeffs = None,copy_dataset = False):
-        device = vol.device
-        num_vols = vol.shape[0]
-        if(coeffs is None):
-            coeffs = torch.ones(num_vols,len(self))
-        dataset = self.copy() if copy_dataset else self
-
-        
-        nufft_plan = NufftPlan((self.resolution,)*3,batch_size=num_vols,dtype=vol.dtype,device = device)
-
-        for i in range(len(dataset)):
-            _,pts_rot,filter_ind,_ = dataset[i]
-            pts_rot = pts_rot.to(device)
-            filt = dataset.unique_filters[filter_ind].to(device)
-            nufft_plan.setpts(pts_rot)
-
-            vol_proj = vol_forward(vol,nufft_plan,filt).reshape(num_vols,dataset.resolution,dataset.resolution)
-
-            dataset.images[i] -= torch.sum(vol_proj * coeffs[i].reshape((-1,1,1)),dim=0).cpu()
-
-        return dataset
 
     def copy(self):
         return copy.deepcopy(self)
@@ -254,7 +236,7 @@ class CovarDataset(Dataset):
         self.signal_var = sum_over_shell(self.signal_rpsd,self.resolution,2).item()
             
     def estimate_filters_gain(self):
-        average_filters_gain_spectrum = torch.mean(self.unique_filters ** 2,axis=0) 
+        average_filters_gain_spectrum = torch.mean(self.filters ** 2,axis=0) 
         radial_filters_gain = average_fourier_shell(average_filters_gain_spectrum)
         estimated_filters_gain = sum_over_shell(radial_filters_gain,self.resolution,2).item() / (self.resolution**2)
 

@@ -68,12 +68,6 @@ def volsCovarEigenvec(vols,eigenval_threshold = 1e-3,randomized_alg = False,max_
     return volsSpan
 
 
-def sim2imgsrc(sim):
-    im_src =  ArrayImageSource(sim.images[:],pd.DataFrame(sim.get_metadata()),sim.angles)
-    im_src.filter_indices = sim.filter_indices
-    im_src.unique_filters = sim.unique_filters
-    return im_src
-
 def rademacherDist(sz):
     val = random.randint(0,2,sz)
     val[val == 0] = -1

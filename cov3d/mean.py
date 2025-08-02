@@ -39,11 +39,11 @@ def reconstruct_mean(dataset : Union[CovarDataset,DataLoader],init_vol = None,ma
 
 
     for batch in tqdm(dataloader,desc='Reconstructing mean volume'):
-        images,pts_rot,filter_indices,idx = batch
+        images,pts_rot,filters,idx = batch
         image_offsets = dataset.offsets[idx].to(device).to(pts_rot.dtype)
         images = images.to(device) * offset_to_phase_shift(-image_offsets, phase_shift_grid=phase_shift_grid)
         pts_rot = pts_rot.to(device)
-        filters = dataset.unique_filters[filter_indices].to(device) if dataset.unique_filters is not None else None
+        filters = filters.to(device)
 
         nufft_plan.setpts(pts_rot)
 
