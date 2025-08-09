@@ -9,6 +9,7 @@ from tqdm import tqdm
 from aspire.volume import Volume,rotated_grids
 from aspire.utils import Rotation
 from cov3d.utils import soft_edged_kernel,get_torch_device,get_complex_real_dtype
+from cov3d.source import ImageSource
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,im_backward,centered_fft2,centered_ifft2,get_mask_threshold,preprocess_image_batch
 from cov3d.fsc_utils import average_fourier_shell,sum_over_shell
@@ -17,7 +18,10 @@ from cov3d.poses import PoseModule
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False,apply_preprocessing = True):
-        self._init_from_aspire_source(src)
+        if(isinstance(src,ImageSource)):
+            self._init_from_source(src)
+        else:
+            self._init_from_aspire_source(src)
         self.pts_rot = self.compute_pts_rot(self.rot_vecs)
         self.noise_var = noise_var
         self.data_inverted = invert_data
@@ -36,6 +40,14 @@ class CovarDataset(Dataset):
 
         self.dtype = self.images.dtype
         self.mask = torch.tensor(mask.asnumpy()) if mask is not None else None
+
+    def _init_from_source(self,source):
+        self.resolution = source.resolution
+        #TODO: replace with non ASPIRE implemntation?
+        self.rot_vecs = torch.tensor(Rotation(source.rotations.numpy()).as_rotvec(),dtype=source.rotations.dtype)
+        self.offsets = source.offsets
+        self.images = source.images(torch.arange(0,len(source)))
+        self.filters = source.get_ctf(torch.arange(0,len(source)))
 
     def _init_from_aspire_source(self,source):
         self.resolution = source.L

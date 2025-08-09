@@ -5,6 +5,7 @@ import pickle
 import aspire
 import click
 from cov3d.utils import *
+from cov3d.source import ImageSource
 from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset,GTData
 from cov3d.covar import Covar,CovarFourier,Mean
@@ -92,9 +93,8 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
-    #Load starfile
-    data_dir = os.path.split(starfile)[0]
+def covar_workflow(inputfile,rank,output_dir=None,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
+    data_dir = os.path.split(inputfile)[0]
     if(output_dir is None):
         output_dir = path.join(data_dir,'result_data')
     dataset_path = os.path.join(output_dir,'dataset.pkl')
@@ -102,32 +102,44 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
     if((not debug) or (not os.path.isfile(dataset_path))): 
         if(not path.isdir(output_dir)):
             os.mkdir(output_dir)
-        star = aspire.storage.StarFile(starfile)
-        states_in_source = '_rlnClassNumber' in star['particles']
-        pixel_size = float(star['optics']['_rlnImagePixelSize'][0])
-        source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
-        if('_rlnOriginXAngst' in star['particles'] and '_rlnOriginYAngst' in star['particles']):
-            #Aspire source only parses _rlnOriginX/Y and not _rlnOriginX/YAngst
-            source.offsets =  np.array([star['particles']['_rlnOriginXAngst'],star['particles']['_rlnOriginYAngst']]).astype(np.float32).T / pixel_size #Convert to pixels
-        L = source.L
-        
-        mean_est = relionReconstruct(starfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
 
-        if(class_vols is None and states_in_source): #If class_vols was not provided but source has GT states use them to reconstruct GT
-            #Estimate ground truth states
-            class_vols = reconstructClass(starfile,path.join(output_dir,'class_vols.mrc'))
-        elif(class_vols is not None): 
-            if(isinstance(class_vols,str)):
-                class_vols = Volume.load(class_vols) if os.path.isfile(class_vols) else readVols(class_vols)
-                class_vols *= L
-            if(class_vols.resolution != L): #Downsample ground truth volumes
+        source = ImageSource(inputfile,apply_preprocessing=whiten)
+        noise_var = source.estimate_noise_var() if not whiten else 1
+        L = source.resolution
+        
+        mean_est = relionReconstruct(inputfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
+
+        if class_vols is not None: 
+            class_labels = None
+            if isinstance(class_vols,str):
+                assert os.path.isfile(class_vols), f'class_vols {class_vols} is not a file'
+                class_vols = Volume.load(class_vols)
+                #TODO: support pickle file with class labels
+
+            elif isinstance(class_vols,list): #list of mrc files                
+                class_vols = readVols(class_vols)
+
+            #class_vols *= L
+            if class_vols.resolution != L: #Downsample ground truth volumes
                 class_vols = class_vols.downsample(L)
+        else:
+            class_labels = None
+            if inputfile.endswith('.star'):
+                #Check if class labels are present in the starfile
+                star = aspire.storage.StarFile(inputfile)
+                if '_rlnClassNumber' in star['particles']:
+                    class_labels = np.array([float(v) for v in star['particles']['_rlnClassNumber']])
+                    class_vols = reconstructClass(inputfile,path.join(output_dir,'class_vols.mrc'))
+            #TODO: support other file types
 
         if(class_vols is not None):
             #Compute ground truth eigenvectors
             mean_gt = np.mean(class_vols,axis=0)
-            _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
-            states_dist = counts/np.sum(counts)
+            if class_labels is not None:
+                _,counts = np.unique(class_labels[np.where(class_labels!=-1)],return_counts=True)
+                states_dist = counts/np.sum(counts)
+            else:
+                states_dist = None
             covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
         else:
             covar_eigenvecs_gt = None
@@ -139,21 +151,6 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
             print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}')
             print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gt))}')
 
-
-        noise_est_num_ims = min(source.n,2**12)
-        if(whiten): #TODO : speed this up without aspire implementation. for now noise estimation uses only 2**12 images
-            if(noise_estimator == 'anisotropic'):
-                noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source[:noise_est_num_ims])
-            elif(noise_estimator == 'white'):
-                noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-            source = source.whiten(noise_estimator)
-            noise_var = 1
-        else:
-            noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-            noise_var = noise_estimator.estimate()
-        #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
-        source = source.normalize_background(do_ramp=False)
-
         mask = load_mask(mask,L)
         invert_data = not check_dataset_sign(mean_est,mask)
         if(invert_data):
@@ -164,7 +161,7 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
                 mean_gt *= -1
         dataset = CovarDataset(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
                                apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
-        dataset.starfile = starfile
+        dataset.starfile = inputfile
 
         if(gt_pose is not None):
             gt_pose = pickle.load(open(gt_pose,'rb'))
@@ -303,11 +300,10 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
 
 
 def workflow_click_decorator(func):
-    @click.option('-s','--starfile',type=str, help='path to star file.')
+    @click.option('-i','--inputfile',type=str, help='path to star/txt/mrcs file.')
     @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
     @click.option('-o','--output-dir',type=str,help='path to output directory. when not provided a `result_data` directory will be used with the same path as the provided starfile')
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
-    @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
     @click.option('--optimize-pose',is_flag=True,default=False,help = 'Whether to optimize over image pose')
     @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. Used if provided to log eigen vectors error metrics while training.Additionally, GT embedding is computed and logged')

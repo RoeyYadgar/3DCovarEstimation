@@ -1,3 +1,4 @@
+import os
 import pickle
 import torch
 from cryodrgn.source import ImageSource as CryoDRGNImageSource
@@ -6,10 +7,21 @@ from cov3d.poses import get_phase_shift_grid,pose_cryoDRGN2APIRE
 from cov3d.projection_funcs import centered_fft2,centered_ifft2
 
 class ImageSource:
-    def __init__(self,particles_path,ctf_path,poses_path,indices=None,apply_preprocessing=True):
+    def __init__(self,particles_path,ctf_path=None,poses_path=None,indices=None,apply_preprocessing=True):
         self.image_source = CryoDRGNImageSource.from_file(particles_path,indices=indices)
+        
+        #If ctf or poses were not provided check if they exist in the same dir as the particles file
+        particles_dir = os.path.split(particles_path)[0]
+        if ctf_path is None:
+            ctf_path = os.path.join(particles_dir,'ctf.pkl')
+            assert os.path.isfile(ctf_path) , f"ctf file was not provided, tried {ctf_path} as a default but file does not exist"
+        if poses_path is None:
+            poses_path = os.path.join(particles_dir,'poses.pkl')
+            assert os.path.isfile(poses_path), f"poses file was not provided, tried {poses_path} as a default but file does not exist"
+
+        
         self.ctf_params = torch.tensor(load_ctf_for_training(self.resolution,ctf_path))
-        self.freq_lattice = (torch.stack(get_phase_shift_grid(self.resolution),dim=0)/torch.pi/2).permute(1,2,0).reshape(self.resolution**2,2)
+        self.freq_lattice = (torch.stack(get_phase_shift_grid(self.resolution),dim=0)/torch.pi/2).permute(2,1,0).reshape(self.resolution**2,2)
 
         if indices is None:
             indices = torch.arange(self.image_source.n)
@@ -20,8 +32,8 @@ class ImageSource:
         with open(poses_path,'rb') as f:
             poses = pickle.load(f)
         rots,offsets = pose_cryoDRGN2APIRE(poses,self.resolution)
-        self.rotations = torch.tensor(rots)[indices]
-        self.offsets = torch.tensor(offsets)[indices]
+        self.rotations = torch.tensor(rots.astype(self.image_source.dtype))[indices]
+        self.offsets = torch.tensor(offsets.astype(self.image_source.dtype))[indices]
         self.apply_preprocessing = apply_preprocessing
 
         self.whitening_filter = None
@@ -105,4 +117,22 @@ class ImageSource:
             std = torch.std(images[:,mask],dim=1)
             self.offset_normalization[idx] = mean
             self.scale_normalization[idx] = std
+
+
+    def estimate_noise_var(self,batch_size=1024):
+        mask = (torch.norm(self.freq_lattice,dim=1) >= 0.5).reshape(self.resolution,self.resolution)
+        n = len(self)
+        first_moment = 0
+        second_moment = 0
+        for i in range(0, n, batch_size):
+            idx = torch.arange(i,min(i + batch_size,n))
+            images = self.images(idx)
+            images_masked = images * mask
+
+            first_moment += torch.sum(images_masked)
+            second_moment += torch.sum(torch.abs(images_masked) ** 2)
+
+        first_moment /= torch.sum(mask) * n
+        second_moment /= torch.sum(mask) * n
+        return second_moment - first_moment**2
             
