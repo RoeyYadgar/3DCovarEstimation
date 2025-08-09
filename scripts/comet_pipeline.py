@@ -66,12 +66,12 @@ def log_cryobench_analysis_output(exp,result_dir,gt_dir,gt_latent,gt_labels):
 @click.option('--skip-computation',is_flag=True,help='Whether to skip covariance estimation computation')
 @click.option('--num-vols',type=int,help="Number of GT volumes to use for FSC computation")
 @workflow_click_decorator
-def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
+def run_pipeline(name,inputfile,rank,whiten,mask,
                  run_analysis,gt_dir=None,gt_latent=None,gt_labels=None,num_vols=None,
                  disable_comet = False,skip_computation = False,**training_kwargs):
     if(not disable_comet):
-        image_size = int(float(StarFile(starfile)['optics']['_rlnImageSize'][0]))
-        run_config  = {'image_size' : image_size, 'rank' : rank,'starfile' : starfile,'whiten' : whiten,'noise_estimator' : noise_estimator}
+        image_size = int(float(StarFile(inputfile)['optics']['_rlnImageSize'][0]))
+        run_config  = {'image_size' : image_size, 'rank' : rank,'inputfile' : inputfile,'whiten' : whiten}
         run_config.update(training_kwargs)
         run_config['cli_command'] = ' '.join(sys.argv)
         exp = comet_ml.Experiment(project_name="3d_cov",parse_args=False)
@@ -81,10 +81,10 @@ def run_pipeline(name,starfile,rank,whiten,noise_estimator,mask,
 
     output_dir = training_kwargs.get('output_dir',None)
     if(output_dir is None):
-        output_dir = os.path.join(os.path.split(starfile)[0],'result_data')
+        output_dir = os.path.join(os.path.split(inputfile)[0],'result_data')
 
     if(not skip_computation):
-        data_dict,training_data,training_kwargs = covar_workflow(starfile,rank,whiten=whiten,noise_estimator=noise_estimator,mask=mask,**training_kwargs)
+        data_dict,training_data,training_kwargs = covar_workflow(inputfile,rank,whiten=whiten,mask=mask,**training_kwargs)
     else:
         with open(os.path.join(output_dir,'recorded_data.pkl'),'rb') as fid:
             data_dict = pickle.load(fid)

@@ -93,7 +93,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(inputfile,rank,output_dir=None,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
+def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
     data_dir = os.path.split(inputfile)[0]
     if(output_dir is None):
         output_dir = path.join(data_dir,'result_data')
@@ -103,7 +103,7 @@ def covar_workflow(inputfile,rank,output_dir=None,whiten=True,mask='fuzzy',optim
         if(not path.isdir(output_dir)):
             os.mkdir(output_dir)
 
-        source = ImageSource(inputfile,apply_preprocessing=whiten)
+        source = ImageSource(inputfile,poses_path=poses,ctf_path=ctf,apply_preprocessing=whiten)
         noise_var = source.estimate_noise_var() if not whiten else 1
         L = source.resolution
         
@@ -303,6 +303,8 @@ def workflow_click_decorator(func):
     @click.option('-i','--inputfile',type=str, help='path to star/txt/mrcs file.')
     @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
     @click.option('-o','--output-dir',type=str,help='path to output directory. when not provided a `result_data` directory will be used with the same path as the provided starfile')
+    @click.option('-p','--poses',type=str,default=None,help='Path to pkl file containing particle pose information in cryoDRGN format')
+    @click.option('-c','--ctf',type=str,default=None,help='Path to pkl file containing CTF information in cryoDRGN format')
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
     @click.option('--optimize-pose',is_flag=True,default=False,help = 'Whether to optimize over image pose')
