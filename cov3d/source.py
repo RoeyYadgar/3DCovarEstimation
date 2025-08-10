@@ -1,5 +1,6 @@
 import os
 import pickle
+from copy import deepcopy
 import torch
 from cryodrgn.source import ImageSource as CryoDRGNImageSource
 from cryodrgn.ctf import load_ctf_for_training,compute_ctf
@@ -8,10 +9,11 @@ from cov3d.projection_funcs import centered_fft2,centered_ifft2
 
 class ImageSource:
     def __init__(self,particles_path,ctf_path=None,poses_path=None,indices=None,apply_preprocessing=True):
-        self.image_source = CryoDRGNImageSource.from_file(particles_path,indices=indices)
+        self.particles_path = particles_path
+        self.image_source = CryoDRGNImageSource.from_file(self.particles_path,indices=indices)
         
         #If ctf or poses were not provided check if they exist in the same dir as the particles file
-        particles_dir = os.path.split(particles_path)[0]
+        particles_dir = os.path.split(self.particles_path)[0]
         if ctf_path is None:
             ctf_path = os.path.join(particles_dir,'ctf.pkl')
             assert os.path.isfile(ctf_path) , f"ctf file was not provided, tried {ctf_path} as a default but file does not exist"
@@ -135,4 +137,22 @@ class ImageSource:
         first_moment /= torch.sum(mask) * n
         second_moment /= torch.sum(mask) * n
         return second_moment - first_moment**2
+
+
+
+    def get_subset(self,idx):
+        subset = deepcopy(self)
+        subset.indices = subset.indices[idx]
+        subset.image_source = CryoDRGNImageSource.from_file(subset.particles_path,indices=subset.indices)
+        subset.ctf_params = subset.ctf_params[idx]
+        subset.rotations = subset.rotations[idx]
+        subset.offsets = subset.offsets[idx]
+
+        subset.scale_normalization = subset.scale_normalization[idx]
+        subset.offset_normalization = subset.offset_normalization[idx]
+
+        return subset
+
+
+
             
