@@ -225,14 +225,12 @@ class CovarDataset(Dataset):
             self.images = centered_fft2(self.images)
             #TODO : transform points into grid_sample format here instead of in discretization function?
             self.noise_var *= self.resolution**2 #2-d Fourier transform scales everything by a factor of L (and the variance scaled by L**2)
-            self.dtype = get_complex_real_dtype(self.dtype)
             self._in_spatial_domain = False
 
     def to_spatial_domain(self):
         if(not self._in_spatial_domain):
             self.images = centered_ifft2(self.images).real
             self.noise_var /= self.resolution**2
-            self.dtype = get_complex_real_dtype(self.dtype)
             self._in_spatial_domain = True
 
     def estimate_signal_var(self,support_radius = None,batch_size=512):
