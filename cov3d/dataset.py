@@ -1,3 +1,4 @@
+from typing import Iterable,Optional,Tuple
 import torch
 from dataclasses import dataclass
 from torch.utils.data import Dataset
@@ -79,15 +80,22 @@ class CovarDataset(Dataset):
         return pts_rot
     
 
-    def construct_mean_pose_modules(self,mean_volume,mask,rot_vecs,offsets):
+    def construct_mean_pose_modules(self,mean_volume,mask,rot_vecs,offsets,fourier_domain=False):
         L = self.resolution
         device = get_torch_device()
+
+        if isinstance(mask,Volume):
+            mask = torch.tensor(mask.asnumpy())
+
         mean = Mean(torch.tensor(mean_volume.asnumpy()),L,
-                    fourier_domain=False,
-                    volume_mask=torch.tensor(mask.asnumpy()) if mask is not None else None,
+                    fourier_domain=fourier_domain,
+                    volume_mask= mask if mask is not None else None,
                     )
         pose = PoseModule(rot_vecs,offsets,L)
-        nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean.dtype,device=device)
+        nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean.dtype,device=device) if not fourier_domain else \
+                NufftPlanDiscretized((self.resolution,)*3,upsample_factor=mean.upsampling_factor, mode='bilinear')
+        if fourier_domain:
+            mean.init_grid_correction('bilinear')
 
         return mean,pose,nufft_plan
 
@@ -233,11 +241,10 @@ class CovarDataset(Dataset):
         mask_size = torch.sum(mask)
         
         signal_psd = torch.zeros((self.resolution,self.resolution))
-        for i in range(0,len(self.images),batch_size):
-            images_masked = self.images[i:i+batch_size][:,mask]
-            images_masked = self.images[i:i+batch_size] * mask
+        for i in range(0,len(self),batch_size):
+            images_masked = self._get_images_for_signal_var(i, batch_size) * mask
             signal_psd += torch.sum(torch.abs(centered_fft2(images_masked))**2,axis=0)
-        signal_psd /= len(self.images) * (self.resolution ** 2) * mask_size
+        signal_psd /= len(self) * (self.resolution ** 2) * mask_size
         signal_rpsd = average_fourier_shell(signal_psd)
 
         noise_psd = torch.ones((self.resolution,self.resolution)) * self.noise_var / (self.resolution**2) 
@@ -246,6 +253,12 @@ class CovarDataset(Dataset):
         self.signal_rpsd = (signal_rpsd - noise_rpsd)/(self.radial_filters_gain)
         self.signal_rpsd[self.signal_rpsd < 0] = 0 #in low snr setting the estimatoin for high radial resolution might not be accurate enough
         self.signal_var = sum_over_shell(self.signal_rpsd,self.resolution,2).item()
+    
+    def _get_images_for_signal_var(self, start_idx, batch_size):
+        """Helper method to get images for signal variance estimation.
+        Subclasses can override this to provide different image access patterns."""
+        end_idx = min(start_idx + batch_size, len(self))
+        return self.images[start_idx:end_idx]
             
     def estimate_filters_gain(self):
         average_filters_gain_spectrum = torch.mean(self.filters ** 2,axis=0) 
@@ -254,6 +267,159 @@ class CovarDataset(Dataset):
 
         self.filters_gain = estimated_filters_gain
         self.radial_filters_gain = radial_filters_gain
+
+class LazyCovarDataset(CovarDataset):
+    def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False,apply_preprocessing = True):
+        if not isinstance(src,ImageSource):
+            raise ValueError(f'input src is of type {type(src)}. LazyCovarDataset only supports ImageSource')
+        self.src = src
+        self.resolution = self.src.resolution
+        self.noise_var = noise_var
+        self.data_inverted = invert_data
+        self._in_spatial_domain = True
+        self.apply_preprocessing = apply_preprocessing
+
+        self.estimate_filters_gain()
+        self.estimate_signal_var()
+
+        self.mask = torch.tensor(mask.asnumpy()) if mask is not None else None
+        self.mean_volume = mean_volume
+
+        #Decalare additional attributes that will be initialized in post_init_setup
+        self._mean_volume = None
+        self._mask = None
+        self._pose_module = None
+        self._nufft_plan = None
+        self._softening_kernel_fourier = None
+        self._mask_threshold = None
+
+    @property
+    def dtype(self):
+        return self.src.dtype
+
+
+    def post_init_setup(self,fourier_domain):
+        """Performs additional setup after constructor.
+        It inits a nufft plan that is used internally to compute projections of the mean volume and mask.
+        This must happen after class construction since when we use DDP we pass this object which cannot have
+        tensors already on the GPU.
+        """
+        rot_vecs = torch.tensor(Rotation(self.src.rotations).as_rotvec(),dtype=self.dtype) #TODO: use a torch implementation?
+        mean_module,pose_module,nufft_plan = self.construct_mean_pose_modules(self.mean_volume,self.mask,rot_vecs,self.src.offsets,fourier_domain=fourier_domain)
+        device = get_torch_device()
+        mean_module = mean_module.to(device)
+
+        #_mean_volume and _mask are different than the original mean_volume and mask in that they are in fourier domain(if fourier_domain is True)
+        self._mean_volume = mean_module()
+        self._mask = mean_module.get_volume_mask()
+
+
+        self._pose_module = pose_module.to(device)
+        self._nufft_plan = nufft_plan
+
+
+        #Compute mask related variables
+        with torch.no_grad():
+            idx = torch.arange(min(1024,len(self)),device=device)
+            nufft_plan.setpts(pose_module(idx)[0])
+            self._mask_threshold = get_mask_threshold(self._mask,nufft_plan) if self._mask is not None else 0
+            #Mask softening kernel should be in fourier space regardless of the value of fourier_domain
+            self._softening_kernel_fourier = soft_edged_kernel(radius=5,L=self.resolution,dim=2,in_fourier=True).to(device)
+
+    def __len__(self):
+        return len(self.src)
+
+
+    def __getitem__(self,idx):
+        return self._get_images(idx) + (idx,)
+
+    def _get_images(self,idx : Iterable,filters : Optional[torch.Tensor] = None) -> Tuple[torch.Tensor,torch.Tensor,torch.Tensor]:
+        """Returns images by idx after pre-processing (if needed) which includes substracting projected mean and masking.
+
+        Args:
+            idx (Iterable): image index to be returned
+            filters (Optional[torch.Tensor]): CTF filters to be used when computing the mean projection.
+                If None are given CTFs are computed by the corresponding image idx.
+
+        Returns:
+            Tuple[torch.Tensor,torch.Tensor,torch.Tensor]: Tuple containing images,rotated grid of fourier components and filters
+        """
+        images = self.src.images(idx)
+        if not self._in_spatial_domain:
+            images = centered_fft2(images)
+        image_sign = -1 if self.data_inverted else 1
+        images *= image_sign
+
+        #Compute CTF if not provided
+        if filters is None:
+            filters = self.src.get_ctf(idx)
+
+        if not self.apply_preprocessing:
+            #No need to return pts_rot when not applying preprocessing
+            return images,None,filters
+
+        if not isinstance(idx,torch.Tensor):
+            if isinstance(idx, slice):
+                idx = torch.arange(len(self.src))[idx]
+            else: 
+                idx = torch.tensor(idx)
+
+        device = self._mean_volume.device
+        idx = idx.to(device)
+
+        #Compute pts
+        if self._pose_module.use_contrast:
+            pts_rot,phase_shift,contrasts = self._pose_module(idx)
+            filters = filters * contrasts.reshape(-1,1,1) #TODO: need to handle case where filters are provided, should contrast be applied?
+        else:
+            pts_rot,phase_shift = self._pose_module(idx)
+
+        images = images.to(device)
+        filters = filters.to(device)
+
+        with torch.no_grad():
+            images = preprocess_image_batch(images,self._nufft_plan,filters,
+                                            (pts_rot,phase_shift),self._mean_volume,
+                                            self._mask,self._mask_threshold,self._softening_kernel_fourier,fourier_domain=not self._in_spatial_domain)
+
+        return images,pts_rot,filters
+
+    @property
+    def filters(self):
+        return self.src.get_ctf(torch.arange(0,len(self)))
+
+    def to_spatial_domain(self):
+        pass
+
+    def _get_images_for_signal_var(self, start_idx, batch_size):
+        """Override to use lazy loading for signal variance estimation."""
+        end_idx = min(start_idx + batch_size, len(self))
+        return self.src.images(torch.arange(start_idx, end_idx))
+
+    def get_subset(self,idx):
+        subset = self.copy()
+        subset.src = self.src.get_subset(idx)
+
+        #Create a new pose module for the subset
+        if self._pose_module is not None:
+            rot_vecs = torch.tensor(Rotation(subset.src.rotations).as_rotvec(),dtype=self.dtype)
+            offsets = subset.src.offsets
+            subset._pose_module = PoseModule(rot_vecs,offsets,self.resolution)
+
+
+        return subset
+
+    def to_fourier_domain(self):
+        if self._in_spatial_domain:
+            self.post_init_setup(fourier_domain=True)
+            self._in_spatial_domain = False
+
+
+    def to_spatial_domain(self):
+        if not self._in_spatial_domain:
+            self.post_init_setup(fourier_domain=False)
+            self._in_spatial_domain = True
+
 
 class BatchIndexSampler(torch.utils.data.Sampler):
     def __init__(self, data_size, batch_size, shuffle=True,idx=None):

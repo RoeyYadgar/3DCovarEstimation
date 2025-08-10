@@ -7,7 +7,7 @@ import click
 from cov3d.utils import *
 from cov3d.source import ImageSource
 from cov3d.covar_sgd import trainCovar
-from cov3d.dataset import CovarDataset,GTData
+from cov3d.dataset import CovarDataset,LazyCovarDataset,GTData
 from cov3d.covar import Covar,CovarFourier,Mean
 from cov3d.poses import PoseModule,pose_cryoDRGN2APIRE,pose_ASPIRE2cryoDRGN,out_of_plane_rot_error,offset_mean_error
 from cov3d.covar_distributed import trainParallel
@@ -93,7 +93,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
+def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
     data_dir = os.path.split(inputfile)[0]
     if(output_dir is None):
         output_dir = path.join(data_dir,'result_data')
@@ -159,7 +159,9 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,whiten=Tru
             mean_est.save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
             if(mean_gt is not None):
                 mean_gt *= -1
-        dataset = CovarDataset(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
+
+        dataset_cls = CovarDataset if not lazy else LazyCovarDataset
+        dataset = dataset_cls(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
                                apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
         dataset.starfile = inputfile
 
@@ -194,7 +196,7 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,whiten=Tru
     
 
 def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=None,optimize_pose=False,gt_data=None,**training_kwargs):
-    L = dataset.images.shape[-1]
+    L = dataset.resolution
 
     #Perform optimization for eigenvectors estimation
     default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 20,
@@ -246,6 +248,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
         print(f'Image offset change: {offset_change} pixels')
         
         #Update dataset with estimated pose and apply preprocessing
+        #TODO: use internal method that update dataset pose
         dataset.pts_rot = dataset.compute_pts_rot(pose.get_rotvecs().cpu())
         dataset.preprocess_from_modules(mean,pose)
 
@@ -305,6 +308,7 @@ def workflow_click_decorator(func):
     @click.option('-o','--output-dir',type=str,help='path to output directory. when not provided a `result_data` directory will be used with the same path as the provided starfile')
     @click.option('-p','--poses',type=str,default=None,help='Path to pkl file containing particle pose information in cryoDRGN format')
     @click.option('-c','--ctf',type=str,default=None,help='Path to pkl file containing CTF information in cryoDRGN format')
+    @click.option('--lazy',is_flag=True,default=False,help='Whether to use lazy dataset. If set, the dataset will not be loaded into (CPU) memory and will be processed when accessed. This is useful for large datasets.')
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
     @click.option('--optimize-pose',is_flag=True,default=False,help = 'Whether to optimize over image pose')

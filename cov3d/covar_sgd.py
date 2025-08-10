@@ -44,7 +44,6 @@ class CovarTrainer():
                 })
             
 
-        self.filter_gain = self.dataset.get_total_covar_gain(device=self.device)
         self.num_reduced_lr_before_stop = 4
         self.scheduler_patiece = 0
         self.apply_masking_on_epoch = True
@@ -157,7 +156,9 @@ class CovarTrainer():
             self.cost_func = cost_fourier_domain if objective_func == 'ls' else cost_maximum_liklihood_fourier_domain
         else:
             self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
+            self.dataset.to_spatial_domain()
             self.cost_func = cost if objective_func == 'ls' else cost_maximum_liklihood
+        self.filter_gain = self.dataset.get_total_covar_gain(device=self.device)
         self.covar.init_grid_correction(nufft_disc)
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
@@ -524,6 +525,7 @@ class CovarPoseTrainer(CovarTrainer):
                     for i in range(0,len(self.dataset),batch_size):
                         #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
                         idx = torch.arange(i,min(i + batch_size,len(self.dataset)),device=self.device)
+                        #TODO: use an internal method that updates dataset pose
                         self.dataset.pts_rot[idx.cpu()] = self.pose(idx)[0].detach().cpu()
                         self.dataset.offsets[idx.cpu()] = self.pose.get_offsets()[idx.cpu()].detach().cpu().to(self.dataset.offsets.dtype) #REMOVE dtype conversion
                 if(not self.isDDP):

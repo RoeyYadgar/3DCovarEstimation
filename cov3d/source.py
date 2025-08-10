@@ -11,6 +11,12 @@ class ImageSource:
     def __init__(self,particles_path,ctf_path=None,poses_path=None,indices=None,apply_preprocessing=True):
         self.particles_path = particles_path
         self.image_source = CryoDRGNImageSource.from_file(self.particles_path,indices=indices)
+        if self.image_source.dtype == 'float32':
+            self.dtype = torch.float32
+        elif self.image_source.dtype == 'float64':
+            self.dtype = torch.float64
+        else:
+            raise ValueError(f"Unsupported dtype: {self.image_source.dtype}. Only float32 and float64 are supported.")
         
         #If ctf or poses were not provided check if they exist in the same dir as the particles file
         particles_dir = os.path.split(self.particles_path)[0]
