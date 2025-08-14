@@ -305,6 +305,7 @@ class LazyCovarDataset(CovarDataset):
         rot_vecs = torch.tensor(Rotation(self.src.rotations).as_rotvec(),dtype=self.dtype) #TODO: use a torch implementation?
         mean_module,pose_module,nufft_plan = self.construct_mean_pose_modules(self.mean_volume,self.mask,rot_vecs,self.src.offsets,fourier_domain=fourier_domain)
         device = get_torch_device()
+        self.src = self.src.to(device)
         mean_module = mean_module.to(device)
 
         #_mean_volume and _mask are different than the original mean_volume and mask in that they are in fourier domain(if fourier_domain is True)
@@ -342,9 +343,9 @@ class LazyCovarDataset(CovarDataset):
         Returns:
             Tuple[torch.Tensor,torch.Tensor,torch.Tensor]: Tuple containing images,rotated grid of fourier components and filters
         """
-        images = self.src.images(idx)
-        if not self._in_spatial_domain:
-            images = centered_fft2(images)
+        device = self._mean_volume.device
+        images = self.src.images(idx,fourier = not self._in_spatial_domain)
+
         image_sign = -1 if self.data_inverted else 1
         images *= image_sign
 
@@ -362,7 +363,6 @@ class LazyCovarDataset(CovarDataset):
             else: 
                 idx = torch.tensor(idx)
 
-        device = self._mean_volume.device
         idx = idx.to(device)
 
         #Compute pts

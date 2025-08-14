@@ -10,6 +10,7 @@ from cov3d.projection_funcs import centered_fft2,centered_ifft2
 class ImageSource:
     def __init__(self,particles_path,ctf_path=None,poses_path=None,indices=None,apply_preprocessing=True):
         self.particles_path = particles_path
+        self.device = torch.device('cpu')
         self.image_source = CryoDRGNImageSource.from_file(self.particles_path,indices=indices)
         if self.image_source.dtype == 'float32':
             self.dtype = torch.float32
@@ -57,6 +58,25 @@ class ImageSource:
     def __len__(self):
         return self.image_source.n
 
+    def to(self, device):
+        """Move the ImageSource to the specified device (CPU/GPU)"""
+        if device is None:
+            device = torch.device('cpu')
+        
+        self.device = device
+
+        # Move tensors to device
+        self.ctf_params = self.ctf_params.to(device)
+        self.freq_lattice = self.freq_lattice.to(device)
+        self.offset_normalization = self.offset_normalization.to(device)
+        self.scale_normalization = self.scale_normalization.to(device)
+        
+        # Move whitening filter if it exists
+        if self.whitening_filter is not None:
+            self.whitening_filter = self.whitening_filter.to(device)
+        
+        return self
+
     def get_ctf(self,index):
         ctf_params = self.ctf_params[index]
         freq_lattice = self.freq_lattice / ctf_params[:,0].view(-1,1,1)
@@ -66,6 +86,7 @@ class ImageSource:
 
     def images(self,index,fourier=False):
         images = self.image_source.images(index)
+        images = images.to(self.device)
         if(not self.apply_preprocessing and not fourier):
             return images
 
