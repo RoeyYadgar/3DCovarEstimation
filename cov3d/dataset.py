@@ -444,15 +444,29 @@ def identity_collate(batch):
 
 def create_dataloader(dataset, batch_size,idx=None, **dataloader_kwargs):
     sampler = dataloader_kwargs.pop('sampler', None)
+    
     if sampler is None:
         sampler = BatchIndexSampler(len(dataset), batch_size, shuffle=False,idx=idx)
     else:
         sampler = torch.utils.data.BatchSampler(sampler, batch_size=batch_size,drop_last=False)
+
+    #Cannot use num workers > 1 with lazy dataset since it requires GPU usage
+    #TODO: find a better solution that enables the use of more workers
+    num_workers = dataloader_kwargs.pop('num_workers',0)
+    if (isinstance(dataset,LazyCovarDataset) and num_workers > 1):
+        print(f'Warning: cannot use {num_workers} > 1 num_workers with Lazy dataset. setting num_workers to 0 and prefetch_factor to None')
+        dataloader_kwargs['prefetch_factor'] = None
+        dataloader_kwargs['persistent_workers'] = False
+        dataloader_kwargs['pin_memory'] = False
+        dataloader_kwargs['pin_memory_device'] = ''
+    num_workers = 0
+
     batch_size = None
     return torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
         sampler=sampler,
+        num_workers=num_workers,
         collate_fn=identity_collate, #Can't use lambda function here since it will be pickled and sent to other processes when using DDP
         **dataloader_kwargs
     )
