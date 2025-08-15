@@ -232,6 +232,11 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
         trainParallel(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             mean_model=mean,pose=pose,optimize_pose=optimize_pose,
             gt_data=gt_data,**default_training_kwargs)
+
+        #When using lazy dataset and DDP, this instance of the dataset is not the same as the one modified in trainParallel
+        #therefore we need to call the setup method directly
+        if isinstance(dataset,LazyCovarDataset):
+            dataset.post_init_setup(fourier_domain=False)
     else:
         cov = cov.to(get_torch_device())
         trainCovar(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
