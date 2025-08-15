@@ -9,7 +9,7 @@ import copy
 from tqdm import tqdm
 from aspire.volume import Volume,rotated_grids
 from aspire.utils import Rotation
-from cov3d.utils import soft_edged_kernel,get_torch_device,get_complex_real_dtype
+from cov3d.utils import soft_edged_kernel,get_torch_device,set_module_grad
 from cov3d.source import ImageSource
 from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,im_backward,centered_fft2,centered_ifft2,get_mask_threshold,preprocess_image_batch
@@ -304,6 +304,8 @@ class LazyCovarDataset(CovarDataset):
         """
         rot_vecs = torch.tensor(Rotation(self.src.rotations).as_rotvec(),dtype=self.dtype) #TODO: use a torch implementation?
         mean_module,pose_module,nufft_plan = self.construct_mean_pose_modules(self.mean_volume,self.mask,rot_vecs,self.src.offsets,fourier_domain=fourier_domain)
+        set_module_grad(mean_module,False)
+        set_module_grad(pose_module,False)
         device = get_torch_device()
         self.src = self.src.to(device)
         mean_module = mean_module.to(device)

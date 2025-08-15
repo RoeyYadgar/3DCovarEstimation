@@ -373,3 +373,8 @@ def create_mask_from_vols(vols : Volume, threshold : float):
     """
 
     return Volume(vols.asnumpy().mean(axis=0) > threshold)
+
+
+def set_module_grad(module : torch.nn.Module,grad : bool):
+    for param in module.parameters():
+        param.requires_grad = grad
