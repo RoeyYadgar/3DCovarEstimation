@@ -6,7 +6,7 @@ from cov3d.dataset import CovarDataset,create_dataloader
 from cov3d.nufft_plan import NufftPlanDiscretized
 from cov3d.poses import get_phase_shift_grid,offset_to_phase_shift
 from cov3d.fsc_utils import rpsd,upsample_and_expand_fourier_shell,average_fourier_shell,vol_fsc
-from cov3d.utils import get_torch_device
+from cov3d.utils import get_torch_device,get_cpu_count,get_complex_real_dtype
 from tqdm import tqdm
 from typing import Union
 
@@ -15,7 +15,8 @@ def reconstruct_mean(dataset : Union[CovarDataset,DataLoader],init_vol = None,ma
     if(not isinstance(dataset,DataLoader)):
         if(idx is None):
             idx = torch.arange(len(dataset))
-        dataloader = create_dataloader(dataset,batch_size=batch_size,idx=idx,pin_memory=True)
+        num_workers = min(4,get_cpu_count()-1)
+        dataloader = create_dataloader(dataset,batch_size=batch_size,idx=idx,pin_memory=True,num_workers=num_workers)
     else:
         dataloader = dataset
         assert idx is None, "If input dataset is a dataloader, idx cannot be specified"
@@ -33,8 +34,9 @@ def reconstruct_mean(dataset : Union[CovarDataset,DataLoader],init_vol = None,ma
     if(not is_dataset_in_fourier):
         dataset.to_fourier_domain()
 
-    backproj_im = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=dataset.dtype)
-    backproj_ctf = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=dataset.dtype)
+    complex_dtype = get_complex_real_dtype(dataset.dtype)
+    backproj_im = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=complex_dtype)
+    backproj_ctf = torch.zeros((L*upsampling_factor,)*3,device=device,dtype=complex_dtype)
     phase_shift_grid = get_phase_shift_grid(L, dtype=backproj_im.real.dtype,device=device)
 
 

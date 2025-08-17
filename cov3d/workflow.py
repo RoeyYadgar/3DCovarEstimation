@@ -244,7 +244,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
             gt_data=gt_data,**default_training_kwargs)
     
     if(optimize_pose):
-        pose = pose.cpu()
+        pose = pose.to('cpu')
         #Print how signficat the refined pose was changed from the given initial pose
         rot_change = out_of_plane_rot_error(torch.tensor(Rotation.from_rotvec(pose.get_rotvecs().numpy())),
                                             init_pose[0])[1]
@@ -253,8 +253,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
         print(f'Image offset change: {offset_change} pixels')
         
         #Update dataset with estimated pose and apply preprocessing
-        #TODO: use internal method that update dataset pose
-        dataset.pts_rot = dataset.compute_pts_rot(pose.get_rotvecs().cpu())
+        dataset.update_pose(pose)
         dataset.preprocess_from_modules(mean,pose)
 
         #Dump refined pose and mean volume

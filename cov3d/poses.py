@@ -86,6 +86,11 @@ class PoseModule(torch.nn.Module):
 
         self._init_grid(dtype)
 
+
+    @property
+    def device(self):
+        return self.xy_rot_grid.device
+
     def _init_grid(self, dtype):
         grid2d = grid_2d(self.resolution, indexing="yx")
         num_pts = self.resolution**2

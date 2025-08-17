@@ -15,7 +15,7 @@ from cov3d.nufft_plan import NufftPlan,NufftPlanDiscretized
 from cov3d.projection_funcs import vol_forward,im_backward,centered_fft2,centered_ifft2,get_mask_threshold,preprocess_image_batch
 from cov3d.fsc_utils import average_fourier_shell,sum_over_shell
 from cov3d.covar import Mean
-from cov3d.poses import PoseModule
+from cov3d.poses import PoseModule,rotvec_to_rotmat
 
 class CovarDataset(Dataset):
     def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False,apply_preprocessing = True):
@@ -266,6 +266,19 @@ class CovarDataset(Dataset):
         self.filters_gain = estimated_filters_gain
         self.radial_filters_gain = radial_filters_gain
 
+
+    def update_pose(self,pose_module : PoseModule,batch_size : int = 1024):
+        """Updates dataset's particle pose information from a given PoseModule
+
+        Args:
+            pose_module (PoseModule): PoseModule instance to update from
+        """
+        with torch.no_grad():
+            for i in range(0,len(self),batch_size):                
+                idx = torch.arange(i,min(i + batch_size,len(self)),device=pose_module.device)
+                self.pts_rot[idx.cpu()] = pose_module(idx)[0].detach().cpu()
+                self.offsets[idx.cpu()] = pose_module.get_offsets()[idx.cpu()].detach().cpu()
+
 class LazyCovarDataset(CovarDataset):
     def __init__(self,src,noise_var,mean_volume = None,mask=None,invert_data = False,apply_preprocessing = True):
         if not isinstance(src,ImageSource):
@@ -302,8 +315,35 @@ class LazyCovarDataset(CovarDataset):
         This must happen after class construction since when we use DDP we pass this object which cannot have
         tensors already on the GPU.
         """
+        #TODO: should better handle case where apply_preprocessing=False, this will use uncessery GPU mem
         rot_vecs = torch.tensor(Rotation(self.src.rotations).as_rotvec(),dtype=self.dtype) #TODO: use a torch implementation?
         mean_module,pose_module,nufft_plan = self.construct_mean_pose_modules(self.mean_volume,self.mask,rot_vecs,self.src.offsets,fourier_domain=fourier_domain)
+        self._set_internal_preprocessing_modules(mean_module,pose_module,nufft_plan)
+
+
+    def preprocess_from_modules(self, mean_module, pose_module, nufft_plan=None, batch_size=1024):
+        """Overrides superclass method, since this is a lazy dataset implementation, this does not actually perform any preprocessing
+            but it update the internal objects required preprocessing on demand.
+        """
+
+        mean_module = copy.deepcopy(mean_module)
+        pose_module = copy.deepcopy(pose_module)
+
+        if mean_module._in_spatial_domain != self._in_spatial_domain:
+            domain_name = lambda val : 'Spatial' if val else 'Fourier'
+            print(f'Warning: Mean module is in {domain_name(mean_module._in_spatial_domain)} domain while dataset is in {domain_name(self._in_spatial_domain)}. Changing domain of the mean mean module to fit dataset')
+
+            mean_module._in_spatial_domain = self._in_spatial_domain
+
+
+        device = get_torch_device()
+        if(nufft_plan is None):
+            nufft_plan = NufftPlan((self.resolution,)*3,batch_size = 1, dtype=mean_module.dtype,device=device) if mean_module._in_spatial_domain else \
+                    NufftPlanDiscretized((self.resolution,)*3,upsample_factor=mean_module.upsampling_factor, mode='bilinear')
+
+        self._set_internal_preprocessing_modules(mean_module,pose_module,nufft_plan)
+
+    def _set_internal_preprocessing_modules(self,mean_module,pose_module,nufft_plan):
         set_module_grad(mean_module,False)
         set_module_grad(pose_module,False)
         device = get_torch_device()
@@ -355,10 +395,6 @@ class LazyCovarDataset(CovarDataset):
         if filters is None:
             filters = self.src.get_ctf(idx)
 
-        if not self.apply_preprocessing:
-            #No need to return pts_rot when not applying preprocessing
-            return images,None,filters
-
         if not isinstance(idx,torch.Tensor):
             if isinstance(idx, slice):
                 idx = torch.arange(len(self.src))[idx]
@@ -374,6 +410,9 @@ class LazyCovarDataset(CovarDataset):
         else:
             pts_rot,phase_shift = self._pose_module(idx)
 
+        if not self.apply_preprocessing:
+            return images,pts_rot,filters
+
         images = images.to(device)
         filters = filters.to(device)
 
@@ -388,8 +427,14 @@ class LazyCovarDataset(CovarDataset):
     def filters(self):
         return self.src.get_ctf(torch.arange(0,len(self)))
 
-    def to_spatial_domain(self):
-        pass
+
+    @property
+    def rot_vecs(self):
+        return torch.tensor(Rotation(self.src.rotations.numpy()).as_rotvec(),dtype=self.src.rotations.dtype)
+
+    @property
+    def offsets(self):
+        return self.src.offsets
 
     def _get_images_for_signal_var(self, start_idx, batch_size):
         """Override to use lazy loading for signal variance estimation."""
@@ -420,6 +465,26 @@ class LazyCovarDataset(CovarDataset):
             self.post_init_setup(fourier_domain=False)
             self._in_spatial_domain = True
 
+    def update_pose(self,pose_module : PoseModule,batch_size : int = None):
+        """Updates dataset's particle pose information from a given PoseModule
+
+        Args:
+            pose_module (PoseModule): PoseModule instance to update from
+        """
+        rot_vecs = pose_module.get_rotvecs().detach()
+        offsets = pose_module.get_offsets().detach().cpu()
+
+        self.src.rotations = rotvec_to_rotmat(rot_vecs).cpu()
+        self.src.offsets = offsets
+
+        #Update pose on exisiting internal pose module
+        if self._pose_module is not None:
+            self._pose_module.set_rotvecs(rot_vecs)
+            self._pose_module.set_offsets(offsets)
+
+            if (self._pose_module.use_contrast and pose_module.use_contrast):
+                self._pose_module.set_contrasts(pose_module.get_contrasts().detach().cpu())
+        
 
 class BatchIndexSampler(torch.utils.data.Sampler):
     def __init__(self, data_size, batch_size, shuffle=True,idx=None):
@@ -461,7 +526,7 @@ def create_dataloader(dataset, batch_size,idx=None, **dataloader_kwargs):
         dataloader_kwargs['persistent_workers'] = False
         dataloader_kwargs['pin_memory'] = False
         dataloader_kwargs['pin_memory_device'] = ''
-    num_workers = 0
+        num_workers = 0
 
     batch_size = None
     return torch.utils.data.DataLoader(

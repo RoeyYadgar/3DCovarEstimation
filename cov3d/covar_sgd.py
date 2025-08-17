@@ -521,13 +521,9 @@ class CovarPoseTrainer(CovarTrainer):
             if(self.mean_est_method == 'Reconstruction'):
                 #update datatset pts_rot and update the mean volume estimate
                 batch_size = self.batch_size * 16 #We can use larger batch size since this computation is very light weight
-                with torch.no_grad():
-                    for i in range(0,len(self.dataset),batch_size):
-                        #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
-                        idx = torch.arange(i,min(i + batch_size,len(self.dataset)),device=self.device)
-                        #TODO: use an internal method that updates dataset pose
-                        self.dataset.pts_rot[idx.cpu()] = self.pose(idx)[0].detach().cpu()
-                        self.dataset.offsets[idx.cpu()] = self.pose.get_offsets()[idx.cpu()].detach().cpu().to(self.dataset.offsets.dtype) #REMOVE dtype conversion
+                #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
+                self.dataset.update_pose(self.get_pose_module(),batch_size=batch_size)
+
                 if(not self.isDDP):
                     reconstructed_mean = reconstruct_mean_from_halfsets(self.dataset,mask=self.get_mean_module().volume_mask)
                 else:
