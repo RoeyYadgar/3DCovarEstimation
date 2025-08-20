@@ -185,7 +185,7 @@ class CovarDataset(Dataset):
         return gain_tensor
 
 
-    def get_total_covar_gain(self,batch_size=256,device=None):
+    def get_total_covar_gain(self,batch_size=64,device=None):
         """
         Returns a 2D tensor represnting the total gain of each frequency pair in the covariance least squares problem.
         """
@@ -258,13 +258,25 @@ class CovarDataset(Dataset):
         end_idx = min(start_idx + batch_size, len(self))
         return self.images[start_idx:end_idx]
             
-    def estimate_filters_gain(self):
-        average_filters_gain_spectrum = torch.mean(self.filters ** 2,axis=0) 
+    def estimate_filters_gain(self,batch_size=1024):
+
+        average_filters_gain_spectrum = torch.zeros((self.resolution,self.resolution))
+        for i in range(0,len(self),batch_size):
+            filters = self._get_filters_for_filters_gain(i,batch_size)
+            average_filters_gain_spectrum += torch.sum(filters ** 2,axis=0)
+        average_filters_gain_spectrum /= len(self)
+
         radial_filters_gain = average_fourier_shell(average_filters_gain_spectrum)
         estimated_filters_gain = sum_over_shell(radial_filters_gain,self.resolution,2).item() / (self.resolution**2)
 
         self.filters_gain = estimated_filters_gain
         self.radial_filters_gain = radial_filters_gain
+
+    def _get_filters_for_filters_gain(self, start_idx, batch_size):
+        """Helper method to get filters for filter gain estimation.
+        Subclasses can override this to provide different CTF access patterns."""
+        end_idx = min(start_idx + batch_size, len(self))
+        return self.filters[start_idx:end_idx]
 
 
     def update_pose(self,pose_module : PoseModule,batch_size : int = 1024):
@@ -440,6 +452,11 @@ class LazyCovarDataset(CovarDataset):
         """Override to use lazy loading for signal variance estimation."""
         end_idx = min(start_idx + batch_size, len(self))
         return self.src.images(torch.arange(start_idx, end_idx))
+
+    def _get_filters_for_filters_gain(self, start_idx, batch_size):
+        """Override to use lazy loading for signal variance estimation."""
+        end_idx = min(start_idx + batch_size, len(self))
+        return self.src.get_ctf(torch.arange(start_idx, end_idx))
 
     def get_subset(self,idx):
         subset = self.copy()
