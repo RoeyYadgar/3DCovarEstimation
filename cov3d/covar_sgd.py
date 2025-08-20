@@ -80,6 +80,15 @@ class CovarTrainer():
                 return None
         else:
             return None
+
+    def to(self,*args,**kwargs):
+        super().to(*args,**kwargs)
+        self.filter_gain = self.filter_gain.to(*args,**kwargs)
+        self._covar = self._covar.to(*args,**kwargs)
+        if self.fourier_reg is not None:
+            self.fourier_reg = self.fourier_reg.to(*args,**kwargs)
+        
+        return self         
     
     def run_batch(self,images,pts_rot,filters):
         self.nufft_plans.setpts(pts_rot)
@@ -905,15 +914,16 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
     use_halfsets = kwargs.pop('use_halfsets')
     num_reg_update_iters = kwargs.pop('num_reg_update_iters',None)
     num_epochs = kwargs.pop('max_epochs')
+    device = covar_model.device
 
     if(not use_halfsets):
-        dataloader = create_dataloader(dataset,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        dataloader = create_dataloader(dataset,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(device))
         #from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
-        #dataloader = CudaDataPrefetcher(dataloader,device=covar_model.device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
+        #dataloader = CudaDataPrefetcher(dataloader,device=device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
         if(not optimize_pose):
-            trainer = CovarTrainer(covar_model,dataloader,covar_model.device,savepath,gt_data=gt_data)
+            trainer = CovarTrainer(covar_model,dataloader,device,savepath,gt_data=gt_data)
         else:            
-            trainer = CovarPoseTrainer(covar_model,dataloader,covar_model.device,mean_model,pose,savepath,gt_data=gt_data)
+            trainer = CovarPoseTrainer(covar_model,dataloader,device,mean_model,pose,savepath,gt_data=gt_data)
 
         trainer.setup_training(**kwargs)
         for _ in range(num_reg_update_iters):
@@ -932,38 +942,43 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         half1,half2,permutation = dataset.half_split()
 
         #TODO: Use sampler like in DDP to not have to split dataset?
-        dataloader1 = create_dataloader(half1,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
-        dataloader2 = create_dataloader(half2,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        dataloader1 = create_dataloader(half1,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(device))
+        dataloader2 = create_dataloader(half2,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(device))
         
         if(not optimize_pose):
-            trainer1 = CovarTrainer(covar_model,dataloader1,covar_model.device,savepath,gt_data=gt_data)
+            trainer1 = CovarTrainer(covar_model,dataloader1,device,savepath,gt_data=gt_data)
             trainer2 = CovarTrainer(covar_model_copy,dataloader2,covar_model_copy.device,save_path=None,gt_data=gt_data)
         else:
             mean_model_copy = copy.deepcopy(mean_model)
             pose1,pose2 = pose.split_module(permutation)
             gt_data1, gt_data2 = gt_data.half_split(permutation)
-            trainer1 = CovarPoseTrainer(covar_model,dataloader1,covar_model.device,mean_model,pose1,savepath,gt_data=gt_data1)
+            trainer1 = CovarPoseTrainer(covar_model,dataloader1,device,mean_model,pose1,savepath,gt_data=gt_data1)
             trainer2 = CovarPoseTrainer(covar_model_copy,dataloader2,covar_model_copy.device,mean_model_copy,pose2,save_path=None,gt_data=gt_data2)
 
         trainer1.setup_training(**kwargs) 
         trainer2.setup_training(**kwargs)
 
         for i in range(0,num_reg_update_iters):
+            trainer2.to('cpu')
             trainer1.train_epochs(num_epochs,restart_optimizer=True)
+            trainer1.to('cpu')
+            trainer2.to(device)
             trainer2.train_epochs(num_epochs,restart_optimizer=True)
+            trainer1.to(device)
             update_fourier_reg(trainer1,trainer2)
 
         trainer1.complete_training()
         trainer2.complete_training()
+        trainer2.to('cpu')
 
         #Train on full dataset #TODO: reuse trainer1 to avoid having to set up the training again, this still requries to transform the dataset to fourier domain if needed
-        full_dataloader = create_dataloader(dataset,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(covar_model.device))
+        full_dataloader = create_dataloader(dataset,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(device))
         if(not optimize_pose):
-            trainer_final = CovarTrainer(covar_model,full_dataloader,covar_model.device,savepath,gt_data=gt_data)
+            trainer_final = CovarTrainer(covar_model,full_dataloader,device,savepath,gt_data=gt_data)
         else:
             pose.update_from_modules(pose1,pose2,permutation)
             #TODO: merge mean module instead of taking the first one
-            trainer_final = CovarPoseTrainer(covar_model,full_dataloader,covar_model.device,mean_model,pose,savepath,gt_data=gt_data)
+            trainer_final = CovarPoseTrainer(covar_model,full_dataloader,device,mean_model,pose,savepath,gt_data=gt_data)
 
         trainer_final.fourier_reg = trainer1.fourier_reg
         trainer_final.train(max_epochs=num_epochs,**kwargs)
