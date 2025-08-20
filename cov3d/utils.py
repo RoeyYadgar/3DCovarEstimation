@@ -258,9 +258,11 @@ def get_mpi_cpu_count():
 
     # Check for SLURM environment variable first
     #TODO : handle other job schedulers
-    slurm_cpu_count = os.getenv('SLURM_NTASKS')
-    if slurm_cpu_count is not None:
+    if "SLURM_JOB_ID" in os.environ:
+        slurm_cpu_count = os.getenv('SLURM_NTASKS',1)
         return int(slurm_cpu_count)
+    #if slurm_cpu_count is not None:
+    #    return int(slurm_cpu_count)
     
     return multiprocessing.cpu_count()
 
