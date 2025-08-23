@@ -93,7 +93,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,gt_path = None,**training_kwargs):
+def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False,whiten=True,mask='fuzzy',optimize_pose=False,optimize_contrast=False,class_vols = None,gt_pose = None,debug = False,gt_path = None,**training_kwargs):
     data_dir = os.path.split(inputfile)[0]
     if(output_dir is None):
         output_dir = path.join(data_dir,'result_data')
@@ -200,13 +200,13 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False
         mask = load_mask(mask,mean_est.resolution)
         print(f"Dataset loaded successfuly")
 
-    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,mask,optimize_pose,gt_data=gt_data,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,mask,optimize_pose,optimize_contrast,gt_data=gt_data,**training_kwargs)
     torch.cuda.empty_cache()
     return covar_precoessing_output
 
     
 
-def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=None,optimize_pose=False,gt_data=None,**training_kwargs):
+def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=None,optimize_pose=False,optimize_contrast=False,gt_data=None,**training_kwargs):
     L = dataset.resolution
 
     #Perform optimization for eigenvectors estimation
@@ -233,7 +233,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
                     fourier_domain=optimize_in_fourier_domain,
                     volume_mask=torch.tensor(mask.asnumpy()),
                     upsampling_factor=upsampling_factor)
-        pose = PoseModule(dataset.rot_vecs,dataset.offsets,L)
+        pose = PoseModule(dataset.rot_vecs,dataset.offsets,L,use_contrast=optimize_contrast)
         init_pose = (torch.tensor(Rotation.from_rotvec(dataset.rot_vecs.numpy())),dataset.offsets.clone())
     else:
         mean = None
@@ -327,6 +327,7 @@ def workflow_click_decorator(func):
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
     @click.option('--optimize-pose',is_flag=True,default=False,help = 'Whether to optimize over image pose')
+    @click.option('--optimize-contrast',is_flag=True,default=False,help = 'Whether to correct for contrast in particle images (can only be used with --optimize-pose flag)')
     @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. Used if provided to log eigen vectors error metrics while training.Additionally, GT embedding is computed and logged')
     @click.option('--gt-pose',type=str,default=None,help='Path to GT pkl pose file (cryoDRGN format). Used if provided to log pose error metrics while training')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
