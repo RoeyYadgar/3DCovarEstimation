@@ -4,6 +4,7 @@ import pickle
 import recovar
 from recovar import dataset as recovar_ds
 from recovar import output as recovar_output
+from cryodrgn.source import ImageSource
 import torch
 from scipy.ndimage import binary_dilation
 
@@ -15,14 +16,14 @@ def getRecovarDataset(starfile,split = True,perm = None,uninvert_data = False):
     dataset_dict = {'datadir' : None,'uninvert_data' : uninvert_data}
     dataset_dict['ctf_file'] = os.path.join(starfile_dir,'ctf.pkl')
     dataset_dict['poses_file'] = os.path.join(starfile_dir,'poses.pkl')
-    dataset_dict['particles_file'] = os.path.join(starfile_dir,starfile_name.replace('.star','.mrcs')) #TODO: handle different file names between star and mrcs
+    dataset_dict['particles_file'] = starfile
     
     if(split):
-        num_ims = len(recovar_ds.MRCDataMod(dataset_dict['particles_file']))
+        num_ims = ImageSource.from_file(dataset_dict['particles_file']).n
         if(perm is None):
             perm = np.random.permutation(num_ims)
         ind_split = [perm[:num_ims//2],perm[num_ims//2:]]
-        return recovar_ds.get_split_datasets_from_dict(dataset_dict, ind_split),perm
+        return recovar_ds.get_split_datasets_from_dict(dataset_dict, ind_split,lazy=True),perm
     else:
         return recovar_ds.load_dataset_from_dict(dataset_dict),None
 
@@ -63,7 +64,7 @@ def prepareDatasetForReconstruction(result_path):
 
     return dataset,zs,cov_zs,noise_variance,dataset_perm
 
-def recovarReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,n_bins=30,overwrite_vols=True):
+def recovarReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,n_bins=30):
     dataset,zs,cov_zs,noise_variance,dataset_perm = prepareDatasetForReconstruction(inputfile)
     L = dataset[0].grid_size
     B_factor = 0 #TODO: handle B_factor
@@ -71,4 +72,4 @@ def recovarReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,n
         with open(embedding_positions,'rb') as f:
             embedding_positions = pickle.load(f)
     
-    recovar_output.compute_and_save_reweighted(dataset, embedding_positions, zs, cov_zs, noise_variance*np.ones(L//2-1), outputfolder, B_factor, n_bins = n_bins,overwrite_vols=overwrite_vols)
+    recovar_output.compute_and_save_reweighted(dataset, embedding_positions, zs, cov_zs, noise_variance*np.ones(L//2-1), outputfolder, B_factor, n_bins = n_bins)
