@@ -48,7 +48,7 @@ class CovarTrainer():
         self.scheduler_patiece = 0
         self.apply_masking_on_epoch = True
         self.fourier_reg = None
-        self.reg_scale = 1/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
+        
 
     @property
     def dataset(self):
@@ -77,9 +77,11 @@ class CovarTrainer():
         else:
             return None
 
+    @property
+    def filter_gain(self):
+        return self.dataset.get_total_covar_gain(device=self.device)
+
     def to(self,*args,**kwargs):
-        super().to(*args,**kwargs)
-        self.filter_gain = self.filter_gain.to(*args,**kwargs)
         self._covar = self._covar.to(*args,**kwargs)
         if self.fourier_reg is not None:
             self.fourier_reg = self.fourier_reg.to(*args,**kwargs)
@@ -167,10 +169,9 @@ class CovarTrainer():
             self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
             self.dataset.to_spatial_domain()
             self.cost_func = cost if objective_func == 'ls' else cost_maximum_liklihood
-        self.filter_gain = self.dataset.get_total_covar_gain(device=self.device)
         self.covar.init_grid_correction(nufft_disc)
         print(f'Actual learning rate {lr}')
-        self.reg_scale*=reg
+        self.reg_scale = reg/(len(self.dataset)) #The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
         self.epoch_index = 0
 
     def restart_optimizer(self):
@@ -213,6 +214,7 @@ class CovarTrainer():
                 break
 
     def complete_training(self):
+        torch.cuda.empty_cache()
         if(self.optimize_in_fourier_domain):#Transform back to spatial domain            
             self.dataset.to_spatial_domain()
 
@@ -961,21 +963,22 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
             trainer1.to(device)
             update_fourier_reg(trainer1,trainer2)
 
-        trainer1.complete_training()
+        #trainer1.complete_training()
         trainer2.complete_training()
-        trainer2.to('cpu')
+        
+        del trainer2
+
+        torch.cuda.empty_cache()
 
         #Train on full dataset #TODO: reuse trainer1 to avoid having to set up the training again, this still requries to transform the dataset to fourier domain if needed
         full_dataloader = create_dataloader(dataset,batch_size = batch_size,num_workers=num_workers,prefetch_factor=10,persistent_workers=True,pin_memory=True,pin_memory_device=str(device))
-        if(not optimize_pose):
-            trainer_final = CovarTrainer(covar_model,full_dataloader,device,savepath,gt_data=gt_data)
-        else:
+        trainer1.train_data = full_dataloader
+        if optimize_pose:
             pose.update_from_modules(pose1,pose2,permutation)
             #TODO: merge mean module instead of taking the first one
-            trainer_final = CovarPoseTrainer(covar_model,full_dataloader,device,mean_model,pose,savepath,gt_data=gt_data)
+            trainer1.pose = pose
 
-        trainer_final.fourier_reg = trainer1.fourier_reg
-        trainer_final.train(max_epochs=num_epochs,**kwargs)
+        trainer1.train(max_epochs=num_epochs,**kwargs)
 
     torch.cuda.empty_cache()
         
