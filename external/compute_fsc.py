@@ -95,23 +95,12 @@ def main(args: argparse.Namespace) -> None:
         max_attempts = np.inf
         num_attempts = 0
         while (not reconstruction_complete and num_attempts < max_attempts):
-            try:
-                recovarReconstructFromEmbedding(results_dump,args.outdir,z_array,args.n_bins,overwrite_vols=False)
-                reconstruction_complete = True
-            except Exception as e:
-                print(f'Reconstruction failed with error {e}. Trying again')
-                num_attempts += 1
-                import jax
-                import gc
-                jax.clear_caches()
-                gc.collect()
-        #from cov3d.utils import relionReconstructFromEmbedding
-        #relionReconstructFromEmbedding(results_dump,args.outdir,z_array)
+            recovarReconstructFromEmbedding(results_dump,args.outdir,z_array,args.n_bins)
         
 
     # Align output conformation volumes to ground truth volumes using ChimeraX
     if args.align_vols:
-        volumes.align_volumes_multi(args.outdir, gt_vols, flip=args.flip_align)
+        volumes.align_volumes_multi(args.outdir, gt_vols, flip=args.flip_align,use_slurm=False)
 
     if args.calc_fsc_vals:
         volumes.get_fsc_curves(
@@ -127,8 +116,9 @@ def main(args: argparse.Namespace) -> None:
         )
 
         if args.align_vols:
+            aligndir = "flipped_aligned" if args.flip_align else "aligned"
             volumes.get_fsc_curves(
-                args.outdir,
+                os.path.join(args.outdir, aligndir),
                 gt_vols,
                 mask_file=args.mask,
                 fast=args.fast,
