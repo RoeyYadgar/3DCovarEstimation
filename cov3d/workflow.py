@@ -93,7 +93,7 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
+def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False,whiten=True,mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,gt_path = None,**training_kwargs):
     data_dir = os.path.split(inputfile)[0]
     if(output_dir is None):
         output_dir = path.join(data_dir,'result_data')
@@ -109,47 +109,9 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False
         
         mean_est = relionReconstruct(inputfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
 
-        if class_vols is not None: 
-            class_labels = None
-            if isinstance(class_vols,str):
-                assert os.path.isfile(class_vols), f'class_vols {class_vols} is not a file'
-                class_vols = Volume.load(class_vols)
-                #TODO: support pickle file with class labels
-
-            elif isinstance(class_vols,list): #list of mrc files                
-                class_vols = readVols(class_vols)
-
-            #class_vols *= L
-            if class_vols.resolution != L: #Downsample ground truth volumes
-                class_vols = class_vols.downsample(L)
-        else:
-            class_labels = None
-            if inputfile.endswith('.star'):
-                #Check if class labels are present in the starfile
-                star = aspire.storage.StarFile(inputfile)
-                if '_rlnClassNumber' in star['particles']:
-                    class_labels = np.array([float(v) for v in star['particles']['_rlnClassNumber']])
-                    class_vols = reconstructClass(inputfile,path.join(output_dir,'class_vols.mrc'))
-            #TODO: support other file types
-
-        if(class_vols is not None):
-            #Compute ground truth eigenvectors
-            mean_gt = np.mean(class_vols,axis=0)
-            if class_labels is not None:
-                _,counts = np.unique(class_labels[np.where(class_labels!=-1)],return_counts=True)
-                states_dist = counts/np.sum(counts)
-            else:
-                states_dist = None
-            covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
-        else:
-            covar_eigenvecs_gt = None
-            mean_gt = None
-
         #Print useful info TODO: use log files
         print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
-        if(covar_eigenvecs_gt is not None):
-            print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}')
-            print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gt))}')
+
 
         mask = load_mask(mask,L)
         invert_data = not check_dataset_sign(mean_est,mask)
@@ -157,21 +119,67 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False
             print('inverting dataset sign')
             mean_est = -1 * mean_est
             mean_est.save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
-            if(mean_gt is not None):
-                mean_gt *= -1
+
 
         dataset_cls = CovarDataset if not lazy else LazyCovarDataset
         dataset = dataset_cls(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
                                apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
         dataset.starfile = inputfile
 
-        if(gt_pose is not None):
-            gt_pose = pickle.load(open(gt_pose,'rb'))
-            gt_rots,gt_offsets = pose_cryoDRGN2APIRE(gt_pose,L)
+        if gt_path is None:
+            #Construct GT data from availble inputs
+            if class_vols is not None: 
+                class_labels = None
+                if isinstance(class_vols,str):
+                    assert os.path.isfile(class_vols), f'class_vols {class_vols} is not a file'
+                    class_vols = Volume.load(class_vols)
+                    #TODO: support pickle file with class labels
+
+                elif isinstance(class_vols,list): #list of mrc files                
+                    class_vols = readVols(class_vols)
+
+                #class_vols *= L
+                if class_vols.resolution != L: #Downsample ground truth volumes
+                    class_vols = class_vols.downsample(L)
+            else:
+                class_labels = None
+                if inputfile.endswith('.star'):
+                    #Check if class labels are present in the starfile
+                    star = aspire.storage.StarFile(inputfile)
+                    if '_rlnClassNumber' in star['particles']:
+                        class_labels = np.array([float(v) for v in star['particles']['_rlnClassNumber']])
+                        class_vols = reconstructClass(inputfile,path.join(output_dir,'class_vols.mrc'))
+                #TODO: support other file types
+
+            if(class_vols is not None):
+                #Compute ground truth eigenvectors
+                mean_gt = np.mean(class_vols,axis=0)
+                if invert_data:
+                    mean_gt *= -1
+                if class_labels is not None:
+                    _,counts = np.unique(class_labels[np.where(class_labels!=-1)],return_counts=True)
+                    states_dist = counts/np.sum(counts)
+                else:
+                    states_dist = None
+                covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
+            else:
+                covar_eigenvecs_gt = None
+                mean_gt = None
+
+            if(covar_eigenvecs_gt is not None):
+                print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}')
+                print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gt))}')
+
+            if(gt_pose is not None):
+                gt_pose = pickle.load(open(gt_pose,'rb'))
+                gt_rots,gt_offsets = pose_cryoDRGN2APIRE(gt_pose,L)
+            else:
+                gt_rots = None
+                gt_offsets = None
+            gt_data = GTData(covar_eigenvecs_gt,mean_gt,gt_rots,gt_offsets)
         else:
-            gt_rots = None
-            gt_offsets = None
-        gt_data = GTData(covar_eigenvecs_gt,mean_gt,gt_rots,gt_offsets)
+            with open(gt_path,'rb') as fid:
+                gt_data = pickle.load(fid)
 
         
         if(debug):
@@ -183,7 +191,10 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False
         print(f"Reading pickled dataset from {dataset_path}")
         with open(dataset_path,'rb') as fid:
             dataset = pickle.load(fid)
-        with open(os.path.join(output_dir,'gt_data.pkl'),'rb') as fid:
+
+        if gt_path is None: #If gt_path is not provided, load from output_dir
+            gt_path = os.path.join(output_dir,'gt_data.pkl')
+        with open(gt_path,'rb') as fid:
             gt_data = pickle.load(fid)
         mean_est = Volume.load(path.join(output_dir,'mean_est.mrc'))
         mask = load_mask(mask,mean_est.resolution)
@@ -319,6 +330,7 @@ def workflow_click_decorator(func):
     @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. Used if provided to log eigen vectors error metrics while training.Additionally, GT embedding is computed and logged')
     @click.option('--gt-pose',type=str,default=None,help='Path to GT pkl pose file (cryoDRGN format). Used if provided to log pose error metrics while training')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
+    @click.option('--gt-path',type = str,default = None,help = 'Path to pkl file containing GT dataclass')
     @click.option('--batch-size',type=int,help = 'training batch size')
     @click.option('--max-epochs',type=int,help = 'number of epochs to train')
     @click.option('--lr',type=float,help= 'training learning rate')
