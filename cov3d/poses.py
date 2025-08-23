@@ -17,7 +17,7 @@ def pose_ASPIRE2cryoDRGN(rots,offsets,L):
 
     return (rots, offsets)
 
-def rodrigues_rotation_matrix(rotvecs):
+def rotvec_to_rotmat(rotvecs):
     theta = torch.norm(rotvecs, dim=-1, keepdim=True)  # (N, 1)
     k = rotvecs / (theta + 1e-6)  # Normalize, avoiding division by zero
     
@@ -86,6 +86,11 @@ class PoseModule(torch.nn.Module):
 
         self._init_grid(dtype)
 
+
+    @property
+    def device(self):
+        return self.xy_rot_grid.device
+
     def _init_grid(self, dtype):
         grid2d = grid_2d(self.resolution, indexing="yx")
         num_pts = self.resolution**2
@@ -118,7 +123,7 @@ class PoseModule(torch.nn.Module):
 
         xy_rot_grid, phase_shift_grid_x, phase_shift_grid_y = self._downsample_grid(ds_resolution)
 
-        rot_mat = rodrigues_rotation_matrix(self.rotvec(index))
+        rot_mat = rotvec_to_rotmat(self.rotvec(index))
         pts_rot = torch.flip(torch.matmul(
             rot_mat.reshape(len(index)*3, 3),
             xy_rot_grid

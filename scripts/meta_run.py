@@ -40,13 +40,13 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
             dataset_name = dataset_names[i]
             for param, param_description in zip(params, params_description):
                 run_name = f'{run_prefix}_{dataset_name}_L{L}_{param_description}'
-                alg_param = {**param, 'starfile' : data['dataset'], 'name' : f'"{run_name}"'}
+                alg_param = {**param, 'inputfile' : data['dataset'], 'name' : f'"{run_name}"'}
                 if(data['mask'] is not None):
                     alg_param['mask'] = data['mask']
                 if('output-dir' in alg_param.keys()):
-                    alg_param['output-dir'] = os.path.join(os.path.split(alg_param['starfile'])[0],alg_param['output-dir'])
+                    alg_param['output-dir'] = os.path.join(os.path.split(alg_param['inputfile'])[0],alg_param['output-dir'])
                 if(unique_output_dir):
-                    alg_param['output-dir'] = os.path.join(os.path.split(alg_param['starfile'])[0],'output_' + param_description.replace(', ','_'))
+                    alg_param['output-dir'] = os.path.join(os.path.split(alg_param['inputfile'])[0],'output_' + param_description.replace(', ','_'))
 
                 def keyvalue2cli(key,value):
                     if(value is None):
@@ -207,11 +207,10 @@ cryobench_analysis = Experiment(
         'rank' : 10,
         'reg' : 1,
         'max-epochs' : 20,
-        'use-halfsets' : True,
+        'use-halfsets True' : True,
         'num-reg-update-iters' : 1,
-        'output-dir' : 'reg_refactor_results',
-        'debug' : None,
-    },
+        'output-dir' : 'reg_refactor_results'
+            },
     alg_var_params= {
         'objective-func' : ['ml','ls'],
     },

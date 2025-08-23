@@ -22,9 +22,6 @@ class CovarTrainer():
         
         self.batch_size = get_dataloader_batch_size(train_data.data_iterable) if (not isinstance(train_data,torch.utils.data.DataLoader)) else get_dataloader_batch_size(train_data)
         self.isDDP = type(self._covar) == torch.nn.parallel.distributed.DistributedDataParallel
-        self.filters = self.dataset.unique_filters
-        if(len(self.filters) < 10000): #TODO : set the threhsold based on available memory of a single GPU
-            self.filters = self.filters.to(self.device)
         self.save_path = save_path
         self.logTraining = self.device.index == 0 or self.device == torch.device('cpu') #Only log training on the first gpu
         self.training_log_freq = training_log_freq
@@ -47,7 +44,6 @@ class CovarTrainer():
                 })
             
 
-        self.filter_gain = self.dataset.get_total_covar_gain(device=self.device)
         self.num_reduced_lr_before_stop = 4
         self.scheduler_patiece = 0
         self.apply_masking_on_epoch = True
@@ -104,10 +100,10 @@ class CovarTrainer():
         return cost_val
 
     def prepare_batch(self,batch):
-        images,pts_rot,filter_indices,_ = batch
+        images,pts_rot,filters,_ = batch
         images = images.to(self.device)
         pts_rot = pts_rot.to(self.device)
-        filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
+        filters = filters.to(self.device)
         return images,pts_rot,filters
 
     def run_epoch(self,epoch):
@@ -169,7 +165,9 @@ class CovarTrainer():
             self.cost_func = cost_fourier_domain if objective_func == 'ls' else cost_maximum_liklihood_fourier_domain
         else:
             self.nufft_plans = NufftPlan(vol_shape,batch_size = rank, dtype=dtype,device=self.device)
+            self.dataset.to_spatial_domain()
             self.cost_func = cost if objective_func == 'ls' else cost_maximum_liklihood
+        self.filter_gain = self.dataset.get_total_covar_gain(device=self.device)
         self.covar.init_grid_correction(nufft_disc)
         print(f'Actual learning rate {lr}')
         self.reg_scale*=reg
@@ -463,10 +461,10 @@ class CovarPoseTrainer(CovarTrainer):
         return trainable_params
 
     def prepare_batch(self,batch):
-        images,_,filter_indices,idx = batch
+        images,_,filters,idx = batch
         images = images.to(self.device)
         idx = idx.to(self.device)
-        filters = self.filters[filter_indices].to(self.device) if len(self.filters) > 0 else None
+        filters = filters.to(self.device)
         return images,idx,filters
 
     def run_batch(self,images,idx,filters):
@@ -532,12 +530,9 @@ class CovarPoseTrainer(CovarTrainer):
             if(self.mean_est_method == 'Reconstruction'):
                 #update datatset pts_rot and update the mean volume estimate
                 batch_size = self.batch_size * 16 #We can use larger batch size since this computation is very light weight
-                with torch.no_grad():
-                    for i in range(0,len(self.dataset),batch_size):
-                        #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
-                        idx = torch.arange(i,min(i + batch_size,len(self.dataset)),device=self.device)
-                        self.dataset.pts_rot[idx.cpu()] = self.pose(idx)[0].detach().cpu()
-                        self.dataset.offsets[idx.cpu()] = self.pose.get_offsets()[idx.cpu()].detach().cpu().to(self.dataset.offsets.dtype) #REMOVE dtype conversion
+                #TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
+                self.dataset.update_pose(self.get_pose_module(),batch_size=batch_size)
+
                 if(not self.isDDP):
                     reconstructed_mean = reconstruct_mean_from_halfsets(self.dataset,mask=self.get_mean_module().volume_mask)
                 else:
@@ -892,18 +887,17 @@ def frobeniusNormDiff(vec1,vec2):
 
 def evalCovarEigs(dataset,eigs,batch_size = 8,reg_scale = 0,fourier_reg = None):
     device = eigs.device
-    filters = dataset.unique_filters.to(device)
     num_eigs = eigs.shape[0]
     L = eigs.shape[1]
     nufft_plans = NufftPlan((L,)*3,batch_size=num_eigs,dtype = eigs.dtype,device = device)
     cost_val = 0
     for i in range(0,len(dataset),batch_size):
-        images,pts_rot,filter_indices,_ = dataset[i:i+batch_size]
+        images,pts_rot,filters,_ = dataset[i:i+batch_size]
         pts_rot = pts_rot.to(device)
         images = images.to(device)
-        batch_filters = filters[filter_indices] if len(filters) > 0 else None
+        filters = filters.to(device)
         nufft_plans.setpts(pts_rot)
-        cost_term = cost(eigs,images,nufft_plans,batch_filters,dataset.noise_var,reg_scale=reg_scale,fourier_reg=fourier_reg) * batch_size
+        cost_term = cost(eigs,images,nufft_plans,filters,dataset.noise_var,reg_scale=reg_scale,fourier_reg=fourier_reg) * batch_size
         cost_val += cost_term
    
     return cost_val/len(dataset)

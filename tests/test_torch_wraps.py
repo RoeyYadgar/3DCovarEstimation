@@ -13,7 +13,7 @@ from aspire.nufft import anufft as aspire_anufft
 
 from cov3d import nufft_plan
 from cov3d import projection_funcs
-from cov3d.poses import PoseModule
+from cov3d.poses import PoseModule,rotvec_to_rotmat
 from cov3d.covar import Mean
 
 class TestTorchWraps(unittest.TestCase):
@@ -274,6 +274,16 @@ class TestTorchWraps(unittest.TestCase):
         torch.testing.assert_close(vol_forward,batch_vol_forward,rtol=5e-3,atol=5e-3)
         torch.testing.assert_close(vol_forward_grad,batch_vol_forward_grad,rtol=5e-3,atol=5e-3)
 
+
+
+    def test_rotmat_rotvec(self):
+        rotations = self.sim.rotations  # (N, 3, 3)
+        rotvecs = torch.tensor(Rotation.from_matrix(rotations).as_rotvec(), dtype=torch.float32)
+
+        romats = rotvec_to_rotmat(rotvecs)
+        # Aspire implementation
+        aspire_rotmats = torch.tensor(Rotation.from_rotvec(rotvecs.numpy()).matrices, dtype=torch.float32)
+        torch.testing.assert_close(romats, aspire_rotmats, rtol=1e-5, atol=1e-5)
 
     def test_pose_module_rots(self):
         rotations = self.sim.rotations

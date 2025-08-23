@@ -5,8 +5,9 @@ import pickle
 import aspire
 import click
 from cov3d.utils import *
+from cov3d.source import ImageSource
 from cov3d.covar_sgd import trainCovar
-from cov3d.dataset import CovarDataset,GTData
+from cov3d.dataset import CovarDataset,LazyCovarDataset,GTData
 from cov3d.covar import Covar,CovarFourier,Mean
 from cov3d.poses import PoseModule,pose_cryoDRGN2APIRE,pose_ASPIRE2cryoDRGN,out_of_plane_rot_error,offset_mean_error
 from cov3d.covar_distributed import trainParallel
@@ -92,9 +93,8 @@ def load_mask(mask,L):
 def check_dataset_sign(volume,mask):
      return np.sum((volume*mask).asnumpy()) > 0
 
-def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = 'anisotropic',mask='fuzzy',optimize_pose=False,class_vols = None,gt_pose = None,debug = False,**training_kwargs):
-    #Load starfile
-    data_dir = os.path.split(starfile)[0]
+def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False,whiten=True,mask='fuzzy',optimize_pose=False,optimize_contrast=False,class_vols = None,gt_pose = None,debug = False,gt_path = None,**training_kwargs):
+    data_dir = os.path.split(inputfile)[0]
     if(output_dir is None):
         output_dir = path.join(data_dir,'result_data')
     dataset_path = os.path.join(output_dir,'dataset.pkl')
@@ -102,57 +102,16 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
     if((not debug) or (not os.path.isfile(dataset_path))): 
         if(not path.isdir(output_dir)):
             os.mkdir(output_dir)
-        star = aspire.storage.StarFile(starfile)
-        states_in_source = '_rlnClassNumber' in star['particles']
-        pixel_size = float(star['optics']['_rlnImagePixelSize'][0])
-        source = aspire.source.RelionSource(starfile,pixel_size=pixel_size)
-        if('_rlnOriginXAngst' in star['particles'] and '_rlnOriginYAngst' in star['particles']):
-            #Aspire source only parses _rlnOriginX/Y and not _rlnOriginX/YAngst
-            source.offsets =  np.array([star['particles']['_rlnOriginXAngst'],star['particles']['_rlnOriginYAngst']]).astype(np.float32).T / pixel_size #Convert to pixels
-        L = source.L
+
+        source = ImageSource(inputfile,poses_path=poses,ctf_path=ctf,apply_preprocessing=whiten)
+        noise_var = source.estimate_noise_var() if not whiten else 1
+        L = source.resolution
         
-        mean_est = relionReconstruct(starfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
-
-        if(class_vols is None and states_in_source): #If class_vols was not provided but source has GT states use them to reconstruct GT
-            #Estimate ground truth states
-            class_vols = reconstructClass(starfile,path.join(output_dir,'class_vols.mrc'))
-        elif(class_vols is not None): 
-            if(isinstance(class_vols,str)):
-                class_vols = Volume.load(class_vols) if os.path.isfile(class_vols) else readVols(class_vols)
-                class_vols *= L
-            if(class_vols.resolution != L): #Downsample ground truth volumes
-                class_vols = class_vols.downsample(L)
-
-        if(class_vols is not None):
-            #Compute ground truth eigenvectors
-            mean_gt = np.mean(class_vols,axis=0)
-            _,counts = np.unique(source.states[np.where(source.states.astype(np.float32)!=-1)],return_counts=True)
-            states_dist = counts/np.sum(counts)
-            covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
-        else:
-            covar_eigenvecs_gt = None
-            mean_gt = None
+        mean_est = relionReconstruct(inputfile,path.join(output_dir,'mean_est.mrc'),overwrite = True) #TODO: change overwrite to True
 
         #Print useful info TODO: use log files
         print(f'Norm squared of mean volume : {np.linalg.norm(mean_est)**2}')
-        if(covar_eigenvecs_gt is not None):
-            print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}')
-            print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gt))}')
 
-
-        noise_est_num_ims = min(source.n,2**12)
-        if(whiten): #TODO : speed this up without aspire implementation. for now noise estimation uses only 2**12 images
-            if(noise_estimator == 'anisotropic'):
-                noise_estimator = aspire.noise.AnisotropicNoiseEstimator(source[:noise_est_num_ims])
-            elif(noise_estimator == 'white'):
-                noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-            source = source.whiten(noise_estimator)
-            noise_var = 1
-        else:
-            noise_estimator = aspire.noise.WhiteNoiseEstimator(source[:noise_est_num_ims])
-            noise_var = noise_estimator.estimate()
-        #TODO : if whiten is False normalize background will still normalize to get noise_var = 1 but this will not be taken into account - handle this.
-        source = source.normalize_background(do_ramp=False)
 
         mask = load_mask(mask,L)
         invert_data = not check_dataset_sign(mean_est,mask)
@@ -160,19 +119,67 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
             print('inverting dataset sign')
             mean_est = -1 * mean_est
             mean_est.save(path.join(output_dir,'mean_est.mrc'),overwrite=True) #Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
-            if(mean_gt is not None):
-                mean_gt *= -1
-        dataset = CovarDataset(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
-                               apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
-        dataset.starfile = starfile
 
-        if(gt_pose is not None):
-            gt_pose = pickle.load(open(gt_pose,'rb'))
-            gt_rots,gt_offsets = pose_cryoDRGN2APIRE(gt_pose,L)
+
+        dataset_cls = CovarDataset if not lazy else LazyCovarDataset
+        dataset = dataset_cls(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
+                               apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
+        dataset.starfile = inputfile
+
+        if gt_path is None:
+            #Construct GT data from availble inputs
+            if class_vols is not None: 
+                class_labels = None
+                if isinstance(class_vols,str):
+                    assert os.path.isfile(class_vols), f'class_vols {class_vols} is not a file'
+                    class_vols = Volume.load(class_vols)
+                    #TODO: support pickle file with class labels
+
+                elif isinstance(class_vols,list): #list of mrc files                
+                    class_vols = readVols(class_vols)
+
+                #class_vols *= L
+                if class_vols.resolution != L: #Downsample ground truth volumes
+                    class_vols = class_vols.downsample(L)
+            else:
+                class_labels = None
+                if inputfile.endswith('.star'):
+                    #Check if class labels are present in the starfile
+                    star = aspire.storage.StarFile(inputfile)
+                    if '_rlnClassNumber' in star['particles']:
+                        class_labels = np.array([float(v) for v in star['particles']['_rlnClassNumber']])
+                        class_vols = reconstructClass(inputfile,path.join(output_dir,'class_vols.mrc'))
+                #TODO: support other file types
+
+            if(class_vols is not None):
+                #Compute ground truth eigenvectors
+                mean_gt = np.mean(class_vols,axis=0)
+                if invert_data:
+                    mean_gt *= -1
+                if class_labels is not None:
+                    _,counts = np.unique(class_labels[np.where(class_labels!=-1)],return_counts=True)
+                    states_dist = counts/np.sum(counts)
+                else:
+                    states_dist = None
+                covar_eigenvecs_gt = volsCovarEigenvec(class_vols,weights = states_dist)[:rank]
+            else:
+                covar_eigenvecs_gt = None
+                mean_gt = None
+
+            if(covar_eigenvecs_gt is not None):
+                print(f'Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}')
+                print(f'Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gt))}')
+
+            if(gt_pose is not None):
+                gt_pose = pickle.load(open(gt_pose,'rb'))
+                gt_rots,gt_offsets = pose_cryoDRGN2APIRE(gt_pose,L)
+            else:
+                gt_rots = None
+                gt_offsets = None
+            gt_data = GTData(covar_eigenvecs_gt,mean_gt,gt_rots,gt_offsets)
         else:
-            gt_rots = None
-            gt_offsets = None
-        gt_data = GTData(covar_eigenvecs_gt,mean_gt,gt_rots,gt_offsets)
+            with open(gt_path,'rb') as fid:
+                gt_data = pickle.load(fid)
 
         
         if(debug):
@@ -184,20 +191,23 @@ def covar_workflow(starfile,rank,output_dir=None,whiten=True,noise_estimator = '
         print(f"Reading pickled dataset from {dataset_path}")
         with open(dataset_path,'rb') as fid:
             dataset = pickle.load(fid)
-        with open(os.path.join(output_dir,'gt_data.pkl'),'rb') as fid:
+
+        if gt_path is None: #If gt_path is not provided, load from output_dir
+            gt_path = os.path.join(output_dir,'gt_data.pkl')
+        with open(gt_path,'rb') as fid:
             gt_data = pickle.load(fid)
         mean_est = Volume.load(path.join(output_dir,'mean_est.mrc'))
         mask = load_mask(mask,mean_est.resolution)
         print(f"Dataset loaded successfuly")
 
-    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,mask,optimize_pose,gt_data=gt_data,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,mask,optimize_pose,optimize_contrast,gt_data=gt_data,**training_kwargs)
     torch.cuda.empty_cache()
     return covar_precoessing_output
 
     
 
-def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=None,optimize_pose=False,gt_data=None,**training_kwargs):
-    L = dataset.images.shape[-1]
+def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=None,optimize_pose=False,optimize_contrast=False,gt_data=None,**training_kwargs):
+    L = dataset.resolution
 
     #Perform optimization for eigenvectors estimation
     default_training_kwargs = {'batch_size' : 1024, 'max_epochs' : 20,
@@ -223,7 +233,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
                     fourier_domain=optimize_in_fourier_domain,
                     volume_mask=torch.tensor(mask.asnumpy()),
                     upsampling_factor=upsampling_factor)
-        pose = PoseModule(dataset.rot_vecs,dataset.offsets,L)
+        pose = PoseModule(dataset.rot_vecs,dataset.offsets,L,use_contrast=optimize_contrast)
         init_pose = (torch.tensor(Rotation.from_rotvec(dataset.rot_vecs.numpy())),dataset.offsets.clone())
     else:
         mean = None
@@ -233,6 +243,11 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
         trainParallel(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
             mean_model=mean,pose=pose,optimize_pose=optimize_pose,
             gt_data=gt_data,**default_training_kwargs)
+
+        #When using lazy dataset and DDP, this instance of the dataset is not the same as the one modified in trainParallel
+        #therefore we need to call the setup method directly
+        if isinstance(dataset,LazyCovarDataset):
+            dataset.post_init_setup(fourier_domain=False)
     else:
         cov = cov.to(get_torch_device())
         trainCovar(cov,dataset,savepath = path.join(output_dir,'training_results.bin'),
@@ -240,7 +255,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
             gt_data=gt_data,**default_training_kwargs)
     
     if(optimize_pose):
-        pose = pose.cpu()
+        pose = pose.to('cpu')
         #Print how signficat the refined pose was changed from the given initial pose
         rot_change = out_of_plane_rot_error(torch.tensor(Rotation.from_rotvec(pose.get_rotvecs().numpy())),
                                             init_pose[0])[1]
@@ -249,7 +264,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
         print(f'Image offset change: {offset_change} pixels')
         
         #Update dataset with estimated pose and apply preprocessing
-        dataset.pts_rot = dataset.compute_pts_rot(pose.get_rotvecs().cpu())
+        dataset.update_pose(pose)
         dataset.preprocess_from_modules(mean,pose)
 
         #Dump refined pose and mean volume
@@ -303,16 +318,20 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
 
 
 def workflow_click_decorator(func):
-    @click.option('-s','--starfile',type=str, help='path to star file.')
+    @click.option('-i','--inputfile',type=str, help='path to star/txt/mrcs file.')
     @click.option('-r','--rank',type=int, help='rank of covariance to be estimated.')
     @click.option('-o','--output-dir',type=str,help='path to output directory. when not provided a `result_data` directory will be used with the same path as the provided starfile')
+    @click.option('-p','--poses',type=str,default=None,help='Path to pkl file containing particle pose information in cryoDRGN format')
+    @click.option('-c','--ctf',type=str,default=None,help='Path to pkl file containing CTF information in cryoDRGN format')
+    @click.option('--lazy',is_flag=True,default=False,help='Whether to use lazy dataset. If set, the dataset will not be loaded into (CPU) memory and will be processed when accessed. This is useful for large datasets.')
     @click.option('-w','--whiten',type=bool,default=True,help='whether to whiten the images before processing')
-    @click.option('--noise-estimator',type=str,default = 'anisotropic',help='noise estimator (white/anisotropic) used to whiten the images')
     @click.option('--mask',type=str,default='fuzzy',help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'")
     @click.option('--optimize-pose',is_flag=True,default=False,help = 'Whether to optimize over image pose')
+    @click.option('--optimize-contrast',is_flag=True,default=False,help = 'Whether to correct for contrast in particle images (can only be used with --optimize-pose flag)')
     @click.option('--class-vols',type=str,default=None,help='Path to GT volumes directory. Used if provided to log eigen vectors error metrics while training.Additionally, GT embedding is computed and logged')
     @click.option('--gt-pose',type=str,default=None,help='Path to GT pkl pose file (cryoDRGN format). Used if provided to log pose error metrics while training')
     @click.option('--debug',is_flag = True,default = False, help = 'debugging mode')
+    @click.option('--gt-path',type = str,default = None,help = 'Path to pkl file containing GT dataclass')
     @click.option('--batch-size',type=int,help = 'training batch size')
     @click.option('--max-epochs',type=int,help = 'number of epochs to train')
     @click.option('--lr',type=float,help= 'training learning rate')
