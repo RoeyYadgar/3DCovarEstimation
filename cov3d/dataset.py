@@ -185,7 +185,7 @@ class CovarDataset(Dataset):
         return gain_tensor
 
 
-    def get_total_covar_gain(self,batch_size=64,device=None):
+    def get_total_covar_gain(self,batch_size=None,device=None):
         """
         Returns a 2D tensor represnting the total gain of each frequency pair in the covariance least squares problem.
         """
@@ -198,6 +198,20 @@ class CovarDataset(Dataset):
 
         s = average_fourier_shell(gain_tensor).shape[0]
         covar_shell_gain = torch.zeros((s,s),device=device,dtype=self.dtype)
+
+        torch.cuda.empty_cache()
+
+        if batch_size is None:
+            total_mem = torch.cuda.get_device_properties(device).total_memory
+            reserved_mem = torch.cuda.memory_reserved(device)
+            available_memory = total_mem - reserved_mem
+            available_batch_size = available_memory / (L**3 * self.dtype.itemsize*2) # self.dtype.itemsize*2 bytes per value for complex dtype
+            
+            batch_size = int(available_batch_size * 0.25)
+            batch_size = min(batch_size,256)
+            print(f'Using batch size of {batch_size} to compute dataset covar gain')
+            print((torch.cuda.memory_reserved(device),torch.cuda.memory_allocated(device)))
+
 
         for i in range(0,len(self),batch_size):
             _,pts_rot,filters,_ = self[i:min(i+batch_size,len(self))]
@@ -213,6 +227,8 @@ class CovarDataset(Dataset):
 
             averaged_gain_tensor = average_fourier_shell(*gain_tensor)
             covar_shell_gain += averaged_gain_tensor.T @ averaged_gain_tensor
+
+        torch.cuda.empty_cache()
 
         return covar_shell_gain
 
