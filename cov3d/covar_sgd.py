@@ -46,7 +46,7 @@ class CovarTrainer():
 
         self.num_reduced_lr_before_stop = 4
         self.scheduler_patiece = 0
-        self.apply_masking_on_epoch = True
+        self.apply_masking_on_epoch = self.dataset.mask is not None
         self.fourier_reg = None
         
 
