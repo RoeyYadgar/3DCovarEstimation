@@ -91,16 +91,13 @@ def main(args: argparse.Namespace) -> None:
         logger.addHandler(logging.FileHandler(log_file))
         logger.info(args)
 
-        reconstruction_complete = False
-        max_attempts = np.inf
-        num_attempts = 0
-        while (not reconstruction_complete and num_attempts < max_attempts):
-            recovarReconstructFromEmbedding(results_dump,args.outdir,z_array,args.n_bins)
+        recovarReconstructFromEmbedding(results_dump,args.outdir,z_array,args.n_bins)
         
 
     # Align output conformation volumes to ground truth volumes using ChimeraX
     if args.align_vols:
-        volumes.align_volumes_multi(args.outdir, gt_vols, flip=args.flip_align,use_slurm=False)
+        vol_paths = [os.path.join(args.outdir,f"vol{i:04d}", "locres_filtered") for i in range(len(gt_vols))]
+        volumes.align_volumes_multi(vol_paths, gt_vols, flip=args.flip_align,use_slurm=False)
 
     if args.calc_fsc_vals:
         volumes.get_fsc_curves(
@@ -118,13 +115,13 @@ def main(args: argparse.Namespace) -> None:
         if args.align_vols:
             aligndir = "flipped_aligned" if args.flip_align else "aligned"
             volumes.get_fsc_curves(
-                os.path.join(args.outdir, aligndir),
+                args.outdir,
                 gt_vols,
                 mask_file=args.mask,
                 fast=args.fast,
                 overwrite=args.overwrite,
                 vol_fl_function=lambda i: os.path.join(
-                    f"vol{i:04d}", "locres_filtered"
+                    f"vol{i:04d}",aligndir, "locres_filtered"
                 ),
                 num_vols = args.num_vols,
             )
