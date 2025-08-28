@@ -219,7 +219,6 @@ def simulateExp(folder_name = None,L=64,r=5,no_ctf=False,save_source = False,vol
             os.makedirs(dir_name,exist_ok=True)  
             if(save_source):
                 sim.save(dir_name)
-            dataset.starfile = os.path.join(dir_name,'particles.star')     
             display_source(sim,os.path.join(dir_name,'clean_images.jpg'),display_clean=True)
             display_source(sim,os.path.join(dir_name,'noisy_images.jpg'),display_clean=False)
             data_dict,_,_ = covar_processing(dataset,r,dir_name,gt_data=gt_data,max_epochs=20,objective_func=obj,num_reg_update_iters=1)
@@ -283,7 +282,6 @@ def simulate_noisy_rots(folder_name,snr=None,noise_var=None,rots_std=0,offsets_s
     voxels.save(os.path.join(output_dir,'class_vols.mrc'),overwrite=True)
     vectorsGT = volsCovarEigenvec(voxels)
     dataset = CovarDataset(sim,noise_var,mean_volume=mean,mask=load_mask(mask,L),apply_preprocessing=False)
-    dataset.starfile = os.path.join(folder_name,'particles.star')
 
     gt_data = GTData(vectorsGT,mean,sim._rotations,sim._offsets)
 

@@ -9,21 +9,21 @@ import torch
 from scipy.ndimage import binary_dilation
 
 
-def getRecovarDataset(starfile,split = True,perm = None,uninvert_data = False):
+def getRecovarDataset(particles_path,ctf_path=None,poses_path=None,split = True,perm = None,uninvert_data = False):
     #TODO: handle ctf and poses pkl files not in the same dir as star and mrcs files
 
-    starfile_dir,starfile_name = os.path.split(starfile)    
+    particles_dir,_ = os.path.split(particles_path)    
     dataset_dict = {'datadir' : None,'uninvert_data' : uninvert_data}
-    dataset_dict['ctf_file'] = os.path.join(starfile_dir,'ctf.pkl')
-    dataset_dict['poses_file'] = os.path.join(starfile_dir,'poses.pkl')
-    dataset_dict['particles_file'] = starfile
+    dataset_dict['ctf_file'] = os.path.join(particles_dir,'ctf.pkl') if ctf_path is None else ctf_path
+    dataset_dict['poses_file'] = os.path.join(particles_dir,'poses.pkl') if poses_path is None else poses_path
+    dataset_dict['particles_file'] = particles_path
     
     if(split):
         num_ims = ImageSource.from_file(dataset_dict['particles_file']).n
         if(perm is None):
             perm = np.random.permutation(num_ims)
         ind_split = [perm[:num_ims//2],perm[num_ims//2:]]
-        return recovar_ds.get_split_datasets_from_dict(dataset_dict, ind_split,lazy=True),perm
+        return recovar_ds.get_split_datasets_from_dict(dataset_dict, ind_split,lazy=False),perm
     else:
         return recovar_ds.load_dataset_from_dict(dataset_dict),None
 
@@ -54,8 +54,10 @@ def torch_to_numpy(arr):
 def prepareDatasetForReconstruction(result_path):
     with open(result_path,'rb') as f:
         result = pickle.load(f)
-    starfile = result['starfile']
-    dataset,dataset_perm = getRecovarDataset(starfile,uninvert_data=result['data_sign_inverted'])
+    particles_path = result['particles_path']
+    ctf_path = result.get('ctf_path',None)
+    poses_path = result.get('poses_path',None)
+    dataset,dataset_perm = getRecovarDataset(particles_path,ctf_path=ctf_path,poses_path=poses_path,uninvert_data=result['data_sign_inverted'])
     batch_size = recovar.utils.get_image_batch_size(dataset[0].grid_size, gpu_memory = recovar.utils.get_gpu_memory_total()) 
     noise_variance,_ = recovar.noise.estimate_noise_variance(dataset[0], batch_size)
 

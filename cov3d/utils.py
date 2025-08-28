@@ -297,7 +297,8 @@ def relionReconstructFromEmbedding(inputfile,outputfolder,embedding_positions,q=
         result = pickle.load(f)
     zs = torch.tensor(result['coords_est'])
     cov_zs = torch.tensor(result['coords_covar_inv_est'])
-    starfile = result['starfile']
+    starfile = result['particles_path']
+    assert isinstance(starfile, str) and starfile.endswith('.star'), f"Invalid particles file {starfile} reconstruction with relion only support starfiles"
     volumes_dir = os.path.join(outputfolder,'all_volumes_relion')
     os.makedirs(volumes_dir,exist_ok=True)
     for i,embedding_position in enumerate(torch.tensor(embedding_positions)):
@@ -328,7 +329,8 @@ def relionReconstructFromEmbeddingDisjointSets(inputfile,outputfolder,embedding_
         result = pickle.load(f)
     zs = torch.tensor(result['coords_est'])
     cov_zs = torch.tensor(result['coords_covar_inv_est'])
-    starfile = result['starfile']
+    starfile = result['particles_path']
+    assert isinstance(starfile, str) and starfile.endswith('.star'), f"Invalid particles file {starfile} reconstruction with relion only support starfiles"
     volumes_dir = os.path.join(outputfolder,'all_volumes_relion')
     os.makedirs(volumes_dir,exist_ok=True)
     mahal_distance = torch.zeros(zs.shape[0],embedding_positions.shape[0])

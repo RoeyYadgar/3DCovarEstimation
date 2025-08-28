@@ -124,7 +124,7 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False
         dataset_cls = CovarDataset if not lazy else LazyCovarDataset
         dataset = dataset_cls(source,noise_var,mean_volume=mean_est,mask=mask,invert_data = invert_data,
                                apply_preprocessing = not optimize_pose) #When pose is being optimized the pre-processing must be done in the training loop itself
-        dataset.starfile = inputfile
+        dataset.input_paths = source.get_paths()
 
         if gt_path is None:
             #Construct GT data from availble inputs
@@ -200,7 +200,15 @@ def covar_workflow(inputfile,rank,output_dir=None,poses=None,ctf=None,lazy=False
         mask = load_mask(mask,mean_est.resolution)
         print(f"Dataset loaded successfuly")
 
-    covar_precoessing_output = covar_processing(dataset,rank,output_dir,mean_est,mask,optimize_pose,optimize_contrast,gt_data=gt_data,**training_kwargs)
+    covar_precoessing_output = covar_processing(dataset,
+                                                rank,
+                                                output_dir=output_dir,
+                                                mean_volume_est=mean_est,
+                                                mask=mask,
+                                                optimize_pose=optimize_pose,
+                                                optimize_contrast=optimize_contrast,
+                                                gt_data=gt_data,
+                                                **training_kwargs)
     torch.cuda.empty_cache()
     return covar_precoessing_output
 
@@ -293,10 +301,13 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
     print(f'Eigenvalues of estimated covariance {eigenval_est}')
 
 
+    get_abspath = lambda s: os.path.abspath(s) if s is not None else None
+    input_paths = dataset.input_paths if hasattr(dataset,'input_paths') else (None,)*3
+
     data_dict = {'eigen_est' : eigen_est.cpu().numpy(), 'eigenval_est' : eigenval_est.cpu().numpy(),
                 'coords_est' : coords_est.cpu().numpy(), 'coords_covar_inv_est' : coords_covar_inv_est.numpy(),
                 'mean_est' : mean_volume_est.asnumpy() if mean_volume_est is not None else None,
-                'starfile' : os.path.abspath(dataset.starfile) if dataset.starfile is not None else None,
+                'particles_path': get_abspath(input_paths[0]), 'ctf_path' : get_abspath(input_paths[1]), 'poses_path' : get_abspath(input_paths[2]), 
                 'data_sign_inverted' : dataset.data_inverted}
     if(is_gt_eigenvols):
         data_dict = {**data_dict,

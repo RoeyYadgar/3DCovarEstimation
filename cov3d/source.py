@@ -27,6 +27,8 @@ class ImageSource:
         if poses_path is None:
             poses_path = os.path.join(particles_dir,'poses.pkl')
             assert os.path.isfile(poses_path), f"poses file was not provided, tried {poses_path} as a default but file does not exist"
+        self.ctf_path = ctf_path
+        self.poses_path = poses_path
 
         
         self.ctf_params = torch.tensor(load_ctf_for_training(self.resolution,ctf_path))
@@ -179,6 +181,10 @@ class ImageSource:
         subset.offset_normalization = subset.offset_normalization[idx]
 
         return subset
+
+
+    def get_paths(self):
+        return self.particles_path, self.ctf_path, self.poses_path
 
 
 

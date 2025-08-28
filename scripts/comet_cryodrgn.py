@@ -35,7 +35,7 @@ def run_pipeline(name,alg,mrc,zdim,num_epochs,mask,
         command = f'python ~/recovar/pipeline.py {mrc} --poses {poses} --ctf {ctf} --zdim {zdim} -o {output_path} --mask {mask} --correct-contrast --low-memory-option'
         analyze_command = f'python ~/recovar/analyze.py --zdim {zdim} {output_path} --skip-centers --n-trajectories 0'
     if(not disable_comet):
-        run_config  = {'starfile' : starfile, 'zdim' : zdim, 'command' : command, 'analyze_command' : analyze_command}
+        run_config  = {'inputfile' : starfile, 'zdim' : zdim, 'command' : command, 'analyze_command' : analyze_command}
         exp = comet_ml.Experiment(project_name="3d_cov",parse_args=False)
         exp.set_name(name)
         exp.log_parameters(run_config)
