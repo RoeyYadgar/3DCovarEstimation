@@ -292,7 +292,7 @@ def covar_processing(dataset,covar_rank,output_dir,mean_volume_est=None,mask=Non
     eigenval_est = eigenval_est.to('cuda:0')
     coords_est,coords_covar_inv_est = latentMAP(dataset,eigen_est,eigenval_est,return_coords_covar=True)
 
-    is_gt_eigenvols = gt_data.eigenvecs is not None
+    is_gt_eigenvols = gt_data.eigenvecs is not None if gt_data is not None else None
     if(is_gt_eigenvols):
         eigenvals_GT = torch.norm(gt_data.eigenvecs,dim=1) ** 2
         eigenvectors_GT = (gt_data.eigenvecs / torch.sqrt(eigenvals_GT).unsqueeze(1)).reshape((-1,L,L,L))

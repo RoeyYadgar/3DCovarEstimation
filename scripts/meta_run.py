@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Union
 from dataclasses import dataclass
 
 DATASET_PATH = "data/scratch_data"
-RUN_COMMANDS = True
+RUN_COMMANDS = os.environ.get("RUN_COMMANDS", "True") == "True"
 
 def get_full_path(path_list):
 
@@ -43,6 +43,8 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
                 alg_param = {**param, 'inputfile' : data['dataset'], 'name' : f'"{run_name}"'}
                 if(data['mask'] is not None):
                     alg_param['mask'] = data['mask']
+                if data['poses'] is not None:
+                    alg_param['poses'] = data['poses']
                 if('output-dir' in alg_param.keys()):
                     alg_param['output-dir'] = os.path.join(os.path.split(alg_param['inputfile'])[0],alg_param['output-dir'])
                 if(unique_output_dir):

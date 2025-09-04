@@ -553,7 +553,7 @@ def create_dataloader(dataset, batch_size,idx=None, **dataloader_kwargs):
     #Cannot use num workers > 1 with lazy dataset since it requires GPU usage
     #TODO: find a better solution that enables the use of more workers
     num_workers = dataloader_kwargs.pop('num_workers',0)
-    if (isinstance(dataset,LazyCovarDataset) and num_workers > 1):
+    if (isinstance(dataset,LazyCovarDataset)):
         print(f'Warning: cannot use {num_workers} > 1 num_workers with Lazy dataset. setting num_workers to 0 and prefetch_factor to None')
         dataloader_kwargs['prefetch_factor'] = None
         dataloader_kwargs['persistent_workers'] = False
