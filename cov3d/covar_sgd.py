@@ -356,6 +356,16 @@ class CovarPoseTrainer(CovarTrainer):
     
     def get_pose_module(self) -> PoseModule:
         return self.pose
+
+    def set_pose_module(self, pose : PoseModule):
+        self.pose = pose.to(self.device)
+        if(self.offset_est_method != 'SGD'):
+            for param in self.get_pose_module().offsets.parameters():
+                param.requires_grad = False
+            if(self.get_pose_module().use_contrast):
+                for param in self.get_pose_module().contrasts.parameters():
+                    param.requires_grad = False
+        self._updated_idx = torch.zeros(len(self.dataset),device=self.device)
     
     def _ddp_sync_pose_module(self):
         if(not self.isDDP):
@@ -976,7 +986,8 @@ def trainCovar(covar_model,dataset,batch_size,optimize_pose=False,mean_model = N
         if optimize_pose:
             pose.update_from_modules(pose1,pose2,permutation)
             #TODO: merge mean module instead of taking the first one
-            trainer1.pose = pose
+            trainer1.set_pose_module(pose)
+            trainer1.gt_data = gt_data
 
         trainer1.train(max_epochs=num_epochs,**kwargs)
 
