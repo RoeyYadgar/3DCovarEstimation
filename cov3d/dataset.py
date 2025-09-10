@@ -207,7 +207,7 @@ class CovarDataset(Dataset):
             available_memory = total_mem - reserved_mem
             available_batch_size = available_memory / (L**3 * self.dtype.itemsize*2) # self.dtype.itemsize*2 bytes per value for complex dtype
             
-            batch_size = int(available_batch_size * 0.25)
+            batch_size = int(available_batch_size / 6)
             batch_size = min(batch_size,256)
             print(f'Using batch size of {batch_size} to compute dataset covar gain')
             print((torch.cuda.memory_reserved(device),torch.cuda.memory_allocated(device)))
