@@ -12,7 +12,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install --upgrade "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 pip install -e .
 
-#Install recovar with no dependecies - due to some dependecies confclits 
+#Install recovar with no dependecies - due to some dependecies confclits
 pip install recovar --no-deps
 ```
 Additionally, make sure RELION is installed and `relion_reconstruct`

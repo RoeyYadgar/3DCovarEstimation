@@ -1,14 +1,25 @@
 import torch
 
+
 class BlockNewtonOptimizer(torch.optim.Optimizer):
     """
-    Implements a Newton optimizer with backtracking line search. 
+    Implements a Newton optimizer with backtracking line search.
     Assumes hessian is block diagonal with respect to the parameters and batch (first dim) of tensor.
     """
-    def __init__(self, params, lr=1.0, max_ls_steps=10, c=1e-4, beta=0.1, damping=1e-6,line_search=True,step_size_limit=None):
-        defaults = dict(lr=lr, max_ls_steps=max_ls_steps, c=c, beta=beta, damping=damping,line_search=line_search,step_size_limit=step_size_limit)
-        super().__init__(params, defaults)
 
+    def __init__(
+        self, params, lr=1.0, max_ls_steps=10, c=1e-4, beta=0.1, damping=1e-6, line_search=True, step_size_limit=None
+    ):
+        defaults = dict(
+            lr=lr,
+            max_ls_steps=max_ls_steps,
+            c=c,
+            beta=beta,
+            damping=damping,
+            line_search=line_search,
+            step_size_limit=step_size_limit,
+        )
+        super().__init__(params, defaults)
 
     def step(self, closure=None):
         loss = None
@@ -20,15 +31,15 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
             loss.sum().backward(create_graph=True)
 
         for group in self.param_groups:
-            lr = group['lr']
-            c = group['c']
-            beta = group['beta']
-            max_ls_steps = group['max_ls_steps']
-            damping = group['damping']
-            line_search = group['line_search']
-            step_size_limit = group['step_size_limit']
+            lr = group["lr"]
+            c = group["c"]
+            beta = group["beta"]
+            max_ls_steps = group["max_ls_steps"]
+            damping = group["damping"]
+            line_search = group["line_search"]
+            step_size_limit = group["step_size_limit"]
 
-            for param in group['params']:
+            for param in group["params"]:
                 if param.grad is None:
                     continue
 
@@ -38,23 +49,25 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
                 batch_size = param.shape[0]
 
                 # Compute Hessian
-                hessian = torch.zeros((n,) + param.shape, dtype=flat_aggregated_grad.dtype, device=flat_aggregated_grad.device)
+                hessian = torch.zeros(
+                    (n,) + param.shape, dtype=flat_aggregated_grad.dtype, device=flat_aggregated_grad.device
+                )
                 for i in range(n):
                     hessian[i] = torch.autograd.grad(flat_aggregated_grad[i], param, retain_graph=True)[0]
-                    
-                hessian = hessian.reshape(n,batch_size,n).transpose(0,1)
+
+                hessian = hessian.reshape(n, batch_size, n).transpose(0, 1)
                 # Damping for stability
                 hessian = hessian + damping * torch.eye(n, device=param.device).unsqueeze(0)
 
                 # Compute Newton step
-                step_dir = torch.linalg.solve(hessian, param.grad.view(batch_size,-1))
-                if(step_size_limit is not None):
+                step_dir = torch.linalg.solve(hessian, param.grad.view(batch_size, -1))
+                if step_size_limit is not None:
                     step_dir = torch.clamp(step_dir, -step_size_limit, step_size_limit)
 
                 # Backtracking line search
-                if(line_search):
+                if line_search:
                     alpha = lr
-                    alpha_step_taken = torch.zeros(batch_size,device=param.device)
+                    alpha_step_taken = torch.zeros(batch_size, device=param.device)
                     for _ in range(max_ls_steps):
                         param.data = orig_param - alpha * step_dir.view_as(param.data)
 
@@ -63,11 +76,22 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
                             trial_loss = closure()
                             trial_loss.sum().backward(create_graph=True)
 
-                        alpha_step_taken[((trial_loss <= loss - c * alpha * torch.norm(param.grad.view(batch_size,-1),dim=1)**2).to(torch.int) + (alpha_step_taken == 0)) == 2] = alpha 
-                        
+                        alpha_step_taken[
+                            (
+                                (
+                                    trial_loss
+                                    <= loss - c * alpha * torch.norm(param.grad.view(batch_size, -1), dim=1) ** 2
+                                ).to(torch.int)
+                                + (alpha_step_taken == 0)
+                            )
+                            == 2
+                        ] = alpha
+
                         alpha *= beta
 
-                    param.data = orig_param - step_dir.view_as(param.data) * alpha_step_taken.reshape((-1,) + (param.data.ndim-1)*(1,))
+                    param.data = orig_param - step_dir.view_as(param.data) * alpha_step_taken.reshape(
+                        (-1,) + (param.data.ndim - 1) * (1,)
+                    )
                 else:
                     # No line search, take the full step
                     param.data = orig_param - lr * step_dir.view_as(param.data)
@@ -75,17 +99,17 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
         return loss
 
 
-
+from collections import deque
 
 import torch
 from torch.optim.optimizer import Optimizer
-from collections import deque
+
 
 class BlockwiseLBFGS(Optimizer):
-    def __init__(self, params, lr=1.0, history_size=10,step_size_limit=None):
+    def __init__(self, params, lr=1.0, history_size=10, step_size_limit=None):
         if lr <= 0:
             raise ValueError(f"Invalid learning rate: {lr}")
-        defaults = dict(lr=lr,step_size_limit=step_size_limit)
+        defaults = dict(lr=lr, step_size_limit=step_size_limit)
         super(BlockwiseLBFGS, self).__init__(params, defaults)
 
         self.history_size = history_size
@@ -95,10 +119,10 @@ class BlockwiseLBFGS(Optimizer):
 
     def _init_state(self):
         return {
-            's_history': {},  # row_id -> deque of s vectors (delta_x)
-            'y_history': {},  # row_id -> deque of y vectors (delta_grad)
-            'prev_x': {},     # row_id -> previous x vector
-            'prev_grad': {}   # row_id -> previous grad vector
+            "s_history": {},  # row_id -> deque of s vectors (delta_x)
+            "y_history": {},  # row_id -> deque of y vectors (delta_grad)
+            "prev_x": {},  # row_id -> previous x vector
+            "prev_grad": {},  # row_id -> previous grad vector
         }
 
     @torch.no_grad()
@@ -112,9 +136,9 @@ class BlockwiseLBFGS(Optimizer):
                 loss = closure()
         assert len(self.param_groups) == 1
         group = self.param_groups[0]
-        param = group['params'][0]
-        lr = group['lr']
-        step_size_limit = group['step_size_limit']
+        param = group["params"][0]
+        lr = group["lr"]
+        step_size_limit = group["step_size_limit"]
         weight = param  # n × d
         grad = param.grad  # same shape
 
@@ -126,7 +150,7 @@ class BlockwiseLBFGS(Optimizer):
         dtype = weight.dtype
 
         # Get indices of rows that were used (i.e., got non-zero grad)
-        if hasattr(param, 'grad_indices'):  # optional if you're tracking which indices were used
+        if hasattr(param, "grad_indices"):  # optional if you're tracking which indices were used
             indices = param.grad_indices
         else:
             indices = grad._indices()[0] if grad.is_sparse else torch.nonzero(grad.norm(dim=1), as_tuple=True)[0]
@@ -137,14 +161,14 @@ class BlockwiseLBFGS(Optimizer):
             g_i = grad[i]
 
             # History storage
-            s_hist = self.state['s_history'].setdefault(i, deque(maxlen=self.history_size))
-            y_hist = self.state['y_history'].setdefault(i, deque(maxlen=self.history_size))
-            x_prev = self.state['prev_x'].get(i, None)
-            g_prev = self.state['prev_grad'].get(i, None)
+            s_hist = self.state["s_history"].setdefault(i, deque(maxlen=self.history_size))
+            y_hist = self.state["y_history"].setdefault(i, deque(maxlen=self.history_size))
+            x_prev = self.state["prev_x"].get(i, None)
+            g_prev = self.state["prev_grad"].get(i, None)
 
             # Save current for next time
-            self.state['prev_x'][i] = x_i.detach().clone()
-            self.state['prev_grad'][i] = g_i.detach().clone()
+            self.state["prev_x"][i] = x_i.detach().clone()
+            self.state["prev_grad"][i] = g_i.detach().clone()
 
             if x_prev is not None and g_prev is not None:
                 s = x_i.detach() - x_prev
@@ -180,8 +204,8 @@ class BlockwiseLBFGS(Optimizer):
                 r = r + s * (alpha - beta)
 
             step = lr * r
-            if(step_size_limit is not None):
-                step = torch.clamp(step,-step_size_limit,step_size_limit)
+            if step_size_limit is not None:
+                step = torch.clamp(step, -step_size_limit, step_size_limit)
             # Apply update
             weight[i].data -= step
         return loss

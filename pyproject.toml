@@ -30,8 +30,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "comet_ml==3.48.1",
-    "dadapy==0.3.2"   
+    "dadapy==0.3.2"
 ]
 
 [tool.setuptools]
 packages = ["cov3d"]
+
+
+[tool.black]
+line-length = 120
+
+[tool.isort]
+profile = "black"
+line_length = 120
