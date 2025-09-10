@@ -6,7 +6,7 @@ import subprocess
 import argparse
 
 
-def relion_refine(star, ref, output_dir = None, sym = None):
+def relion_refine(star, ref, output_dir = None, custom_args = None):
     """
     Calls relion_refine and extracts the final star and mrc file after refinement.
     """
@@ -42,9 +42,8 @@ def relion_refine(star, ref, output_dir = None, sym = None):
             ' --oversampling 1 --healpix_order 2 --auto_local_healpix_order 4 --offset_range 5 --offset_step 2' \
             ' --low_resol_join_halves 40 --norm --scale  --j 1 --gpu ""'
         
-        if sym is not None:
-            refine_cmd += f' --sym {sym}'
-            
+        if custom_args is not None:
+            refine_cmd += ' ' + ' '.join(custom_args)
 
 
         refine_cmd = f'cd {star_dir} && {refine_cmd}'
@@ -70,10 +69,9 @@ if __name__ == "__main__":
     parser.add_argument("star", help="Input STAR file")
     parser.add_argument("ref", help="Reference MRC file")
     parser.add_argument("--output_dir", default=None, help="Directory to save output files")
-    parser.add_argument("--sym", default=None, help="Symmetry to use in refinement (e.g., C1, C2, D2, etc.)")
-    args = parser.parse_args()
+    args,custom_args = parser.parse_known_args()
 
-    relion_refine(args.star, args.ref, args.output_dir, args.sym)
+    relion_refine(args.star, args.ref, args.output_dir, custom_args)
    
 
 
