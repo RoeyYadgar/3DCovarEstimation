@@ -13,6 +13,12 @@ repos:
       - id: isort
         language_version: python3
 
+  # Lint with flake8
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+
   # Prevent committing large files
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
@@ -31,3 +37,10 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+
+  # Format docstrings with docformatter
+  - repo: https://github.com/PyCQA/docformatter
+    rev: v1.7.7
+    hooks:
+      - id: docformatter
+        args: ["--in-place", "--wrap-summaries", "100", "--wrap-descriptions", "100"]

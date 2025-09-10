@@ -20,7 +20,6 @@ from cov3d.projection_funcs import (
     get_mask_threshold,
     im_backward,
     preprocess_image_batch,
-    vol_forward,
 )
 from cov3d.source import ImageSource
 from cov3d.utils import get_torch_device, set_module_grad, soft_edged_kernel
@@ -139,7 +138,7 @@ class CovarDataset(Dataset):
             idx = torch.arange(min(batch_size, len(self)), device=device)
             nufft_plan.setpts(pose_module(idx)[0])
             mask_threshold = get_mask_threshold(mask, nufft_plan) if mask is not None else 0
-            pbar = tqdm(total=np.ceil(len(self) / batch_size), desc=f"Applying preprocessing on dataset images")
+            pbar = tqdm(total=np.ceil(len(self) / batch_size), desc="Applying preprocessing on dataset images")
             for i in range(0, len(self), batch_size):
                 idx = torch.arange(i, min(i + batch_size, len(self)))
                 images, _, filters, _ = self[idx]
@@ -192,9 +191,8 @@ class CovarDataset(Dataset):
         return ds1, ds2, permutation
 
     def get_total_gain(self, batch_size=1024, device=None):
-        """
-        Returns a 3D tensor represntaing the total gain of each frequency, observed by the dataset = diag(sum(P_i^T P_i))
-        """
+        """Returns a 3D tensor represntaing the total gain of each frequency observed by the dataset
+        = diag(sum(P_i^T P_i))"""
         L = self.resolution
         upsample_factor = 1
         nufft_plan = NufftPlanDiscretized(
@@ -221,9 +219,8 @@ class CovarDataset(Dataset):
         return gain_tensor
 
     def get_total_covar_gain(self, batch_size=None, device=None):
-        """
-        Returns a 2D tensor represnting the total gain of each frequency pair in the covariance least squares problem.
-        """
+        """Returns a 2D tensor represnting the total gain of each frequency pair in the covariance
+        least squares problem."""
 
         L = self.resolution
         upsample_factor = 1
@@ -314,7 +311,9 @@ class CovarDataset(Dataset):
 
     def _get_images_for_signal_var(self, start_idx, batch_size):
         """Helper method to get images for signal variance estimation.
-        Subclasses can override this to provide different image access patterns."""
+
+        Subclasses can override this to provide different image access patterns.
+        """
         end_idx = min(start_idx + batch_size, len(self))
         return self.images[start_idx:end_idx]
 
@@ -334,12 +333,14 @@ class CovarDataset(Dataset):
 
     def _get_filters_for_filters_gain(self, start_idx, batch_size):
         """Helper method to get filters for filter gain estimation.
-        Subclasses can override this to provide different CTF access patterns."""
+
+        Subclasses can override this to provide different CTF access patterns.
+        """
         end_idx = min(start_idx + batch_size, len(self))
         return self.filters[start_idx:end_idx]
 
     def update_pose(self, pose_module: PoseModule, batch_size: int = 1024):
-        """Updates dataset's particle pose information from a given PoseModule
+        """Updates dataset's particle pose information from a given PoseModule.
 
         Args:
             pose_module (PoseModule): PoseModule instance to update from
@@ -382,9 +383,10 @@ class LazyCovarDataset(CovarDataset):
 
     def post_init_setup(self, fourier_domain):
         """Performs additional setup after constructor.
-        It inits a nufft plan that is used internally to compute projections of the mean volume and mask.
-        This must happen after class construction since when we use DDP we pass this object which cannot have
-        tensors already on the GPU.
+
+        It inits a nufft plan that is used internally to compute projections of the mean volume and
+        mask. This must happen after class construction since when we use DDP we pass this object
+        which cannot have tensors already on the GPU.
         """
         # TODO: should better handle case where apply_preprocessing=False, this will use uncessery GPU mem
         rot_vecs = torch.tensor(
@@ -396,9 +398,9 @@ class LazyCovarDataset(CovarDataset):
         self._set_internal_preprocessing_modules(mean_module, pose_module, nufft_plan)
 
     def preprocess_from_modules(self, mean_module, pose_module, nufft_plan=None, batch_size=1024):
-        """Overrides superclass method, since this is a lazy dataset implementation, this does not actually perform any preprocessing
-        but it update the internal objects required preprocessing on demand.
-        """
+        """Overrides superclass method, since this is a lazy dataset implementation, this does not
+        actually perform any preprocessing but it update the internal objects required preprocessing
+        on demand."""
 
         mean_module = copy.deepcopy(mean_module)
         pose_module = copy.deepcopy(pose_module)
@@ -406,7 +408,9 @@ class LazyCovarDataset(CovarDataset):
         if mean_module._in_spatial_domain != self._in_spatial_domain:
             domain_name = lambda val: "Spatial" if val else "Fourier"
             print(
-                f"Warning: Mean module is in {domain_name(mean_module._in_spatial_domain)} domain while dataset is in {domain_name(self._in_spatial_domain)}. Changing domain of the mean mean module to fit dataset"
+                f"Warning: Mean module is in {domain_name(mean_module._in_spatial_domain)} domain "
+                f"while dataset is in {domain_name(self._in_spatial_domain)}. "
+                "Changing domain of the mean module to fit dataset"
             )
 
             mean_module._in_spatial_domain = self._in_spatial_domain
@@ -430,7 +434,8 @@ class LazyCovarDataset(CovarDataset):
         self.src = self.src.to(device)
         mean_module = mean_module.to(device)
 
-        # _mean_volume and _mask are different than the original mean_volume and mask in that they are in fourier domain(if fourier_domain is True)
+        # _mean_volume and _mask are different than the original mean_volume and mask
+        # in that they are in fourier domain(if fourier_domain is True)
         self._mean_volume = mean_module()
         self._mask = mean_module.get_volume_mask()
 
@@ -456,7 +461,8 @@ class LazyCovarDataset(CovarDataset):
     def _get_images(
         self, idx: Iterable, filters: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Returns images by idx after pre-processing (if needed) which includes substracting projected mean and masking.
+        """Returns images by idx after pre-processing (if needed) which includes substracting
+        projected mean and masking.
 
         Args:
             idx (Iterable): image index to be returned
@@ -464,7 +470,8 @@ class LazyCovarDataset(CovarDataset):
                 If None are given CTFs are computed by the corresponding image idx.
 
         Returns:
-            Tuple[torch.Tensor,torch.Tensor,torch.Tensor]: Tuple containing images,rotated grid of fourier components and filters
+            Tuple[torch.Tensor,torch.Tensor,torch.Tensor]: Tuple containing images,rotated grid of fourier components
+            and filters.
         """
         device = self._mean_volume.device
         images = self.src.images(idx, fourier=not self._in_spatial_domain)
@@ -559,7 +566,7 @@ class LazyCovarDataset(CovarDataset):
             self._in_spatial_domain = True
 
     def update_pose(self, pose_module: PoseModule, batch_size: int = None):
-        """Updates dataset's particle pose information from a given PoseModule
+        """Updates dataset's particle pose information from a given PoseModule.
 
         Args:
             pose_module (PoseModule): PoseModule instance to update from
@@ -617,7 +624,8 @@ def create_dataloader(dataset, batch_size, idx=None, **dataloader_kwargs):
     num_workers = dataloader_kwargs.pop("num_workers", 0)
     if isinstance(dataset, LazyCovarDataset):
         print(
-            f"Warning: cannot use {num_workers} > 1 num_workers with Lazy dataset. setting num_workers to 0 and prefetch_factor to None"
+            f"Warning: cannot use {num_workers} > 1 num_workers with Lazy dataset. "
+            "Setting num_workers to 0 and prefetch_factor to None"
         )
         dataloader_kwargs["prefetch_factor"] = None
         dataloader_kwargs["persistent_workers"] = False
@@ -631,7 +639,9 @@ def create_dataloader(dataset, batch_size, idx=None, **dataloader_kwargs):
         batch_size=batch_size,
         sampler=sampler,
         num_workers=num_workers,
-        collate_fn=identity_collate,  # Can't use lambda function here since it will be pickled and sent to other processes when using DDP
+        # Can't use lambda function here since it will be pickled
+        # and sent to other processes when using DDP
+        collate_fn=identity_collate,
         **dataloader_kwargs,
     )
 
@@ -645,9 +655,7 @@ def get_dataloader_batch_size(dataloader):
 
 @dataclass
 class GTData:
-    """
-    Class to hold the ground truth data to compute metrics against ground truth.
-    """
+    """Class to hold the ground truth data to compute metrics against ground truth."""
 
     eigenvecs: torch.Tensor = None
     mean: torch.Tensor = None

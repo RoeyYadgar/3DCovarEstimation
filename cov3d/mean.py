@@ -64,7 +64,10 @@ def reconstruct_mean(
             torch.complex(filters, torch.zeros_like(filters)), nufft_plan, filters, fourier_domain=True
         )[0]
 
-    backproj_ctf /= L  # normalization by L is needed because backproj_ctf represnts diag(\sum P^T P) and the projection operator and since we only use P^T we are not taking into account a division by L in vol_forward
+    # normalization by L is needed because backproj_ctf represnts diag(\sum P^T P)
+    # and the projection operator and since we only use P^T we are not taking into
+    # account a division by L in vol_forward
+    backproj_ctf /= L
 
     if not is_dataset_in_fourier:
         dataset.to_spatial_domain()
@@ -111,12 +114,14 @@ def reconstruct_mean_from_halfsets(dataset: CovarDataset, idx=None, **reconstruc
 
 
 def reconstruct_mean_from_halfsets_DDP(dataset: DataLoader, ranks=None, **reconstruction_kwargs):
-    # This function assumes the input dataloader has a distributed sampler. Each node will only pass on its corresponding samples determined by the sampler.
+    # This function assumes the input dataloader has a distributed sampler.
+    # Each node will only pass on its corresponding samples determined by the sampler.
     if ranks is None:
         ranks = [i for i in range(dist.get_world_size())]
 
     if len(ranks) == 1:
-        # In the case there's only one rank, we call the non DDP version using the internal dataset of the dataloader, and idx selected by the sampler
+        # In the case there's only one rank, we call the non DDP version using the internal dataset of the dataloader
+        # and idx selected by the sampler
         return reconstruct_mean_from_halfsets(dataset.dataset, idx=list(iter(dataset.sampler)), **reconstruction_kwargs)
     reconstruction_kwargs["return_lhs_rhs"] = True
 
@@ -130,9 +135,7 @@ def reconstruct_mean_from_halfsets_DDP(dataset: DataLoader, ranks=None, **recons
     group1 = dist.new_group(ranks=ranks[: world_size // 2])
     group2 = dist.new_group(ranks=ranks[world_size // 2 :])
     rank_group = group1 if rank in ranks[: world_size // 2] else group2
-    # print(f'DEVICE : {backproj_im.device} , {torch.norm(backproj_im)}')
     dist.all_reduce(backproj_im, op=dist.ReduceOp.SUM, group=rank_group)
-    # print(f'DEVICE : {backproj_im.device} , {torch.norm(backproj_im)}')
     dist.all_reduce(backproj_ctf, op=dist.ReduceOp.SUM, group=rank_group)
 
     mean_volume = backproj_im / (backproj_ctf + 1e-1)
@@ -142,7 +145,8 @@ def reconstruct_mean_from_halfsets_DDP(dataset: DataLoader, ranks=None, **recons
     half1 = []
     half2 = []
     for i, tensor in enumerate([mean_volume, backproj_im, backproj_ctf]):
-        # TODO: this is inefficent since tensor is the same across each group. This can be done instead by sending an receiveing the tensor for rank pairs from the two groups
+        # TODO: this is inefficent since tensor is the same across each group.
+        # This can be done instead by sending an receiveing the tensor for rank pairs from the two groups
         tensor_list = [torch.zeros_like(tensor) for _ in range(dist.get_world_size())]
         tensor = tensor.contiguous()
         dist.all_gather(tensor_list, tensor)
@@ -153,7 +157,6 @@ def reconstruct_mean_from_halfsets_DDP(dataset: DataLoader, ranks=None, **recons
     dist.destroy_process_group(group1)
     dist.destroy_process_group(group2)
 
-    # print(f'DEVICE : {backproj_im.device} , {torch.norm(half1[1])}, {torch.norm(half2[1])}')
     return regularize_mean_from_halfsets(*half1, *half2, reconstruction_kwargs.get("mask", None))
 
 
@@ -215,8 +218,6 @@ if __name__ == "__main__":
         .squeeze(0)
     )
     rec_vol = reconstruct_mean_from_halfsets(dataset, batch_size=2048, mask=mask)
-
-    from fsc_utils import rpsd, vol_fsc
 
     fsc = vol_fsc(vol.squeeze(0), rec_vol.squeeze(0))
     mean_fsc = fsc[: vol.shape[-1] // 2].mean()

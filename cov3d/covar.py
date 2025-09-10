@@ -92,9 +92,9 @@ class Mean(VolumeBase):
     def get_volume_spatial_domain(self):
         return self.volume * torch.exp(self.log_volume_amplitude)
 
-    def forward(
-        self, dummy_var=None
-    ):  # dummy_var is used to make Covar module compatible with DDP - for some reason DDP requires the forward method to have an argument
+    # dummy_var is used to make Covar module compatible with DDP
+    # for some reason DDP requires the forward method to have an argument
+    def forward(self, dummy_var=None):
         return self.get_volume_spatial_domain() if self._in_spatial_domain else self.get_volume_fourier_domain()
 
     def get_volume_mask(self):
@@ -188,9 +188,9 @@ class Covar(VolumeBase):
         vectors = centered_ifft3(vectors_fourier).real
         return vectors
 
-    def forward(
-        self, dummy_var=None
-    ):  # dummy_var is used to make Covar module compatible with DDP - for some reason DDP requires the forward method to have an argument
+    # dummy_var is used to make Covar module compatible with DDP
+    # for some reason DDP requires the forward method to have an argument
+    def forward(self, dummy_var=None):
         return self.get_vectors()
 
     @property
@@ -228,7 +228,9 @@ class Covar(VolumeBase):
 
 class CovarFourier(Covar):
     """Used to optimize the covariance eigenvecs in Fourier domain.
-    Differs from Covar with `fourier_domain=True` by keeping the underlying vectors in Fourier domain directly.
+
+    Differs from Covar with `fourier_domain=True` by keeping the underlying vectors in Fourier
+    domain directly.
     """
 
     def __init__(

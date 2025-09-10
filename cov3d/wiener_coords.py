@@ -30,7 +30,7 @@ def wiener_coords(
     if return_eigen_forward:
         eigen_forward_images = torch.zeros((end_ind - start_ind, rank, L, L), dtype=dtype)
 
-    pbar = tqdm(total=math.ceil(coords.shape[0] / batch_size), desc=f"Computing latent coordinates")
+    pbar = tqdm(total=math.ceil(coords.shape[0] / batch_size), desc="Computing latent coordinates")
     for i in range(0, coords.shape[0], batch_size):
         images, pts_rot, batch_filters, _ = dataset[start_ind + i : min(start_ind + i + batch_size, end_ind)]
         num_ims = images.shape[0]
@@ -100,7 +100,7 @@ def latentMAP(
     if return_coords_covar:
         coords_covar_inv = torch.zeros((end_ind - start_ind, rank, rank), dtype=dtype)
 
-    pbar = tqdm(total=math.ceil(coords.shape[0] / batch_size), desc=f"Computing latent coordinates")
+    pbar = tqdm(total=math.ceil(coords.shape[0] / batch_size), desc="Computing latent coordinates")
     for i in range(0, coords.shape[0], batch_size):
         images, pts_rot, batch_filters, _ = dataset[start_ind + i : min(start_ind + i + batch_size, end_ind)]
         pts_rot = pts_rot.to(device)
@@ -139,7 +139,8 @@ def compute_latentMAP_batch(images, eigen_forward, noise_var, eigenvals_inv=None
 
     projected_images = torch.matmul(eigen_forward.conj(), images) / noise_var  # size (batch, rank,1)
 
-    # There can be numerical instability with inverting the matrix m due to small entries - correct it here by normalizing the matrix by trace(m)/size(m) before inversion
+    # There can be numerical instability with inverting the matrix m due to small entries
+    # correct it here by normalizing the matrix by trace(m)/size(m) before inversion
     mean_m = m.diagonal(dim1=-2, dim2=-1).abs().sum(dim=1) / m.shape[-1]
     latent_coords = torch.linalg.solve(m / mean_m.reshape(-1, 1, 1), projected_images) / mean_m.reshape(
         -1, 1, 1

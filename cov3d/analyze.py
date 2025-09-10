@@ -110,10 +110,10 @@ def create_covar_fsc_figure(fsc):
 
 
 def plot_volume_projections(volumes):
-    """
-    Plot k x 3 projections (mean along axis) for a k x n x n x n tensor of volumes.
-    Positive values shown in red, negative in blue, zero as white.
-    Adds black horizontal bars between volume rows.
+    """Plot k x 3 projections (mean along axis) for a k x n x n x n tensor of volumes.
+
+    Positive values shown in red, negative in blue, zero as white. Adds black horizontal bars
+    between volume rows.
     """
     k = volumes.shape[0]
     fig = plt.figure(figsize=(12, 4 * k + k - 1))  # Add extra height for black bars
@@ -235,7 +235,8 @@ def analyze(
             eigenvols_keys.append("eigenvectors_GT")
         else:
             print(
-                "analyze_with_gt was set to True but coords_GT is not present in result_data - skipping analysis with gt coordinates"
+                "analyze_with_gt was set to True but coords_GT is not present in result_data - "
+                "skipping analysis with gt coordinates"
             )
 
     figure_paths = {}
@@ -292,7 +293,7 @@ def analyze(
         L = eigenvecs_est.shape[-1]
         fsc_result = fsc_result.cpu().numpy()[: L // 2, : L // 2]
         covar_fsc_figure = create_covar_fsc_figure(fsc_result)
-        figure_path = os.path.join(output_dir, analysis_output_dir[0], f"covar_GT_fsc.jpg")
+        figure_path = os.path.join(output_dir, analysis_output_dir[0], "covar_GT_fsc.jpg")
         covar_fsc_figure.savefig(figure_path)
         figure_paths["covar_GT_fsc"] = figure_path
 

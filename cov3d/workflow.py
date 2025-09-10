@@ -1,3 +1,4 @@
+import os
 import pickle
 from os import path
 
@@ -6,13 +7,13 @@ import click
 import numpy as np
 import torch
 
-from cov3d.covar import Covar, CovarFourier, Mean
+from cov3d.covar import Covar, Mean
 from cov3d.covar_distributed import trainParallel
 from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset, GTData, LazyCovarDataset
 from cov3d.poses import PoseModule, offset_mean_error, out_of_plane_rot_error, pose_ASPIRE2cryoDRGN, pose_cryoDRGN2APIRE
 from cov3d.source import ImageSource
-from cov3d.utils import *
+from cov3d.utils import cosineSimilarity, get_torch_device, readVols, relionReconstruct, volsCovarEigenvec
 from cov3d.wiener_coords import latentMAP
 
 
@@ -32,8 +33,8 @@ def determineMaxBatchSize(devices, L, rank, dtype):
 
 
 def reconstructClass(starfile_path, vol_path, overwrite=False):
-    """
-    Uses relion_reconstruct on each class in a star file
+    """Uses relion_reconstruct on each class in a star file.
+
     if vol_path is a directory - generates a file per volume in the directory
     if vol_path is a file - combines all volumes into the file
     """
@@ -54,7 +55,7 @@ def reconstructClass(starfile_path, vol_path, overwrite=False):
                 vol[i] = relionReconstruct(starfile_path, vol_file, classnum=c)
 
         else:
-            return Volume.load(vol_path)
+            return aspire.volume.Volume.load(vol_path)
         vol.save(vol_path, overwrite=True)
         os.remove("vol_tmp.mrc")
         return vol
@@ -123,7 +124,8 @@ def covar_workflow(
     if output_dir is None:
         output_dir = path.join(data_dir, "result_data")
     dataset_path = os.path.join(output_dir, "dataset.pkl")
-    # Only perform this when debug flag is False and there is no dataset pickle file already saved (In order to skip preprocessing when running multiple times for debugging)
+    # Only perform this when debug flag is False and there is no dataset pickle file already saved
+    # (In order to skip preprocessing when running multiple times for debugging)
     if (not debug) or (not os.path.isfile(dataset_path)):
         if not path.isdir(output_dir):
             os.mkdir(output_dir)
@@ -144,9 +146,9 @@ def covar_workflow(
         if invert_data:
             print("inverting dataset sign")
             mean_est = -1 * mean_est
-            mean_est.save(
-                path.join(output_dir, "mean_est.mrc"), overwrite=True
-            )  # Save inverest mean volume. No need to invert the tensor itself as Dataset constructor expects uninverted volume
+            # Save inverted mean volume. No need to invert the tensor itself as
+            # Dataset constructor expects uninverted volume
+            mean_est.save(path.join(output_dir, "mean_est.mrc"), overwrite=True)
 
         dataset_cls = CovarDataset if not lazy else LazyCovarDataset
         dataset = dataset_cls(
@@ -165,7 +167,7 @@ def covar_workflow(
                 class_labels = None
                 if isinstance(class_vols, str):
                     assert os.path.isfile(class_vols), f"class_vols {class_vols} is not a file"
-                    class_vols = Volume.load(class_vols)
+                    class_vols = aspire.volume.Volume.load(class_vols)
                     # TODO: support pickle file with class labels
 
                 elif isinstance(class_vols, list):  # list of mrc files
@@ -201,9 +203,11 @@ def covar_workflow(
 
             if covar_eigenvecs_gt is not None:
                 print(f"Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}")
-                print(
-                    f"Correlation between mean volume and eigenvolumes {cosineSimilarity(torch.tensor(mean_est.asnumpy()),torch.tensor(covar_eigenvecs_gt))}"
+                corr = cosineSimilarity(
+                    torch.tensor(mean_est.asnumpy()),
+                    torch.tensor(covar_eigenvecs_gt),
                 )
+                print(f"Correlation between mean volume and eigenvolumes {corr}")
 
             if gt_pose is not None:
                 gt_pose = pickle.load(open(gt_pose, "rb"))
@@ -230,9 +234,9 @@ def covar_workflow(
             gt_path = os.path.join(output_dir, "gt_data.pkl")
         with open(gt_path, "rb") as fid:
             gt_data = pickle.load(fid)
-        mean_est = Volume.load(path.join(output_dir, "mean_est.mrc"))
+        mean_est = aspire.volume.Volume.load(path.join(output_dir, "mean_est.mrc"))
         mask = load_mask(mask, mean_est.resolution)
-        print(f"Dataset loaded successfuly")
+        print("Dataset loaded successfuly")
 
     covar_precoessing_output = covar_processing(
         dataset,
@@ -276,7 +280,8 @@ def covar_processing(
         "objective_func": "ml",
     }
 
-    # TODO : change upsampling_factor & objective_func into a training argument and pass that into Covar's methods instead of at constructor
+    # TODO : change upsampling_factor & objective_func into a training argument
+    # and pass that into Covar's methods instead of at constructor
     if "fourier_upsampling" in training_kwargs.keys():
         upsampling_factor = training_kwargs["fourier_upsampling"]
         del training_kwargs["fourier_upsampling"]
@@ -302,7 +307,7 @@ def covar_processing(
             upsampling_factor=upsampling_factor,
         )
         pose = PoseModule(dataset.rot_vecs, dataset.offsets, L, use_contrast=optimize_contrast)
-        init_pose = (torch.tensor(Rotation.from_rotvec(dataset.rot_vecs.numpy())), dataset.offsets.clone())
+        init_pose = (torch.tensor(aspire.utils.Rotation.from_rotvec(dataset.rot_vecs.numpy())), dataset.offsets.clone())
     else:
         mean = None
         pose = None
@@ -319,8 +324,8 @@ def covar_processing(
             **default_training_kwargs,
         )
 
-        # When using lazy dataset and DDP, this instance of the dataset is not the same as the one modified in trainParallel
-        # therefore we need to call the setup method directly
+        # When using lazy dataset and DDP, this instance of the dataset is not the same
+        # as the one modified in trainParallel therefore we need to call the setup method directly
         if isinstance(dataset, LazyCovarDataset):
             dataset.post_init_setup(fourier_domain=False)
     else:
@@ -338,9 +343,9 @@ def covar_processing(
 
     if optimize_pose:
         pose = pose.to("cpu")
-        # Print how signficat the refined pose was changed from the given initial pose
+        # Print how significant the refined pose was changed from the given initial pose
         rot_change = out_of_plane_rot_error(
-            torch.tensor(Rotation.from_rotvec(pose.get_rotvecs().numpy())), init_pose[0]
+            torch.tensor(aspire.utils.Rotation.from_rotvec(pose.get_rotvecs().numpy())), init_pose[0]
         )[1]
         print(f"Rotation out-of-plane change: {rot_change} degrees")
         offset_change = offset_mean_error(pose.get_offsets(), init_pose[1])
@@ -352,7 +357,9 @@ def covar_processing(
 
         # Dump refined pose and mean volume
         refined_pose = pose_ASPIRE2cryoDRGN(
-            Rotation.from_rotvec(pose.get_rotvecs().cpu().numpy()).matrices, pose.get_offsets().cpu().numpy(), L
+            aspire.utils.Rotation.from_rotvec(pose.get_rotvecs().cpu().numpy()).matrices,
+            pose.get_offsets().cpu().numpy(),
+            L,
         )
         with open(path.join(output_dir, "refined_poses.pkl"), "wb") as fid:
             pickle.dump(refined_pose, fid)
@@ -360,7 +367,7 @@ def covar_processing(
             with open(path.join(output_dir, "contrast.pkl"), "wb") as fid:
                 pickle.dump(pose.get_contrasts(), fid)
 
-        mean_volume_est = Volume(mean.get_volume_spatial_domain().detach().cpu().numpy())
+        mean_volume_est = aspire.volume.Volume(mean.get_volume_spatial_domain().detach().cpu().numpy())
 
     # Compute wiener coordinates using estimated and ground truth eigenvectors
     eigen_est, eigenval_est = cov.eigenvecs
@@ -419,7 +426,10 @@ def workflow_click_decorator(func):
         "-o",
         "--output-dir",
         type=str,
-        help="path to output directory. when not provided a `result_data` directory will be used with the same path as the provided starfile",
+        help=(
+            "path to output directory. when not provided a `result_data` directory will be used "
+            "with the same path as the provided starfile"
+        ),
     )
     @click.option(
         "-p",
@@ -435,14 +445,20 @@ def workflow_click_decorator(func):
         "--lazy",
         is_flag=True,
         default=False,
-        help="Whether to use lazy dataset. If set, the dataset will not be loaded into (CPU) memory and will be processed when accessed. This is useful for large datasets.",
+        help=(
+            "Whether to use lazy dataset. If set, the dataset will not be loaded into (CPU) memory "
+            "and will be processed when accessed. This is useful for large datasets."
+        ),
     )
     @click.option("-w", "--whiten", type=bool, default=True, help="whether to whiten the images before processing")
     @click.option(
         "--mask",
         type=str,
         default="fuzzy",
-        help="Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume file/ Defaults to 'fuzzy'",
+        help=(
+            "Type of mask to be used on the dataset. Can be either 'fuzzy' or path to a volume "
+            "file/ Defaults to 'fuzzy'"
+        ),
     )
     @click.option("--optimize-pose", is_flag=True, default=False, help="Whether to optimize over image pose")
     @click.option(
@@ -455,7 +471,10 @@ def workflow_click_decorator(func):
         "--class-vols",
         type=str,
         default=None,
-        help="Path to GT volumes directory. Used if provided to log eigen vectors error metrics while training.Additionally, GT embedding is computed and logged",
+        help=(
+            "Path to GT volumes directory. Used if provided to log eigen vectors error metrics while training. "
+            "Additionally, GT embedding is computed and logged"
+        ),
     )
     @click.option(
         "--gt-pose",
@@ -482,7 +501,10 @@ def workflow_click_decorator(func):
     @click.option(
         "--fourier-upsampling",
         type=int,
-        help="Upsaming factor in fourier domain for Discretisation of NUFFT. Only used when --nufft-disc is provided (default 2)",
+        help=(
+            "Upsaming factor in fourier domain for Discretisation of NUFFT. "
+            "Only used when --nufft-disc is provided (default 2)"
+        ),
     )
     @click.option("--num-reg-update-iters", type=int, help="Number of iterations to update regularization")
     @click.option("--use-halfsets", type=bool, help="Whether to split data into halfsets for regularization update")

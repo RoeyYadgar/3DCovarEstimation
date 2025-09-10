@@ -12,7 +12,7 @@ from matplotlib import pyplot as plt
 
 from cov3d.analyze import analyze
 from cov3d.dataset import CovarDataset, GTData
-from cov3d.nufft_plan import NufftPlan, NufftPlanDiscretized
+from cov3d.nufft_plan import NufftPlan
 from cov3d.poses import pose_ASPIRE2cryoDRGN
 from cov3d.projection_funcs import vol_forward
 from cov3d.utils import get_torch_device, readVols, volsCovarEigenvec
@@ -254,7 +254,7 @@ def simulateExp(folder_name=None, L=64, r=5, no_ctf=False, save_source=False, vo
             with open(os.path.join(dir_name, "state_centers.pkl"), "wb") as f:
                 pickle.dump(state_centers, f)
 
-            analysis_figures = analyze(
+            analyze(
                 os.path.join(dir_name, "recorded_data.pkl"),
                 output_dir=dir_name,
                 analyze_with_gt=True,
@@ -280,6 +280,7 @@ def simulate_noisy_rots(
     os.makedirs(folder_name, exist_ok=True)
 
     if vols is None:
+        pixel_size = 3 * 128 / L
         voxels = LegacyVolume(L=int(L * 0.7), C=r + 1, K=64, dtype=np.float32, pixel_size=pixel_size).generate()
         padded_voxels = np.zeros((r + 1, L, L, L), dtype=np.float32)
         pad_width = (L - voxels.shape[1]) // 2
@@ -356,5 +357,5 @@ if __name__ == "__main__":
     )
     # [f'data/scratch_data/igg_1d/vols/128_org/{i:03}.mrc' for i in range(0,100,10)]
     # simulate_noisy_rots('data/pose_opt_exp_offsets_snr0.1',snr=0.1,rots_std = 0.1,offsets_std=0.008,r=5,
-    #                    vols = [f'data/scratch_data/igg_1d/vols/128_org/{int(i):03}.mrc' for i in np.linspace(0,100,6,endpoint=False)],
-    #                    mask='data/scratch_data/igg_1d/init_mask/mask.mrc')
+    #   vols = [f'data/scratch_data/igg_1d/vols/128_org/{int(i):03}.mrc' for i in np.linspace(0,100,6,endpoint=False)],
+    #   mask='data/scratch_data/igg_1d/init_mask/mask.mrc')

@@ -131,17 +131,14 @@ class AnalyzeViewer:
         # Get the current visible coordinates
         if fig_type == "umap":
             coords = self.umap_coords
-            cluster_coords = self.umap_cluster_coords
         else:
             i, j = map(int, fig_type.split("_")[1:])
             coords = self.coords[:, [i, j]]
-            cluster_coords = self.cluster_coords[:, [i, j]] if self.cluster_coords is not None else None
 
         # Find the closest point in coords to the click
         click_point = np.array([event.xdata, event.ydata])
         dists = np.linalg.norm(coords - click_point, axis=1)
         idx = np.argmin(dists)
-        closest_point = coords[idx]
 
         # vstack to umap_cluster_coords or cluster_coords
         if self.umap_cluster_coords is None:
@@ -203,7 +200,7 @@ def main():
             return
     with open(path, "rb") as f:
         data = pickle.load(f)
-    viewer = AnalyzeViewer(root, data, dir=os.path.split(path)[0])
+    AnalyzeViewer(root, data, dir=os.path.split(path)[0])
     root.protocol("WM_DELETE_WINDOW", root.quit)
     root.mainloop()
 

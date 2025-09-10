@@ -1,10 +1,14 @@
+from collections import deque
+
 import torch
+from torch.optim.optimizer import Optimizer
 
 
 class BlockNewtonOptimizer(torch.optim.Optimizer):
-    """
-    Implements a Newton optimizer with backtracking line search.
-    Assumes hessian is block diagonal with respect to the parameters and batch (first dim) of tensor.
+    """Implements a Newton optimizer with backtracking line search.
+
+    Assumes hessian is block diagonal with respect to the parameters and batch (first dim) of
+    tensor.
     """
 
     def __init__(
@@ -99,12 +103,6 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
         return loss
 
 
-from collections import deque
-
-import torch
-from torch.optim.optimizer import Optimizer
-
-
 class BlockwiseLBFGS(Optimizer):
     def __init__(self, params, lr=1.0, history_size=10, step_size_limit=None):
         if lr <= 0:
@@ -144,10 +142,6 @@ class BlockwiseLBFGS(Optimizer):
 
         if grad is None:
             return loss
-
-        n, d = weight.shape
-        device = weight.device
-        dtype = weight.dtype
 
         # Get indices of rows that were used (i.e., got non-zero grad)
         if hasattr(param, "grad_indices"):  # optional if you're tracking which indices were used

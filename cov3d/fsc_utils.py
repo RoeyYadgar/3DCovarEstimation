@@ -1,7 +1,7 @@
 import torch
 from aspire.utils import grid_2d, grid_3d
 
-from cov3d.projection_funcs import centered_fft2, centered_fft3
+from cov3d.projection_funcs import centered_fft3
 
 
 class FourierShell:
@@ -172,7 +172,8 @@ def covar_fsc(eigenvecs1, eigenvecs2):
     rpsd1 = covar_correlate(eigenvecs1_fft, eigenvecs1_fft).real
     rpsd2 = covar_correlate(eigenvecs2_fft, eigenvecs2_fft).real
 
-    # Float32 precision might not have the dynamic range to compute the product (since they can be very large). So we normalize the rpsd values by the zero frequency component and correct the normalization at the end
+    # Float32 precision might not have the dynamic range to compute the product (since they can be very large)
+    # So we normalize the rpsd values by the zero frequency component and correct the normalization at the end
     bottom = (
         torch.sqrt((rpsd1 / rpsd1[0, 0]) * (rpsd2 / rpsd2[0, 0])) * torch.sqrt(rpsd1[0, 0]) * torch.sqrt(rpsd2[0, 0])
     )

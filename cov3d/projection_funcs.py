@@ -84,9 +84,7 @@ def preprocess_image_batch(
     softening_kernel_fourier=None,
     fourier_domain=False,
 ):
-    """
-    Shifts images, subtracts projected mean volume and applies masking on a batch of images
-    """
+    """Shifts images, subtracts projected mean volume and applies masking on a batch of images."""
     pts_rot, phase_shift = pose
     nufft_plan.setpts(pts_rot)
 
@@ -154,7 +152,7 @@ def highpass_volume(volume, cutoff, highpass_shape="rect"):
 
 def vol_forward(volume, plan, filters=None, fourier_domain=False):
     L = plan.sz[-1]
-    if type(plan) == list or type(plan) == tuple:  # When mupltiple plans are given loop through them
+    if isinstance(plan, (list, tuple)):  # When multiple plans are given loop through them
         volume_forward = torch.zeros((len(plan), volume.shape[0], L, L), dtype=volume.dtype, device=volume.device)
         for i in range(len(plan)):
             volume_forward[i] = (

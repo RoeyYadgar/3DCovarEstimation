@@ -9,9 +9,8 @@ import pandas as pd
 import torch
 from aspire.basis import FFBBasis3D
 from aspire.reconstruction import MeanEstimator
-from aspire.source.image import ArrayImageSource
 from aspire.storage.starfile import StarFile
-from aspire.utils import Rotation, coor_trans, grid_2d, grid_3d
+from aspire.utils import coor_trans, grid_2d, grid_3d
 from aspire.volume import Volume
 from numpy import random
 from sklearn.decomposition import PCA
@@ -65,7 +64,7 @@ def volsCovarEigenvec(vols, eigenval_threshold=1e-3, randomized_alg=False, max_e
         volsSpan = volsSpan[:eigenval_num, :] * volsSTD[:eigenval_num, np.newaxis]
     else:
         # TODO : add weights to randomized alg
-        if max_eigennum == None:
+        if max_eigennum is None:
             max_eigennum = vols_num
         pca = PCA(n_components=max_eigennum, svd_solver="randomized")
         fitvols = pca.fit(vols0mean)
@@ -126,7 +125,8 @@ def frobeniusNorm(vecs):
 
 
 def frobeniusNormDiff(vec1, vec2):
-    # returns the frobenius norm of the diffrence of two matrices given by their eigenvectors (multiplied by the corresponding sqrt(eigenval))
+    # returns the frobenius norm of the diffrence of two matrices given by their
+    # eigenvectors (multiplied by the corresponding sqrt(eigenval))
 
     vec1 = asnumpy(vec1).reshape((vec1.shape[0], -1))
     vec2 = asnumpy(vec2).reshape((vec2.shape[0], -1))
@@ -160,7 +160,7 @@ def randomized_svd(A_mv, dim, rank, num_iters=10):
 
 
 def asnumpy(data):
-    if type(data) == aspire.volume.volume.Volume or type(data) == aspire.image.image.Image:
+    if isinstance(data, (aspire.volume.volume.Volume, aspire.image.image.Image)):
         return data.asnumpy()
 
     return data
@@ -248,7 +248,7 @@ def mrcs_replace_starfile(star_input, star_output, mrcs_name):
 
 
 def estimateMean(source, basis=None):
-    if basis == None:
+    if basis is None:
         L = source.L
         basis = FFBBasis3D((L, L, L))
     mean_estimator = MeanEstimator(source, basis=basis)
@@ -258,15 +258,15 @@ def estimateMean(source, basis=None):
 
 
 def vol_fsc(vol1, vol2):
-    if type(vol1) != type(vol2):
+    if not isinstance(vol2, type(vol1)):
         raise Exception(
             f"Volumes of the same type expected vol1 is of type {type(vol1)} while vol2 is of type {type(vol2)}"
         )
 
-    if type(vol1) == aspire.volume.Volume:
+    if isinstance(vol1, aspire.volume.volume.Volume):
         return vol1.fsc(vol2)
 
-    elif type(vol1) == torch.Tensor:
+    elif isinstance(vol1, torch.Tensor):
         # TODO : implement faster FSC for torch tensors
         vol1 = Volume(vol1.cpu().numpy())
         vol2 = Volume(vol2.cpu().numpy())
@@ -425,9 +425,7 @@ def saveVol(vols: torch.tensor, path: str):
 
 
 def create_mask_from_vols(vols: Volume, threshold: float):
-    """
-    Creates a simple binary mask from volumes
-    """
+    """Creates a simple binary mask from volumes."""
 
     return Volume(vols.asnumpy().mean(axis=0) > threshold)
 

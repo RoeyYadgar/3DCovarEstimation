@@ -7,7 +7,6 @@ from torch import distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
-from cov3d.covar import Covar
 from cov3d.covar_sgd import CovarPoseTrainer, CovarTrainer, compute_updated_fourier_reg
 from cov3d.dataset import create_dataloader
 from cov3d.utils import get_cpu_count
@@ -106,7 +105,8 @@ def ddp_train(
             eigenvecs = eigenvecs[0] * (eigenvecs[1] ** 0.5).reshape(-1, 1, 1, 1)
             eigenvecs_list = [torch.zeros_like(eigenvecs) for _ in range(world_size)]
             dist.all_gather(tensor_list=eigenvecs_list, tensor=eigenvecs)
-            # eigenvecs_list will have the same eigenvecs in each distributed group (i.e. [eigenvecs1,...,eigenvecs1,eigenvesc2,...,eigenvecs2])
+            # eigenvecs_list will have the same eigenvecs in each distributed group.
+            # That is, [eigenvecs1, ..., eigenvecs1, eigenvecs2, ..., eigenvecs2]
             eigenvecs1 = eigenvecs_list[0]
             eigenvecs2 = eigenvecs_list[-1]
             new_fourier_reg_term, covariance_fsc = compute_updated_fourier_reg(

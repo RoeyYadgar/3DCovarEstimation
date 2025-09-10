@@ -51,7 +51,7 @@ class CovarTrainer:
             if (not isinstance(train_data, torch.utils.data.DataLoader))
             else get_dataloader_batch_size(train_data)
         )
-        self.isDDP = type(self._covar) == torch.nn.parallel.distributed.DistributedDataParallel
+        self.isDDP = isinstance(self._covar, torch.nn.parallel.distributed.DistributedDataParallel)
         self.save_path = save_path
         self.logTraining = self.device.index == 0 or self.device == torch.device(
             "cpu"
@@ -135,7 +135,8 @@ class CovarTrainer:
             self.fourier_reg,
         )  # Dummy_var is passed since for some reaosn DDP requires forward method to have an argument
         cost_val.backward()
-        # torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1e-3 * self.covar.grad_scale_factor) #TODO : check for effect of gradient clipping
+        # torch.nn.utils.clip_grad_value_(self.covar.parameters(), 1e-3 * self.covar.grad_scale_factor)
+        # #TODO : check for effect of gradient clipping
         self.optimizer.step()
 
         if self.use_orthogonal_projection:
@@ -151,7 +152,7 @@ class CovarTrainer:
         return images, pts_rot, filters
 
     def run_epoch(self, epoch):
-        # if(self.isDDP): #TODO: this shuffles the data in DDP which is not wanted when using halfsets regularization scheme
+        # if(self.isDDP):
         # self.train_data.sampler.set_epoch(epoch)
         if self.logTraining:
             pbar = tqdm(total=self.dataloader_len, desc=f"Epoch {epoch} , ", position=0, leave=True)
@@ -210,9 +211,10 @@ class CovarTrainer:
         rank = self.covar.rank
         dtype = self.covar.dtype
         vol_shape = (self.covar.resolution,) * 3
-        self.optimize_in_fourier_domain = (
-            nufft_disc != "nufft"
-        )  # When disciraztion of NUFFT is used we optimize the objective function if fourier domain since the discritzation receives as input the volume in its fourirer domain.
+
+        # When NUFFT discretization is used - we optimize in Fourier domain
+        self.optimize_in_fourier_domain = nufft_disc != "nufft"
+
         self.objective_func = objective_func
         if self.optimize_in_fourier_domain:
             self.nufft_plans = NufftPlanDiscretized(
@@ -226,9 +228,10 @@ class CovarTrainer:
             self.cost_func = cost if objective_func == "ls" else cost_maximum_liklihood
         self.covar.init_grid_correction(nufft_disc)
         print(f"Actual learning rate {lr}")
-        self.reg_scale = reg / (
-            len(self.dataset)
-        )  # The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term. This ensures the regularization term scales in the appropirate manner
+
+        # The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term.
+        # This ensures the regularization term scales in the appropriate manner
+        self.reg_scale = reg / (len(self.dataset))
         self.epoch_index = 0
 
     def restart_optimizer(self):
@@ -433,7 +436,8 @@ class CovarPoseTrainer(CovarTrainer):
     def _ddp_sync_pose_module(self):
         if not self.isDDP:
             return
-        # For some reason DDP does support sparse gradients. Hence we do not wrap the pose module in DDP and have to sync it manually
+        # For some reason DDP does support sparse gradients.
+        # Hence we do not wrap the pose module in DDP and have to sync it manually
 
         updated_idx_list = [torch.zeros_like(self._updated_idx) for _ in range(torch.distributed.get_world_size())]
         torch.distributed.all_gather(updated_idx_list, self._updated_idx)
@@ -453,7 +457,9 @@ class CovarPoseTrainer(CovarTrainer):
 
         idx_to_update = torch.zeros_like(self._updated_idx)
         for i in range(len(updated_idx_list)):
-            # If idx_to_update is already set to 1, we don't need to update it again (this means that a previous node has already updated this index (can happen when len(dataset) % world_size != 0))
+            # If idx_to_update is already set to 1, we don't need to update it again
+            # this means that a previous node has already updated this index
+            # (can happen when len(dataset) % world_size != 0)
             updated_idx_list[i][idx_to_update > 0] = 0
 
             idx_to_update[updated_idx_list[i] > 0] = 1
@@ -503,7 +509,9 @@ class CovarPoseTrainer(CovarTrainer):
                 shifted_images = images * self.pose(idx, ds_resolution=self.downsample_size)[1]
 
                 # TODO: use eigen info in predicted images - currently does not work well
-                # latent_coords,_,_ = compute_latentMAP_batch(shifted_images-mean_forward,projected_eigenvecs,self.dataset.noise_var)
+                # latent_coords, _, _ = compute_latentMAP_batch(
+                #     shifted_images - mean_forward, projected_eigenvecs, self.dataset.noise_var
+                # )
                 # predicted_images = mean_forward + torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1),dim=1)
                 predicted_images = mean_forward
 
@@ -639,10 +647,13 @@ class CovarPoseTrainer(CovarTrainer):
 
             if self.mean_est_method == "Reconstruction":
                 # update datatset pts_rot and update the mean volume estimate
-                batch_size = (
-                    self.batch_size * 16
-                )  # We can use larger batch size since this computation is very light weight
-                # TODO: this is in efficient when DDP is used. This is because in that case each node only uses a fraction of the dataset and we don't have to update all indeces of pts_rot
+
+                # We can use larger batch size since this computation is very light weight
+                batch_size = self.batch_size * 16
+
+                # TODO: this is in efficient when DDP is used.
+                # This is because in that case each node only uses a fraction of the dataset
+                # and we don't have to update all indeces of pts_rot.
                 self.dataset.update_pose(self.get_pose_module(), batch_size=batch_size)
 
                 if not self.isDDP:
@@ -765,7 +776,11 @@ class CovarPoseTrainer(CovarTrainer):
         pbar_description = super()._get_pbar_desc(epoch)
         if self.gt_data is not None:
             if self.gt_data.rotations is not None:
-                pbar_description += f" , mean angle dist out-of-plane: {self.training_log['rot_angle_dist'][-1]:.2e} , in-plane: {self.training_log['in_plane_rot_angle_dist'][-1]:.2e}"
+                pbar_description += (
+                    f" , mean angle dist out-of-plane: "
+                    f"{self.training_log['rot_angle_dist'][-1]:.2e} , "
+                    f"in-plane: {self.training_log['in_plane_rot_angle_dist'][-1]:.2e}"
+                )
             if self.gt_data.offsets is not None:
                 pbar_description += f" , offset mean : {self.training_log['offsets_mean_dist'][-1]:.2e}"
             if self.gt_data.contrasts is not None and self.get_pose_module().use_contrast:
@@ -783,7 +798,6 @@ class CovarPoseTrainer(CovarTrainer):
 
 
 def update_fourier_reg(trainer1, trainer2):
-    rank = trainer1.covar.rank
     L = trainer1.covar.resolution
     filter_gain = (trainer1.filter_gain + trainer2.filter_gain) / 2
     current_fourier_reg = trainer1.fourier_reg
@@ -835,7 +849,8 @@ def compute_updated_fourier_reg(
     new_fourier_reg = 1 / ((covariance_fsc / (1 - covariance_fsc)) * filter_gain_shell_correction)
     new_fourier_reg[new_fourier_reg < 0] = 0
 
-    # This is a heuristic approach to get a rank 1 approx of the 'regulariztaion matrix' which allows much faster computation of the regularizaiton term
+    # This is a heuristic approach to get a rank 1 approx of the 'regulariztaion matrix'
+    # which allows much faster computation of the regularizaiton term
     new_fourier_reg = expand_fourier_shell(new_fourier_reg.diag().sqrt().unsqueeze(0), L, 3)
 
     if not optimize_in_fourier_domain:
@@ -1091,14 +1106,16 @@ def raw_cost_posterior_maximum_liklihood_fourier_domain(
 
 
 def frobeniusNorm(vecs):
-    # Returns the frobenius norm of a symmetric matrix given by its eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
+    # Returns the frobenius norm of a symmetric matrix given by its eigenvectors
+    # (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
     vecs = vecs.reshape(vecs.shape[0], -1)
     vecs_inn_prod = torch.matmul(vecs, vecs.transpose(0, 1).conj())
     return torch.sqrt(torch.sum(torch.pow(vecs_inn_prod, 2)))
 
 
 def frobeniusNormDiff(vec1, vec2):
-    # returns the frobenius norm of the diffrence of two symmetric matrices given by their eigenvectors (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
+    # returns the frobenius norm of the diffrence of two symmetric matrices given by their eigenvectors
+    # (multiplied by the corresponding sqrt(eigenval)) (assuming row vectors as input)
     vec1 = vec1.reshape(vec1.shape[0], -1)
     vec2 = vec2.reshape(vec2.shape[0], -1)
 
@@ -1160,7 +1177,8 @@ def trainCovar(
             pin_memory_device=str(device),
         )
         # from torchtnt.utils.data.data_prefetcher import CudaDataPrefetcher
-        # dataloader = CudaDataPrefetcher(dataloader,device=device,num_prefetch_batches=4) #TODO : should this be used here? doesn't seem to improve perforamnce
+        # dataloader = CudaDataPrefetcher(dataloader,device=device,num_prefetch_batches=4)
+        # #TODO : should this be used here? doesn't seem to improve perforamnce
         if not optimize_pose:
             trainer = CovarTrainer(covar_model, dataloader, device, savepath, gt_data=gt_data)
         else:
@@ -1178,9 +1196,9 @@ def trainCovar(
 
     else:
         covar_model_copy = copy.deepcopy(covar_model)
-        with (
-            torch.no_grad()
-        ):  # Reinitalize the copied model since having the same initalization will produce unwanted correlation even after training
+        # Reinitalize the copied model since having the same initalization
+        # will lead to unwanted correlation even after training.
+        with torch.no_grad():
             covar_model_copy.set_vectors(covar_model_copy.init_random_vectors(covar_model.rank))
         half1, half2, permutation = dataset.half_split()
 
@@ -1243,7 +1261,7 @@ def trainCovar(
 
         torch.cuda.empty_cache()
 
-        # Train on full dataset #TODO: reuse trainer1 to avoid having to set up the training again, this still requries to transform the dataset to fourier domain if needed
+        # Train on full dataset
         full_dataloader = create_dataloader(
             dataset,
             batch_size=batch_size,

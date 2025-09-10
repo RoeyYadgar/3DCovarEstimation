@@ -9,9 +9,10 @@ from finufft import Plan
 
 
 def get_half_fourier_grid(points, dim):
-    """
-    Converts a 2d rotated grid of points in fourier space into half a grid that represents only positive frequencies in the first dimension.
-    This is used to reduce number of points to compute in  NUFFT since real signals have conjugate symmetry in fourier space
+    """Converts a 2d rotated grid of points in fourier space into half a grid that represents only
+    positive frequencies in the first dimension. This is used to reduce number of points to compute
+    in  NUFFT since real signals have conjugate symmetry in fourier space.
+
     Args:
         points (torch.Tensor) : Batch of 2d rotated grids of size (a,...,b,L,L,c,...,d)
         dim (int) : Two tuple of dimensions of the actual grid (For example for shape (a,b,c,L,L) dim=(3,4))
@@ -21,9 +22,9 @@ def get_half_fourier_grid(points, dim):
     L = points.shape[dim[0]]
     indices = [slice(None)] * points.ndim
     indices[dim[0]] = slice(L // 2, L)
-    if (
-        L % 2 == 0
-    ):  # In even image size fourier points in index 0 corrspond to the 'most negative' frequency which doesnt have a positive counterpart
+    # In even image size fourier points in index 0 corrspond to the 'most negative' frequency
+    # which doesnt have a positive counterpart
+    if L % 2 == 0:
         indices[dim[1]] = slice(1, L)
     return points[tuple(indices)]
 
@@ -38,16 +39,16 @@ class BaseNufftPlan(ABC):
 
 
 class NufftPlanDiscretized(BaseNufftPlan):
-    """
-    Discretized version of the NUFFT operator (specifficaly for the usage of the projection operator and not general case of NUFFT).
+    """Discretized version of the NUFFT operator (specifficaly for the usage of the projection
+    operator and not general case of NUFFT).
+
     Uses pytorch's `grid_sample` function to interpolate from the fourier tranform of the given volume.
     Assumes input volume is already given in frequency domain.
     """
 
     def __init__(self, sz, upsample_factor=1, mode="bilinear", use_half_grid=False):
-        assert (
-            use_half_grid == False
-        ), "half_grid not supported with NufftPlanDiscretized"  # TODO: fix issue with use_half_grid and cropped nufft points
+        # TODO: fix issue with use_half_grid and cropped nufft points
+        assert not use_half_grid, "half_grid not supported with NufftPlanDiscretized"
         self.sz = sz
         self.upsample_factor = upsample_factor
         self.mode = mode
@@ -68,8 +69,9 @@ class NufftPlanDiscretized(BaseNufftPlan):
         self.points = get_half_fourier_grid(self.points, (2, 3)) if self.use_half_grid else self.points
 
         vol_L = L * self.upsample_factor
-        # For even image sizes fourier points are [-L/2, ... , L/2-1]/(L/2)*pi while torch grid_sample treats grid as [-1 , ... , 1]
-        # For add image sizes fourier points are [-(L-1)/2,...,(L-1)/2]/(L/2)*pi
+        # For even image sizes fourier points are [-L/2, ... , L/2-1]/(L/2)*pi
+        # while torch grid_sample treats grid as [-1 , ... , 1]
+        # For odd image sizes fourier points are [-(L-1)/2,...,(L-1)/2]/(L/2)*pi
         self.points *= (vol_L / (vol_L - 1)) / torch.pi
         if vol_L % 2 == 0:
             self.points = self.points + 1 / (vol_L - 1)
@@ -77,11 +79,11 @@ class NufftPlanDiscretized(BaseNufftPlan):
         self.batch_points = self.points.shape[1]
 
     def execute_forward(self, volume):
-        """
-        Assumes volume is given in fourier domain with shape (N,L,L,L) either as complex tensor or as tuple pair of real and imag tensors
-        """
+        """Assumes volume is given in fourier domain with shape (N,L,L,L) either as complex tensor
+        or as tuple pair of real and imag tensors."""
         L = self.points_L
-        # For some reason grid_sample does not support complex data. Instead the real and imaginary parts are splitted into different 'channels'
+        # For some reason grid_sample does not support complex data. Instead the real andimaginary
+        # parts are splitted into different 'channels'
         if isinstance(volume, tuple):
             volume_real = volume[0].unsqueeze(1)
             volume_imag = volume[1].unsqueeze(1)
@@ -95,7 +97,8 @@ class NufftPlanDiscretized(BaseNufftPlan):
         volume_real_imag_split = torch.cat((volume_real, volume_imag), dim=1).reshape(
             -1, volume_L, volume_L, volume_L
         )  # Shape of (N*2,volume_L,volume_L,volume_L)
-        # Grid sample's batch is used when we need to sample different volumes with different grids, here however we want to sample all volumes with different grids so we use the grid_sample channels instead.
+        # Grid sample's batch is used when we need to sample different volumes with different grids,
+        # here however we want to sample all volumes with different grids so we use the grid_sample channels instead.
         output = torch.nn.functional.grid_sample(
             input=volume_real_imag_split.unsqueeze(0), grid=self.points, mode=self.mode, align_corners=True
         )  # Shape of (1,N*2,n,L,L) (or (1,N*2,n,L/2,L) if self.use_half_grid=True)
@@ -120,12 +123,12 @@ class NufftPlanDiscretized(BaseNufftPlan):
         return output
 
     def execute_adjoint(self, signal):
-        """
-        Adjoint of the NUFFT projection operator.
+        """Adjoint of the NUFFT projection operator.
+
         Takes sampled Fourier values and maps them back to a 3D Fourier volume.
         Output shape: (N, L, L, L)
         """
-        assert self.use_half_grid == False, "half_grid not supported with adjoint operator"
+        assert not self.use_half_grid, "half_grid not supported with adjoint operator"
 
         L = self.sz[0]
         volume_L = L * self.upsample_factor
@@ -151,12 +154,12 @@ class NufftPlanDiscretized(BaseNufftPlan):
         return torch.complex(adjoint_signal[:, 0], adjoint_signal[:, 1])
 
     def execute_adjoint_unaggregated(self, signal):
-        """
-        Adjoint of the NUFFT projection operator.
+        """Adjoint of the NUFFT projection operator.
+
         Takes sampled Fourier values and maps them back to a 3D Fourier volume.
         Output shape: (n, L, L, L)
         """
-        assert self.use_half_grid == False, "half_grid not supported with adjoint operator"
+        assert not self.use_half_grid, "half_grid not supported with adjoint operator"
 
         L = self.sz[0]
         volume_L = L * self.upsample_factor
@@ -313,9 +316,9 @@ class TorchNufftForward(torch.autograd.Function):
         return nufft_plan.execute_forward(signal)
 
     @staticmethod
-    def backward(
-        ctx, grad_output
-    ):  # Since nufft_plan referenced is saved on the context, set_pts cannot be called before using backward (otherwise it will compute the wrong adjoint transformation)
+    def backward(ctx, grad_output):
+        # Since nufft_plan referenced is saved on the context, set_pts cannot be called before using
+        # backward (otherwise it will compute the wrong adjoint transformation)
         nufft_plan = ctx.nufft_plan
         if ctx.needs_input_grad[0]:
             signal_grad = nufft_plan.execute_adjoint(grad_output).reshape(ctx.signal_shape)

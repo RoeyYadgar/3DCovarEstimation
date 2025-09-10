@@ -187,9 +187,7 @@ class PoseModule(torch.nn.Module):
                 self.contrasts.weight[idx] = contrasts
 
     def split_module(self, permutation=None):
-        """
-        Returns two modules, each with non-overlapping subsets of pose entries.
-        """
+        """Returns two modules, each with non-overlapping subsets of pose entries."""
         n = self.offsets.weight.shape[0]
         device = self.offsets.weight.device
         dtype = self.offsets.weight.dtype
@@ -222,10 +220,8 @@ class PoseModule(torch.nn.Module):
 
     @staticmethod
     def merge_modules(module1, module2, permutation):
-        """
-        Merges two PoseModule instances into a new PoseModule containing all poses,
-        reordered according to the given permutation.
-        """
+        """Merges two PoseModule instances into a new PoseModule containing all poses, reordered
+        according to the given permutation."""
         device = module1.rotvec.weight.device
         dtype = module1.rotvec.weight.dtype
         resolution = module1.resolution
@@ -254,8 +250,8 @@ class PoseModule(torch.nn.Module):
         return merged_module
 
     def update_from_modules(self, module1, module2, permutation):
-        """
-        Updates module from two sub module instances.
+        """Updates module from two sub module instances.
+
         reordered according to the given permutation.
         """
 
@@ -377,7 +373,8 @@ def estimate_image_offsets(images, reference, mask=None, in_fourier_domain=False
 
 def out_of_plane_rot_error(rot1, rot2):
     """
-    #Implementation is used from DRGN-AI https://github.com/ml-struct-bio/drgnai/blob/d45341d1f3411d6db6da6f557207f10efd16da17/src/metrics.py#L134
+    Implementation is used from DRGN-AI
+    https://github.com/ml-struct-bio/drgnai/blob/d45341d1f3411d6db6da6f557207f10efd16da17/src/metrics.py#L134
     """
     unitvec_gt = torch.tensor([0, 0, 1], dtype=torch.float32).reshape(3, 1)
 
@@ -395,8 +392,8 @@ def out_of_plane_rot_error(rot1, rot2):
 
 
 def in_plane_rot_error(rot1, rot2):
-    """
-    Computes the in-plane rotation error (in degrees) between two sets of rotation matrices.
+    """Computes the in-plane rotation error (in degrees) between two sets of rotation matrices.
+
     The in-plane rotation is the rotation about the z-axis (beam axis).
     Returns:
         angles: array of per-particle in-plane rotation errors (degrees)
