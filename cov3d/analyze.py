@@ -1,3 +1,4 @@
+import logging
 import os
 import pickle
 
@@ -15,6 +16,8 @@ from cov3d import utils
 from cov3d.fsc_utils import covar_fsc
 from cov3d.recovar_utils import recovarReconstructFromEmbedding
 from cov3d.trajectory import compute_density, compute_trajectory, find_closet_idx, pick_trajectory_pairs
+
+logger = logging.getLogger(__name__)
 
 
 def get_embedding_reconstruct_func(method):
@@ -218,7 +221,7 @@ def analyze(
 
     if output_dir is None:
         output_dir = os.path.join(os.path.split(result_data)[0], "output")
-        print(f"Writing analysis output to {output_dir}")
+        logger.info(f"Writing analysis output to {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
 
     coords_keys = ["coords_est"]
@@ -234,7 +237,7 @@ def analyze(
             figure_prefix.append("gt_")
             eigenvols_keys.append("eigenvectors_GT")
         else:
-            print(
+            logger.warning(
                 "analyze_with_gt was set to True but coords_GT is not present in result_data - "
                 "skipping analysis with gt coordinates"
             )
@@ -259,7 +262,7 @@ def analyze(
             reconstruct_func = get_embedding_reconstruct_func(reconstruct_method)
             reconstruct_func(result_data, os.path.join(output_dir, analysis_dir), cluster_coords)
         if num_trajectories > 0:
-            print("Computing trajectories")
+            logger.info("Computing trajectories")
             coords = data[coords_key]
             start, end = pick_trajectory_pairs(cluster_coords, num_trajectories)
             start_ind = [find_closet_idx(coords, s)[1] for s in start]

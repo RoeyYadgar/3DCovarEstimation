@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 
@@ -10,6 +11,8 @@ from torch.utils.data.distributed import DistributedSampler
 from cov3d.covar_sgd import CovarPoseTrainer, CovarTrainer, compute_updated_fourier_reg
 from cov3d.dataset import create_dataloader
 from cov3d.utils import get_cpu_count
+
+logger = logging.getLogger(__name__)
 
 TMP_STATE_DICT_FILE = "tmp_state_dict.pt"
 
@@ -70,7 +73,7 @@ def ddp_train(
         covar_model = DDP(covar_model, device_ids=[rank], process_group=group1 if is_group1 else group2)
         # Attach the ranks to the model so that we can use them in the trainer
         covar_model.ranks_in_group = ranks1 if is_group1 else ranks2
-        print(f"Rank {rank} is in group {covar_model.ranks_in_group}")
+        logger.debug(f"Rank {rank} is in group {covar_model.ranks_in_group}")
     else:
         covar_model = DDP(covar_model, device_ids=[rank])
         covar_model.ranks_in_group = list(range(world_size))
@@ -173,7 +176,7 @@ def trainParallel(
 
     if batch_size % num_gpus != 0:
         batch_size = math.ceil(batch_size / num_gpus) * num_gpus
-        print(f"Batch size is not a multiple of number of GPUs used, increasing batch size to {batch_size}")
+        logger.info(f"Batch size is not a multiple of number of GPUs used, increasing batch size to {batch_size}")
     batch_size_per_gpu = int(batch_size / num_gpus)
 
     mp.spawn(

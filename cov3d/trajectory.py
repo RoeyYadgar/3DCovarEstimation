@@ -1,7 +1,11 @@
+import logging
+
 import networkx as nx
 import numpy as np
 from scipy.spatial import distance_matrix
 from sklearn.neighbors import KernelDensity, NearestNeighbors
+
+logger = logging.getLogger(__name__)
 
 
 def compute_kde_density(zs):
@@ -59,7 +63,7 @@ def compute_trajectory(zs, density, start_idx, end_idx, k=100, knn_indices=None)
         if knn_indices.shape[1] < k:
             raise Exception("knn_indices does not have enough neighbors for the specified k")
         elif knn_indices.shape[1] > k:
-            print(f"Using only first {k} neighbors out of provided {knn_indices.shape[1]}")
+            logger.warning(f"Using only first {k} neighbors out of provided {knn_indices.shape[1]}")
             indices = indices[:, :k]
 
     # Build graph

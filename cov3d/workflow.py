@@ -1,3 +1,4 @@
+import logging
 import os
 import pickle
 from os import path
@@ -11,10 +12,13 @@ from cov3d.covar import Covar, Mean
 from cov3d.covar_distributed import trainParallel
 from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset, GTData, LazyCovarDataset
+from cov3d.logger import setup_logger
 from cov3d.poses import PoseModule, offset_mean_error, out_of_plane_rot_error, pose_ASPIRE2cryoDRGN, pose_cryoDRGN2APIRE
 from cov3d.source import ImageSource
 from cov3d.utils import cosineSimilarity, get_torch_device, readVols, relionReconstruct, volsCovarEigenvec
 from cov3d.wiener_coords import latentMAP
+
+logger = logging.getLogger(__name__)
 
 
 def determineMaxBatchSize(devices, L, rank, dtype):
@@ -41,7 +45,7 @@ def reconstructClass(starfile_path, vol_path, overwrite=False):
     starfile = aspire.storage.StarFile(starfile_path)
     classes = np.unique(starfile["particles"]["_rlnClassNumber"])
     if len(classes) == 1:
-        print("Warning : rlnClassNumber contains only one class")
+        logger.warning("rlnClassNumber contains only one class")
         return None
     classes = classes[np.where(classes.astype(np.float32) != -1)]  # unindentified images are labeled with class = -1
     img_size = int(float(starfile["optics"]["_rlnImageSize"][0]))
@@ -74,10 +78,8 @@ def normalizeRelionVolume(vol, source, batch_size=512):
         images = source.images[i : i + batch_size].asnumpy()
         image_volproj_product += np.sum(projected_vol * images)
         volproj2_product += np.sum(projected_vol**2)
-        print(image_volproj_product / volproj2_product)
 
     scale_const = image_volproj_product / volproj2_product
-    print(scale_const)
 
     return scale_const
 
@@ -93,7 +95,7 @@ def load_mask(mask, L):
         min_mask_val = mask.asnumpy().min()
         max_mask_val = mask.asnumpy().max()
         if np.abs(min_mask_val) > 1e-3 or np.abs(max_mask_val - 1) > 1e-3:
-            print(f"Warning : mask volume range is [{min_mask_val},{max_mask_val}]. Normalzing mask")
+            logger.warning(f"mask volume range is [{min_mask_val},{max_mask_val}]. Normalzing mask")
             mask = (mask - min_mask_val) / (max_mask_val - min_mask_val)
 
     return mask
@@ -134,17 +136,14 @@ def covar_workflow(
         noise_var = source.estimate_noise_var() if not whiten else 1
         L = source.resolution
 
-        mean_est = relionReconstruct(
-            inputfile, path.join(output_dir, "mean_est.mrc"), overwrite=True
-        )  # TODO: change overwrite to True
+        mean_est = relionReconstruct(inputfile, path.join(output_dir, "mean_est.mrc"), overwrite=True)
 
-        # Print useful info TODO: use log files
-        print(f"Norm squared of mean volume : {np.linalg.norm(mean_est)**2}")
+        logger.debug(f"Norm squared of mean volume : {np.linalg.norm(mean_est)**2}")
 
         mask = load_mask(mask, L)
         invert_data = not check_dataset_sign(mean_est, mask)
         if invert_data:
-            print("inverting dataset sign")
+            logger.info("Mean volume seems to be sign inverted, uninverting dataset")
             mean_est = -1 * mean_est
             # Save inverted mean volume. No need to invert the tensor itself as
             # Dataset constructor expects uninverted volume
@@ -202,12 +201,14 @@ def covar_workflow(
                 mean_gt = None
 
             if covar_eigenvecs_gt is not None:
-                print(f"Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}")
+                logger.debug(
+                    f"Top eigen values of ground truth covariance {np.linalg.norm(covar_eigenvecs_gt,axis=1)**2}"
+                )
                 corr = cosineSimilarity(
                     torch.tensor(mean_est.asnumpy()),
                     torch.tensor(covar_eigenvecs_gt),
                 )
-                print(f"Correlation between mean volume and eigenvolumes {corr}")
+                logger.debug(f"Correlation between mean volume and eigenvolumes {corr}")
 
             if gt_pose is not None:
                 gt_pose = pickle.load(open(gt_pose, "rb"))
@@ -226,7 +227,7 @@ def covar_workflow(
             with open(os.path.join(output_dir, "gt_data.pkl"), "wb") as fid:
                 pickle.dump(gt_data, fid)
     else:
-        print(f"Reading pickled dataset from {dataset_path}")
+        logger.info(f"Reading pickled dataset from {dataset_path}")
         with open(dataset_path, "rb") as fid:
             dataset = pickle.load(fid)
 
@@ -236,7 +237,7 @@ def covar_workflow(
             gt_data = pickle.load(fid)
         mean_est = aspire.volume.Volume.load(path.join(output_dir, "mean_est.mrc"))
         mask = load_mask(mask, mean_est.resolution)
-        print("Dataset loaded successfuly")
+        logger.info("Dataset loaded successfuly")
 
     covar_precoessing_output = covar_processing(
         dataset,
@@ -347,9 +348,9 @@ def covar_processing(
         rot_change = out_of_plane_rot_error(
             torch.tensor(aspire.utils.Rotation.from_rotvec(pose.get_rotvecs().numpy())), init_pose[0]
         )[1]
-        print(f"Rotation out-of-plane change: {rot_change} degrees")
+        logger.info(f"Rotation out-of-plane change: {rot_change} degrees")
         offset_change = offset_mean_error(pose.get_offsets(), init_pose[1])
-        print(f"Image offset change: {offset_change} pixels")
+        logger.info(f"Image offset change: {offset_change} pixels")
 
         # Update dataset with estimated pose and apply preprocessing
         dataset.update_pose(pose)
@@ -383,7 +384,7 @@ def covar_processing(
             dataset, eigenvectors_GT.to("cuda:0"), eigenvals_GT.to("cuda:0"), return_coords_covar=True
         )
 
-    print(f"Eigenvalues of estimated covariance {eigenval_est}")
+    logger.debug(f"Eigenvalues of estimated covariance {eigenval_est}")
 
     get_abspath = lambda s: os.path.abspath(s) if s is not None else None
     input_paths = dataset.input_paths if hasattr(dataset, "input_paths") else (None,) * 3
@@ -514,6 +515,11 @@ def workflow_click_decorator(func):
         default="ml",
         help="Which objective function to opimize. Either ml (maximum liklihood) or ls (least squares)",
     )
+    @click.option(
+        "--log-level",
+        default="INFO",
+        type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
+    )
     def wrapper(*args, **kwargs):
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
         return func(*args, **kwargs)
@@ -524,6 +530,8 @@ def workflow_click_decorator(func):
 @click.command()
 @workflow_click_decorator
 def covar_workflow_cli(**kwargs):
+    log_level = kwargs.pop("log_level")
+    setup_logger(level=log_level)
     covar_workflow(**kwargs)
 
 

@@ -1,3 +1,4 @@
+import logging
 import os
 import pickle
 
@@ -17,6 +18,8 @@ from cov3d.poses import pose_ASPIRE2cryoDRGN
 from cov3d.projection_funcs import vol_forward
 from cov3d.utils import get_torch_device, readVols, volsCovarEigenvec
 from cov3d.workflow import covar_processing, load_mask
+
+logger = logging.getLogger(__name__)
 
 
 class SimulatedSource:
@@ -224,7 +227,7 @@ def simulateExp(folder_name=None, L=64, r=5, no_ctf=False, save_source=False, vo
     objs = ["ml", "ls"]
     for snr in snr_vals:
         noise_var = var / snr
-        print(f"Signal power : {var}. Using noise variance of {noise_var} to achieve SNR of {snr}")
+        logger.info(f"Signal power : {var}. Using noise variance of {noise_var} to achieve SNR of {snr}")
 
         sim.noise_var = noise_var
         noise_var = sim.noise_var
@@ -347,7 +350,6 @@ if __name__ == "__main__":
         for v in os.listdir("data/scratch_data/cryodrgn_ribosomes/ribosomes/inputs")
         if v.endswith(".mrc")
     ]
-    print(ribo_vols)
     simulateExp(
         "data/scratch_data/cryodrgn_ribosomes/ribosomes",
         save_source=False,

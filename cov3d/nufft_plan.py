@@ -1,3 +1,4 @@
+import logging
 import math
 from abc import ABC
 
@@ -6,6 +7,8 @@ import torch
 from aspire.utils import grid_3d
 from cufinufft import Plan as cuPlan
 from finufft import Plan
+
+logger = logging.getLogger(__name__)
 
 
 def get_half_fourier_grid(points, dim):
@@ -265,7 +268,7 @@ class NufftPlan(BaseNufftPlan):
     def execute_forward(self, signal):
         zero_pad = False
         if signal.shape[0] < self.batch_size:
-            print("Warning : signal batch size is smaller than the nufft plan batch size. Padding with zeros")
+            logger.warning("Signal batch size is smaller than the nufft plan batch size. Padding with zeros")
             zero_pad = True
             orig_batch = signal.shape[0]
             pad_size = self.batch_size - signal.shape[0]
@@ -285,7 +288,7 @@ class NufftPlan(BaseNufftPlan):
     def execute_adjoint(self, signal):
         zero_pad = False
         if signal.shape[0] < self.batch_size:
-            print("Warning : signal batch size is smaller than the nufft plan batch size. Padding with zeros")
+            logger.warning("Signal batch size is smaller than the nufft plan batch size. Padding with zeros")
             zero_pad = True
             orig_batch = signal.shape[0]
             pad_size = self.batch_size - signal.shape[0]

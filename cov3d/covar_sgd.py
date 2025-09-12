@@ -1,4 +1,5 @@
 import copy
+import logging
 import os
 import time
 
@@ -38,6 +39,8 @@ from cov3d.projection_funcs import (
 )
 from cov3d.utils import cosineSimilarity, get_cpu_count, soft_edged_kernel
 from cov3d.wiener_coords import compute_latentMAP_batch
+
+logger = logging.getLogger(__name__)
 
 
 class CovarTrainer:
@@ -175,7 +178,7 @@ class CovarTrainer:
             torch.distributed.all_reduce(self.cost_in_epoch, op=torch.distributed.ReduceOp.SUM)
 
         if self.logTraining:
-            print("Total cost value in epoch : {:.2e}".format(self.cost_in_epoch.item()))
+            logger.debug("Total cost value in epoch : {:.2e}".format(self.cost_in_epoch.item()))
 
     def get_trainable_parameters(self):
         return self.covar.grad_lr_factor()
@@ -227,7 +230,7 @@ class CovarTrainer:
             self.dataset.to_spatial_domain()
             self.cost_func = cost if objective_func == "ls" else cost_maximum_liklihood
         self.covar.init_grid_correction(nufft_disc)
-        print(f"Actual learning rate {lr}")
+        logger.debug(f"Actual learning rate {lr}")
 
         # The sgd is performed on cost/batch_size + reg_term while its supposed to be sum(cost) + reg_term.
         # This ensures the regularization term scales in the appropriate manner
@@ -253,10 +256,10 @@ class CovarTrainer:
             epoch_start_time = time.time()
             self.run_epoch(self.epoch_index)
             epoch_end_time = time.time()
-            print(f"Epoch runtime: {epoch_end_time - epoch_start_time:.2f} seconds")
+            logger.info(f"Epoch runtime: {epoch_end_time - epoch_start_time:.2f} seconds")
 
             self.scheduler.step(self.cost_in_epoch)
-            print(f"New learning rate set to {self.scheduler.get_last_lr()}")
+            logger.debug(f"New learning rate set to {self.scheduler.get_last_lr()}")
 
             # Apply masking on covar vectors
             if self.apply_masking_on_epoch:
@@ -270,7 +273,9 @@ class CovarTrainer:
 
             self.epoch_index += 1
             if self.scheduler.get_last_lr()[0] <= self.lr * (self.scheduler.factor**self.num_reduced_lr_before_stop):
-                print(f"Learning rate has been reduced {self.num_reduced_lr_before_stop} times. Stopping training.")
+                logger.debug(
+                    f"Learning rate has been reduced {self.num_reduced_lr_before_stop} times. Stopping training."
+                )
                 break
 
     def complete_training(self):
@@ -633,12 +638,9 @@ class CovarPoseTrainer(CovarTrainer):
 
         mem_allocated = torch.cuda.memory_allocated(self.device) / (1024**3)
         mem_reserved = torch.cuda.memory_reserved(self.device) / (1024**3)
-        print(f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB")
-        log_file = "gpu_memory_log.txt"
-        with open(log_file, "a") as f:
-            f.write(
-                f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB\n"
-            )
+        logger.debug(
+            f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB"
+        )
 
         if epoch % self.mean_update_frequency == self.mean_update_frequency - 1:
             if self.offset_est_method == "Newton":

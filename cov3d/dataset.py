@@ -1,4 +1,5 @@
 import copy
+import logging
 import random
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
@@ -23,6 +24,8 @@ from cov3d.projection_funcs import (
 )
 from cov3d.source import ImageSource
 from cov3d.utils import get_torch_device, set_module_grad, soft_edged_kernel
+
+logger = logging.getLogger(__name__)
 
 
 class CovarDataset(Dataset):
@@ -245,8 +248,11 @@ class CovarDataset(Dataset):
 
             batch_size = int(available_batch_size / 6)
             batch_size = min(batch_size, 256)
-            print(f"Using batch size of {batch_size} to compute dataset covar gain")
-            print((torch.cuda.memory_reserved(device), torch.cuda.memory_allocated(device)))
+            logger.debug(f"Using batch size of {batch_size} to compute dataset covar gain")
+            logger.debug(
+                f"Memory reserved: {torch.cuda.memory_reserved(device)}, "
+                f"Memory allocated: {torch.cuda.memory_allocated(device)}"
+            )
 
         for i in range(0, len(self), batch_size):
             _, pts_rot, filters, _ = self[i : min(i + batch_size, len(self))]
@@ -407,8 +413,8 @@ class LazyCovarDataset(CovarDataset):
 
         if mean_module._in_spatial_domain != self._in_spatial_domain:
             domain_name = lambda val: "Spatial" if val else "Fourier"
-            print(
-                f"Warning: Mean module is in {domain_name(mean_module._in_spatial_domain)} domain "
+            logger.warning(
+                f"Mean module is in {domain_name(mean_module._in_spatial_domain)} domain "
                 f"while dataset is in {domain_name(self._in_spatial_domain)}. "
                 "Changing domain of the mean module to fit dataset"
             )
@@ -623,7 +629,7 @@ def create_dataloader(dataset, batch_size, idx=None, **dataloader_kwargs):
     # TODO: find a better solution that enables the use of more workers
     num_workers = dataloader_kwargs.pop("num_workers", 0)
     if isinstance(dataset, LazyCovarDataset):
-        print(
+        logger.debug(
             f"Warning: cannot use {num_workers} > 1 num_workers with Lazy dataset. "
             "Setting num_workers to 0 and prefetch_factor to None"
         )

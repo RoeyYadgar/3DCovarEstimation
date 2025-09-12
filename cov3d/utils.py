@@ -1,3 +1,4 @@
+import logging
 import multiprocessing
 import os
 import pickle
@@ -17,6 +18,8 @@ from sklearn.decomposition import PCA
 
 from cov3d.projection_funcs import centered_fft2, centered_fft3
 from cov3d.wiener_coords import mahalanobis_distance, mahalanobis_threshold
+
+logger = logging.getLogger(__name__)
 
 
 def generateBallVoxel(center, radius, L):
@@ -203,7 +206,7 @@ def soft_edged_kernel(radius, L, dim, radius_backoff=2, in_fourier=False):
     # Implementation is based on RECOVAR https://github.com/ma-gilles/recovar/blob/main/recovar/mask.py#L106
     if radius < 3:
         radius = 3
-        print(f"Warning : radius value {radius} is too small. setting radius to 3 pixels.")
+        logger.warning(f"Radius value {radius} is too small. setting radius to 3 pixels.")
     if dim == 2:
         grid_func = grid_2d
     elif dim == 3:
@@ -343,7 +346,7 @@ def relionReconstructFromEmbedding(inputfile, outputfolder, embedding_positions,
         embed_pos_index = torch.argmin(torch.norm(embedding_position - zs, dim=1))
         # Compute closest neighbors
         index_under_threshold = mahalanobis_threshold(zs, zs[embed_pos_index], cov_zs[embed_pos_index], q=q)
-        print(f"Reconstructing state {i} with {torch.sum(index_under_threshold)} images")
+        logger.info(f"Reconstructing state {i} with {torch.sum(index_under_threshold)} images")
         output_file = os.path.join(volumes_dir, f"volume{i:04}.mrc")
         relionReconstruct(
             starfile,
@@ -389,7 +392,7 @@ def relionReconstructFromEmbeddingDisjointSets(inputfile, outputfolder, embeddin
     closest_embedding = mahal_distance.argmin(dim=1)
     for i, embedding_position in enumerate(torch.tensor(embedding_positions)):
         image_idx = closest_embedding == i
-        print(f"Reconstructing state {i} with {torch.sum(image_idx)} images")
+        logger.info(f"Reconstructing state {i} with {torch.sum(image_idx)} images")
         output_file = os.path.join(volumes_dir, f"volume{i:04}.mrc")
         relionReconstruct(
             starfile,
