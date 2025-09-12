@@ -1,7 +1,8 @@
 __pycache__/
 cov3d.egg-info/
 .vscode/*
-
+*.out
+*.err
 
 data/*
 logs/*
