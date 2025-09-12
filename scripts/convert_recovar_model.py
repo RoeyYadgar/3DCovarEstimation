@@ -17,13 +17,16 @@ def convert_recovar_model_output(args):
     with open(os.path.join(args.input_dir,'model/embeddings.pkl'),'rb') as f:
         embeddings = pickle.load(f)
 
-    recovar_zdims = params['input_args'].zdim
+    recovar_zdims = params['input_args'].item().zdim
     #TODO: add eigen est
     results = {
         'eigenval_est' : params['s'][:max(recovar_zdims)],
         'coords_est' : embeddings['zs'][max(recovar_zdims)],
         'coords_covar_inv_est' : embeddings['cov_zs'][max(recovar_zdims)],
-        'starfile' : params['input_args'].particles.replace('.mrcs','.star')
+        'particles_path' : params['input_args'].item().particles.replace('.mrcs','.star'),
+        'ctf_path' : params['input_args'].item().ctf,
+        'poses_path' : params['input_args'].item().poses,
+        'data_sign_inverted' : bool(params['input_args'].item().uninvert_data),
     }
 
     
@@ -43,7 +46,6 @@ def convert_recovar_model_output(args):
         results['eigenvectors_GT'] = gt_result['eigenvectors_GT']
         results['coords_GT'] = gt_result['coords_GT']
         results['coords_covar_inv_GT'] = gt_result['coords_covar_inv_GT']
-        results['data_sign_inverted'] = gt_result['data_sign_inverted']
     except:
         pass
 

@@ -68,7 +68,7 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
                         command += f" --gt-dir {data['gt_dir']}"
                     if(data['gt_labels'] is not None):
                         command += f" --gt-labels {data['gt_labels']}"
-                    if(data['gt_pose'] is not None):
+                    if(data.get('gt_pose',None) is not None):
                         command += f" --gt-pose {data['gt_pose']}"
 
                 if(RUN_COMMANDS):
@@ -76,15 +76,19 @@ def run_alg(datasets,dataset_names,run_prefix,params,params_description,run_anal
                 else:
                     print(command)
 
-def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 10):
+def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 10,output_dir=None):
 
     for L, dataset in datasets.items():
         for i, data in enumerate(dataset):
             dataset_name = dataset_names[i]
             run_name = f'{run_prefix}_{dataset_name}_L{L}'
-            alg_param = {'mrc' : data['dataset'].replace('.star','.mrcs'), 'name' : f'"{run_name}"','alg' : 'recovar','zdim' : zdim}
+            alg_param = {'mrc' : data['dataset'], 'name' : f'"{run_name}"','alg' : 'recovar','zdim' : zdim}
             if(data['mask'] is not None):
                 alg_param['mask'] = data['mask']
+            if data['poses'] is not None:
+                alg_param['poses'] = data['poses']
+            if output_dir is not None:
+                alg_param['output-dir'] = os.path.join(os.path.split(alg_param['mrc'])[0],output_dir)
             command = 'python scripts/comet_cryodrgn.py ' + ' '.join([f'--{k} {v if v is not None else ""}' for k, v in alg_param.items()])
             
             if(run_analysis):
@@ -95,7 +99,7 @@ def run_recovar_alg(datasets,dataset_names,run_prefix,run_analysis=True,zdim = 1
                     command += f" --gt-dir {data['gt_dir']}"
                 if(data['gt_labels'] is not None):
                     command += f" --gt-labels {data['gt_labels']}"
-                if(data['gt_pose'] is not None):
+                if(data.get('gt_pose',None) is not None):
                     command += f" --gt-pose {data['gt_pose']}"
             if(RUN_COMMANDS):
                 os.system(command)
