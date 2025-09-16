@@ -120,8 +120,10 @@ def covar_workflow(
     gt_pose=None,
     debug=False,
     gt_path=None,
+    log_level="INFO",
     **training_kwargs,
 ):
+    setup_logger(level=log_level)
     data_dir = os.path.split(inputfile)[0]
     if output_dir is None:
         output_dir = path.join(data_dir, "result_data")
@@ -530,8 +532,6 @@ def workflow_click_decorator(func):
 @click.command()
 @workflow_click_decorator
 def covar_workflow_cli(**kwargs):
-    log_level = kwargs.pop("log_level")
-    setup_logger(level=log_level)
     covar_workflow(**kwargs)
 
 
