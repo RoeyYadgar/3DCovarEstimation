@@ -82,10 +82,13 @@ def reconstructClass(starfile_path: str, vol_path: str, overwrite: bool = False)
         os.remove("vol_tmp.mrc")
         return vol
     else:
+        vol_files = []
         for i, c in enumerate(classes):
             vol_file = f"{vol_path}/vol_{c}.mrc"
+            vol_files.append(vol_file)
             if overwrite or (not path.isfile(vol_file)):
                 relionReconstruct(starfile_path, vol_file, classnum=c)
+        return readVols(vol_files, in_list=False)
 
 
 def normalizeRelionVolume(vol: Any, source: Any, batch_size: int = 512) -> float:
