@@ -2,6 +2,7 @@ import logging
 import os
 import pickle
 from os import path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import aspire
 import click
@@ -21,7 +22,18 @@ from cov3d.wiener_coords import latentMAP
 logger = logging.getLogger(__name__)
 
 
-def determineMaxBatchSize(devices, L, rank, dtype):
+def determineMaxBatchSize(devices: List[int], L: int, rank: int, dtype: torch.dtype) -> int:
+    """Determine maximum batch size for given devices and model parameters.
+
+    Args:
+        devices: List of device indices
+        L: Volume resolution
+        rank: Covariance rank
+        dtype: Data type
+
+    Returns:
+        Maximum batch size
+    """
     devices_memory = [torch.cuda.get_device_properties(d).total_memory for d in devices]
     mem_per_device = min(devices_memory)
     model_size = (
@@ -36,11 +48,17 @@ def determineMaxBatchSize(devices, L, rank, dtype):
     return maximal_batch_size_per_device * len(devices)
 
 
-def reconstructClass(starfile_path, vol_path, overwrite=False):
-    """Uses relion_reconstruct on each class in a star file.
+def reconstructClass(starfile_path: str, vol_path: str, overwrite: bool = False) -> aspire.volume.Volume:
+    """Reconstructs volumes for each class in a RELION star file using relion_reconstruct.
 
-    if vol_path is a directory - generates a file per volume in the directory
-    if vol_path is a file - combines all volumes into the file
+    Args:
+        starfile_path (str): Path to the input star file.
+        vol_path (str): Output path. If a directory, saves one volume per class as separate files.
+                        If a file, combines all class volumes into a single multi-volume file.
+        overwrite (bool, optional): Whether to overwrite existing output files. Default is False.
+
+    Returns:
+        Reconstructed volumes for each class
     """
     starfile = aspire.storage.StarFile(starfile_path)
     classes = np.unique(starfile["particles"]["_rlnClassNumber"])
@@ -70,7 +88,17 @@ def reconstructClass(starfile_path, vol_path, overwrite=False):
                 relionReconstruct(starfile_path, vol_file, classnum=c)
 
 
-def normalizeRelionVolume(vol, source, batch_size=512):
+def normalizeRelionVolume(vol: Any, source: Any, batch_size: int = 512) -> float:
+    """Normalize RELION volume using source projections.
+
+    Args:
+        vol: Volume to normalize
+        source: Source object with images
+        batch_size: Batch size for processing (default: 512)
+
+    Returns:
+        Scale constant for normalization
+    """
     image_volproj_product = 0
     volproj2_product = 0
     for i in range(0, source.n, batch_size):
@@ -84,7 +112,16 @@ def normalizeRelionVolume(vol, source, batch_size=512):
     return scale_const
 
 
-def load_mask(mask, L):
+def load_mask(mask: Union[str, Any], L: int) -> aspire.volume.Volume:
+    """Load and prepare mask volume.
+
+    Args:
+        mask: Mask specification ("fuzzy" or file path)
+        L: Target resolution
+
+    Returns:
+        Mask volume
+    """
     if mask == "fuzzy":
         mask = aspire.volume.Volume(aspire.utils.fuzzy_mask((L,) * 3, dtype=np.float32))
     elif path.isfile(mask):
@@ -101,28 +138,60 @@ def load_mask(mask, L):
     return mask
 
 
-def check_dataset_sign(volume, mask):
+def check_dataset_sign(volume: Any, mask: Any) -> bool:
+    """Check if dataset sign is correct based on masked volume sum.
+
+    Args:
+        volume: Volume to check
+        mask: Mask to apply
+
+    Returns:
+        True if sign is correct
+    """
     return np.sum((volume * mask).asnumpy()) > 0
 
 
 def covar_workflow(
-    inputfile,
-    rank,
-    output_dir=None,
-    poses=None,
-    ctf=None,
-    lazy=False,
-    whiten=True,
-    mask="fuzzy",
-    optimize_pose=False,
-    optimize_contrast=False,
-    class_vols=None,
-    gt_pose=None,
-    debug=False,
-    gt_path=None,
-    log_level="INFO",
-    **training_kwargs,
-):
+    inputfile: str,
+    rank: int,
+    output_dir: Optional[str] = None,
+    poses: Optional[str] = None,
+    ctf: Optional[str] = None,
+    lazy: bool = False,
+    whiten: bool = True,
+    mask: Optional[str] = "fuzzy",
+    optimize_pose: bool = False,
+    optimize_contrast: bool = False,
+    class_vols: Optional[Union[str, List[str], aspire.volume.Volume]] = None,
+    gt_pose: Optional[str] = None,
+    debug: bool = False,
+    gt_path: Optional[str] = None,
+    log_level: str = "INFO",
+    **training_kwargs: Any,
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Main covariance estimation workflow.
+
+    Args:
+        inputfile: Path to input data file (star/txt/mrcs)
+        rank: Rank of covariance to be estimated
+        output_dir: Path to output directory (optional)
+        poses: Path to poses file (optional)
+        ctf: Path to CTF file (optional)
+        lazy: Whether to use lazy dataset (default: False)
+        whiten: Whether to whiten images (default: True)
+        mask: Mask specification (default: "fuzzy")
+        optimize_pose: Whether to optimize poses (default: False)
+        optimize_contrast: Whether to optimize contrast (default: False)
+        class_vols: Ground truth class volumes (optional)
+        gt_pose: Path to ground truth poses (optional)
+        debug: Enable debug mode (default: False)
+        gt_path: Path to ground truth data (optional)
+        log_level: Logging level (default: "INFO")
+        **training_kwargs: Additional training parameters
+
+    Returns:
+        Tuple of (data_dict, training_data, training_kwargs)
+    """
     setup_logger(level=log_level)
     data_dir = os.path.split(inputfile)[0]
     if output_dir is None:
@@ -257,16 +326,32 @@ def covar_workflow(
 
 
 def covar_processing(
-    dataset,
-    covar_rank,
-    output_dir,
-    mean_volume_est=None,
-    mask=None,
-    optimize_pose=False,
-    optimize_contrast=False,
-    gt_data=None,
-    **training_kwargs,
-):
+    dataset: CovarDataset,
+    covar_rank: int,
+    output_dir: str,
+    mean_volume_est: Optional[aspire.volume.Volume] = None,
+    mask: Optional[aspire.volume.Volume] = None,
+    optimize_pose: bool = False,
+    optimize_contrast: bool = False,
+    gt_data: Optional[GTData] = None,
+    **training_kwargs: Any,
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Process covariance estimation with training and evaluation.
+
+    Args:
+        dataset: Dataset for training
+        covar_rank: Rank of covariance matrix
+        output_dir: Output directory path
+        mean_volume_est: Estimated mean volume (optional)
+        mask: Volume mask (optional)
+        optimize_pose: Whether to optimize poses (default: False)
+        optimize_contrast: Whether to optimize contrast (default: False)
+        gt_data: Ground truth data (optional)
+        **training_kwargs: Additional training parameters
+
+    Returns:
+        Tuple of (data_dict, training_data, training_kwargs)
+    """
     L = dataset.resolution
 
     # Perform optimization for eigenvectors estimation
@@ -422,7 +507,16 @@ def covar_processing(
     return data_dict, training_data, default_training_kwargs
 
 
-def workflow_click_decorator(func):
+def workflow_click_decorator(func: Callable) -> Callable:
+    """Decorator for adding Click options to workflow functions.
+
+    Args:
+        func: Function to decorate
+
+    Returns:
+        Decorated function
+    """
+
     @click.option("-i", "--inputfile", type=str, help="path to star/txt/mrcs file.")
     @click.option("-r", "--rank", type=int, help="rank of covariance to be estimated.")
     @click.option(
@@ -531,7 +625,12 @@ def workflow_click_decorator(func):
 
 @click.command()
 @workflow_click_decorator
-def covar_workflow_cli(**kwargs):
+def covar_workflow_cli(**kwargs: Any) -> None:
+    """Command-line interface for covariance workflow.
+
+    Args:
+        **kwargs: Command-line arguments
+    """
     covar_workflow(**kwargs)
 
 

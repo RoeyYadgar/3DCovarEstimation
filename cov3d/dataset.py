@@ -2,10 +2,11 @@ import copy
 import logging
 import random
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from aspire.source import ImageSource as ASPIREImageSource
 from aspire.utils import Rotation, support_mask
 from aspire.volume import Volume, rotated_grids
 from torch.utils.data import Dataset
@@ -22,6 +23,7 @@ from cov3d.projection_funcs import (
     im_backward,
     preprocess_image_batch,
 )
+from cov3d.sim_source import SimulatedSource
 from cov3d.source import ImageSource
 from cov3d.utils import get_torch_device, set_module_grad, soft_edged_kernel
 
@@ -29,7 +31,30 @@ logger = logging.getLogger(__name__)
 
 
 class CovarDataset(Dataset):
-    def __init__(self, src, noise_var, mean_volume=None, mask=None, invert_data=False, apply_preprocessing=True):
+    """Dataset for covariance estimation with preprocessing and pose handling.
+
+    Attributes:
+        resolution: Image resolution
+        rot_vecs: Rotation vectors for each particle
+        offsets: Translation offsets for each particle
+        images: Particle images
+        filters: CTF filters for each particle
+        noise_var: Noise variance estimate
+        data_inverted: Whether data has been sign-inverted
+        _in_spatial_domain: Whether data is currently in spatial domain
+        dtype: Data type for tensors
+        mask: Volume mask for masking operations
+    """
+
+    def __init__(
+        self,
+        src: Union[ImageSource, ASPIREImageSource, SimulatedSource],
+        noise_var: float,
+        mean_volume: Optional[Volume] = None,
+        mask: Optional[Volume] = None,
+        invert_data: bool = False,
+        apply_preprocessing: bool = True,
+    ) -> None:
         if isinstance(src, ImageSource):
             self._init_from_source(src)
         else:
@@ -54,7 +79,12 @@ class CovarDataset(Dataset):
         self.dtype = self.images.dtype
         self.mask = torch.tensor(mask.asnumpy()) if mask is not None else None
 
-    def _init_from_source(self, source):
+    def _init_from_source(self, source: "ImageSource") -> None:
+        """Initialize dataset from ImageSource object.
+
+        Args:
+            source: ImageSource object containing particle data
+        """
         self.resolution = source.resolution
         # TODO: replace with non ASPIRE implemntation?
         self.rot_vecs = torch.tensor(Rotation(source.rotations.numpy()).as_rotvec(), dtype=source.rotations.dtype)
@@ -62,7 +92,12 @@ class CovarDataset(Dataset):
         self.images = source.images(torch.arange(0, len(source)))
         self.filters = source.get_ctf(torch.arange(0, len(source)))
 
-    def _init_from_aspire_source(self, source):
+    def _init_from_aspire_source(self, source: Any) -> None:
+        """Initialize dataset from ASPIRE source object.
+
+        Args:
+            source: ASPIRE source object containing particle data
+        """
         self.resolution = source.L
         self.rot_vecs = torch.tensor(Rotation(source.rotations).as_rotvec().astype(source.rotations.dtype))
         self.offsets = torch.tensor(source.offsets, dtype=self.rot_vecs.dtype)
@@ -78,13 +113,34 @@ class CovarDataset(Dataset):
 
         self.filters = unique_filters[filter_indices]
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of particles in the dataset.
+
+        Returns:
+            Number of particles
+        """
         return len(self.images)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        """Get a particle and its associated data by index.
+
+        Args:
+            idx: Particle index
+
+        Returns:
+            Tuple containing (image, rotation_points, filter, index)
+        """
         return self.images[idx], self.pts_rot[idx], self.filters[idx], idx
 
-    def compute_pts_rot(self, rotvecs):
+    def compute_pts_rot(self, rotvecs: torch.Tensor) -> torch.Tensor:
+        """Compute rotated grid points for given rotation vectors.
+
+        Args:
+            rotvecs: Rotation vectors of shape (N, 3)
+
+        Returns:
+            Rotated grid points of shape (N, 3, resolution^2)
+        """
         rotations = Rotation.from_rotvec(rotvecs.numpy())
         pts_rot = torch.tensor(rotated_grids(self.resolution, rotations.matrices).copy()).reshape(
             (3, rotvecs.shape[0], self.resolution**2)
@@ -96,7 +152,27 @@ class CovarDataset(Dataset):
 
         return pts_rot
 
-    def construct_mean_pose_modules(self, mean_volume, mask, rot_vecs, offsets, fourier_domain=False):
+    def construct_mean_pose_modules(
+        self,
+        mean_volume: Optional[Volume],
+        mask: Optional[Volume],
+        rot_vecs: torch.Tensor,
+        offsets: torch.Tensor,
+        fourier_domain: bool = False,
+    ) -> List[torch.nn.Module]:
+        """Construct mean and pose modules used for preprocessing (Substraction of projected mean
+        volume)
+
+        Args:
+            mean_volume: Mean volume for projection
+            mask: Volume mask for masking operations
+            rot_vecs: Rotation vectors for each particle
+            offsets: Translation offsets for each particle
+            fourier_domain: Whether to work in Fourier domain
+
+        Returns:
+            List of PyTorch modules for preprocessing
+        """
         L = self.resolution
         device = get_torch_device()
 
@@ -120,7 +196,21 @@ class CovarDataset(Dataset):
 
         return mean, pose, nufft_plan
 
-    def preprocess_from_modules(self, mean_module, pose_module, nufft_plan=None, batch_size=1024):
+    def preprocess_from_modules(
+        self,
+        mean_module: torch.nn.Module,
+        pose_module: torch.nn.Module,
+        nufft_plan: Optional[Union[NufftPlan, NufftPlanDiscretized]] = None,
+        batch_size: int = 1024,
+    ) -> None:
+        """Preprocess dataset using mean and pose modules.
+
+        Args:
+            mean_module: Module for mean volume projection
+            pose_module: Module for pose optimization
+            nufft_plan: NUFFT plan for projection operations
+            batch_size: Batch size for processing
+        """
         device = get_torch_device()
         mean_module = mean_module.to(device)
         pose_module = pose_module.to(device)
@@ -171,7 +261,15 @@ class CovarDataset(Dataset):
                 pbar.update(1)
             pbar.close()
 
-    def get_subset(self, idx):
+    def get_subset(self, idx: Iterable[int]) -> "CovarDataset":
+        """Get a subset of the dataset.
+
+        Args:
+            idx: Indices of the subset
+
+        Returns:
+            Subset of the dataset
+        """
         subset = self.copy()
         subset.images = subset.images[idx]
         subset.pts_rot = subset.pts_rot[idx]
@@ -181,7 +279,15 @@ class CovarDataset(Dataset):
 
         return subset
 
-    def half_split(self, permute=True):
+    def half_split(self, permute: bool = True) -> Tuple["CovarDataset", "CovarDataset", torch.Tensor]:
+        """Split the dataset into two halves.
+
+        Args:
+            permute: Whether to permute the dataset
+
+        Returns:
+            Two halves of the dataset and the permutation
+        """
         data_size = len(self)
         if permute:
             permutation = torch.randperm(data_size)
@@ -193,9 +299,17 @@ class CovarDataset(Dataset):
 
         return ds1, ds2, permutation
 
-    def get_total_gain(self, batch_size=1024, device=None):
+    def get_total_gain(self, batch_size: int = 1024, device: Optional[torch.device] = None) -> torch.Tensor:
         """Returns a 3D tensor represntaing the total gain of each frequency observed by the dataset
-        = diag(sum(P_i^T P_i))"""
+        = diag(sum(P_i^T P_i))
+
+        Args:
+            batch_size: Batch size for processing
+            device: Device to use
+
+        Returns:
+            Total gain tensor
+        """
         L = self.resolution
         upsample_factor = 1
         nufft_plan = NufftPlanDiscretized(
@@ -221,9 +335,19 @@ class CovarDataset(Dataset):
 
         return gain_tensor
 
-    def get_total_covar_gain(self, batch_size=None, device=None):
+    def get_total_covar_gain(
+        self, batch_size: Optional[int] = None, device: Optional[torch.device] = None
+    ) -> torch.Tensor:
         """Returns a 2D tensor represnting the total gain of each frequency pair in the covariance
-        least squares problem."""
+        least squares problem.
+
+        Args:
+            batch_size: Batch size for processing
+            device: Device to use
+
+        Returns:
+            Total covariance gain tensor
+        """
 
         L = self.resolution
         upsample_factor = 1
@@ -294,7 +418,13 @@ class CovarDataset(Dataset):
             self.noise_var /= self.resolution**2
             self._in_spatial_domain = True
 
-    def estimate_signal_var(self, support_radius=None, batch_size=512):
+    def estimate_signal_var(self, support_radius: Optional[float] = None, batch_size: int = 512) -> None:
+        """Estimate signal variance from the dataset.
+
+        Args:
+            support_radius: Radius for support region
+            batch_size: Batch size for processing
+        """
         # Estimates the signal variance per pixel
         mask = torch.tensor(support_mask(self.resolution, support_radius))
         mask_size = torch.sum(mask)
@@ -315,7 +445,7 @@ class CovarDataset(Dataset):
         )
         self.signal_var = sum_over_shell(self.signal_rpsd, self.resolution, 2).item()
 
-    def _get_images_for_signal_var(self, start_idx, batch_size):
+    def _get_images_for_signal_var(self, start_idx: int, batch_size: int) -> torch.Tensor:
         """Helper method to get images for signal variance estimation.
 
         Subclasses can override this to provide different image access patterns.
@@ -323,7 +453,12 @@ class CovarDataset(Dataset):
         end_idx = min(start_idx + batch_size, len(self))
         return self.images[start_idx:end_idx]
 
-    def estimate_filters_gain(self, batch_size=1024):
+    def estimate_filters_gain(self, batch_size: int = 1024) -> None:
+        """Estimate gain factors for CTF filters.
+
+        Args:
+            batch_size: Batch size for processing
+        """
 
         average_filters_gain_spectrum = torch.zeros((self.resolution, self.resolution))
         for i in range(0, len(self), batch_size):
@@ -337,7 +472,7 @@ class CovarDataset(Dataset):
         self.filters_gain = estimated_filters_gain
         self.radial_filters_gain = radial_filters_gain
 
-    def _get_filters_for_filters_gain(self, start_idx, batch_size):
+    def _get_filters_for_filters_gain(self, start_idx: int, batch_size: int) -> torch.Tensor:
         """Helper method to get filters for filter gain estimation.
 
         Subclasses can override this to provide different CTF access patterns.
@@ -345,7 +480,7 @@ class CovarDataset(Dataset):
         end_idx = min(start_idx + batch_size, len(self))
         return self.filters[start_idx:end_idx]
 
-    def update_pose(self, pose_module: PoseModule, batch_size: int = 1024):
+    def update_pose(self, pose_module: PoseModule, batch_size: int = 1024) -> None:
         """Updates dataset's particle pose information from a given PoseModule.
 
         Args:
@@ -593,7 +728,16 @@ class LazyCovarDataset(CovarDataset):
 
 
 class BatchIndexSampler(torch.utils.data.Sampler):
-    def __init__(self, data_size, batch_size, shuffle=True, idx=None):
+    """Custom sampler for batching indices with optional shuffling.
+
+    Attributes:
+        data_size: Total number of data points
+        batch_size: Size of each batch
+        shuffle: Whether to shuffle indices
+        idx: List of indices to sample from
+    """
+
+    def __init__(self, data_size: int, batch_size: int, shuffle: bool = True, idx: Optional[List[int]] = None) -> None:
         self.data_size = data_size
         self.batch_size = batch_size
         self.shuffle = shuffle
@@ -605,19 +749,50 @@ class BatchIndexSampler(torch.utils.data.Sampler):
             random.shuffle(idx)
         self.idx = torch.tensor(idx)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[torch.Tensor]:
+        """Iterate over batches of indices.
+
+        Yields:
+            Batches of indices as tensors
+        """
         for i in range(0, self.data_size, self.batch_size):
             yield self.idx[i : i + self.batch_size]
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of batches.
+
+        Returns:
+            Number of batches
+        """
         return (self.data_size + self.batch_size - 1) // self.batch_size
 
 
-def identity_collate(batch):
+def identity_collate(batch: List[Any]) -> List[Any]:
+    """Identity collate function that returns batch as-is.
+
+    Args:
+        batch: List of items to collate
+
+    Returns:
+        Same list of items
+    """
     return batch
 
 
-def create_dataloader(dataset, batch_size, idx=None, **dataloader_kwargs):
+def create_dataloader(
+    dataset: torch.utils.data.Dataset, batch_size: int, idx: Optional[List[int]] = None, **dataloader_kwargs: Any
+) -> torch.utils.data.DataLoader:
+    """Create a DataLoader with custom batch sampling.
+
+    Args:
+        dataset: Dataset to create loader for
+        batch_size: Size of each batch
+        idx: Optional list of indices to sample from
+        **dataloader_kwargs: Additional arguments for DataLoader
+
+    Returns:
+        Configured DataLoader instance
+    """
     sampler = dataloader_kwargs.pop("sampler", None)
 
     if sampler is None:

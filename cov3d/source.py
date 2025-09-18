@@ -1,6 +1,7 @@
 import os
 import pickle
 from copy import deepcopy
+from typing import Optional, Tuple, Union
 
 import torch
 from cryodrgn.ctf import compute_ctf, load_ctf_for_training
@@ -11,7 +12,47 @@ from cov3d.projection_funcs import centered_fft2, centered_ifft2
 
 
 class ImageSource:
-    def __init__(self, particles_path, ctf_path=None, poses_path=None, indices=None, apply_preprocessing=True):
+    """Image source for cryo-EM particle images with CTF and pose information.
+
+    Provides access to particle images along with their corresponding CTF parameters,
+    rotations, and translations. Supports preprocessing including whitening and normalization.
+    Uses cryoDRGN image source under the hood to read particle images and associated data.
+
+    Attributes:
+        particles_path: Path to particle images file
+        ctf_path: Path to CTF parameters file
+        poses_path: Path to poses file
+        device: Device for computations
+        image_source: CryoDRGN image source
+        dtype: Data type for tensors
+        ctf_params: CTF parameters for each particle
+        freq_lattice: Frequency lattice for CTF computation
+        indices: Indices of particles to use
+        rotations: Rotation matrices for each particle
+        offsets: Translation offsets for each particle
+        apply_preprocessing: Whether to apply preprocessing
+        whitening_filter: Whitening filter for noise reduction
+        offset_normalization: Per-image offset normalization
+        scale_normalization: Per-image scale normalization
+    """
+
+    def __init__(
+        self,
+        particles_path: str,
+        ctf_path: Optional[str] = None,
+        poses_path: Optional[str] = None,
+        indices: Optional[torch.Tensor] = None,
+        apply_preprocessing: bool = True,
+    ) -> None:
+        """Initialize ImageSource.
+
+        Args:
+            particles_path: Path to particle images file
+            ctf_path: Path to CTF parameters file (optional)
+            poses_path: Path to poses file (optional)
+            indices: Indices of particles to use (optional)
+            apply_preprocessing: Whether to apply preprocessing (default: True)
+        """
         self.particles_path = particles_path
         self.device = torch.device("cpu")
         self.image_source = CryoDRGNImageSource.from_file(self.particles_path, indices=indices)
@@ -63,14 +104,31 @@ class ImageSource:
             self._preprocess_images()
 
     @property
-    def resolution(self):
+    def resolution(self) -> int:
+        """Get image resolution.
+
+        Returns:
+            Image resolution
+        """
         return self.image_source.D
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Get number of particles.
+
+        Returns:
+            Number of particles
+        """
         return self.image_source.n
 
-    def to(self, device):
-        """Move the ImageSource to the specified device (CPU/GPU)"""
+    def to(self, device: Union[torch.device, str, None]) -> "ImageSource":
+        """Move the ImageSource to the specified device (CPU/GPU).
+
+        Args:
+            device: Target device
+
+        Returns:
+            Self for method chaining
+        """
         if device is None:
             device = torch.device("cpu")
 
@@ -88,7 +146,15 @@ class ImageSource:
 
         return self
 
-    def get_ctf(self, index):
+    def get_ctf(self, index: Union[int, torch.Tensor]) -> torch.Tensor:
+        """Get CTF for given particle indices.
+
+        Args:
+            index: Particle index or indices
+
+        Returns:
+            CTF values
+        """
         ctf_params = self.ctf_params[index]
         freq_lattice = self.freq_lattice / ctf_params[:, 0].view(-1, 1, 1)
         ctf = compute_ctf(freq_lattice, *torch.split(ctf_params[:, 1:], 1, 1)).reshape(
@@ -97,7 +163,16 @@ class ImageSource:
 
         return ctf if not self.apply_preprocessing else ctf * self.whitening_filter
 
-    def images(self, index, fourier=False):
+    def images(self, index: Union[int, torch.Tensor], fourier: bool = False) -> torch.Tensor:
+        """Get particle images for given indices.
+
+        Args:
+            index: Particle index or indices
+            fourier: Whether to return in Fourier domain (default: False)
+
+        Returns:
+            Particle images
+        """
         images = self.image_source.images(index)
         images = images.to(self.device)
         if not self.apply_preprocessing and not fourier:
@@ -117,17 +192,30 @@ class ImageSource:
 
         return images
 
-    def __getitem__(self, index):
+    def __getitem__(
+        self, index: Union[int, torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Get particle data for given index.
+
+        Args:
+            index: Particle index
+
+        Returns:
+            Tuple of (images, ctf, rotations, offsets)
+        """
         return self.images(index), self.get_ctf(index), self.rotations[index], self.offsets[index]
 
-    def _preprocess_images(self, batch_size=1024):
-        """
+    def _preprocess_images(self, batch_size: int = 1024) -> None:
+        """Preprocess images with whitening and normalization.
+
         Whitens images by estimating the noise PSD and apply it as a filter on all images.
-        Additionally each image is normalized indivudally to have N(0,1) background noise.
+        Additionally each image is normalized individually to have N(0,1) background noise.
         Implementation is based on ASPIRE:
             https://github.com/ComputationalCryoEM/ASPIRE-Python/blob/main/src/aspire/noise/noise.py#L333
             https://github.com/ComputationalCryoEM/ASPIRE-Python/blob/main/src/aspire/image/image.py#L27
 
+        Args:
+            batch_size: Batch size for processing (default: 1024)
         """
         mask = (torch.norm(self.freq_lattice, dim=1) >= 0.5).reshape(self.resolution, self.resolution)
         n = len(self)
@@ -158,7 +246,15 @@ class ImageSource:
             self.offset_normalization[idx] = mean
             self.scale_normalization[idx] = std
 
-    def estimate_noise_var(self, batch_size=1024):
+    def estimate_noise_var(self, batch_size: int = 1024) -> float:
+        """Estimate noise variance from images.
+
+        Args:
+            batch_size: Batch size for processing (default: 1024)
+
+        Returns:
+            Estimated noise variance
+        """
         mask = (torch.norm(self.freq_lattice, dim=1) >= 0.5).reshape(self.resolution, self.resolution)
         n = len(self)
         first_moment = 0
@@ -175,7 +271,15 @@ class ImageSource:
         second_moment /= torch.sum(mask) * n
         return second_moment - first_moment**2
 
-    def get_subset(self, idx):
+    def get_subset(self, idx: Union[int, torch.Tensor]) -> "ImageSource":
+        """Get subset of particles.
+
+        Args:
+            idx: Indices of particles to include
+
+        Returns:
+            New ImageSource with subset of particles
+        """
         subset = deepcopy(self)
         subset.indices = subset.indices[idx]
         subset.image_source = CryoDRGNImageSource.from_file(subset.particles_path, indices=subset.indices)
@@ -188,5 +292,10 @@ class ImageSource:
 
         return subset
 
-    def get_paths(self):
+    def get_paths(self) -> Tuple[str, str, str]:
+        """Get file paths.
+
+        Returns:
+            Tuple of (particles_path, ctf_path, poses_path)
+        """
         return self.particles_path, self.ctf_path, self.poses_path

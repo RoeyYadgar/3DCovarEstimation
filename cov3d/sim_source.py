@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle
+from typing import List, Optional
 
 import mrcfile
 import numpy as np
@@ -23,7 +24,40 @@ logger = logging.getLogger(__name__)
 
 
 class SimulatedSource:
-    def __init__(self, n, vols, noise_var, whiten=True, unique_filters=None, rotations_std=0, offsets_std=0):
+    """Simulated source for generating synthetic cryo-EM heterogeneity dataset. Uses the same
+    interface as ASPIRE ImageSource needed to be consumed by CovarDataset.
+
+    Attributes:
+        n: Number of particles to generate
+        L: Image resolution
+        num_vols: Number of volumes
+        vols: Volume data
+        whiten: Whether to whiten the images
+        _unique_filters: List of unique CTF filters
+        rotations_std: Standard deviation for rotation noise
+        offsets_std: Standard deviation for offset noise
+        _clean_images: Clean images without noise
+        _noise_var: Noise variance
+        _image_noise: Noise tensor
+        offsets: Translation offsets
+        amplitudes: Amplitude scaling factors
+        states: Volume state assignments
+        filter_indices: Filter index assignments
+        rotations: Rotation matrices
+        _rotations: Original rotation matrices without noise
+        _offsets: Original offsets without noise
+    """
+
+    def __init__(
+        self,
+        n: int,
+        vols: Volume,
+        noise_var: float,
+        whiten: bool = True,
+        unique_filters: Optional[List] = None,
+        rotations_std: float = 0,
+        offsets_std: float = 0,
+    ) -> None:
         self.n = n
         self.L = vols.shape[-1]
         self.num_vols = vols.shape[0]
@@ -38,18 +72,33 @@ class SimulatedSource:
         self.noise_var = noise_var
 
     @property
-    def noise_var(self):
+    def noise_var(self) -> float:
+        """Get effective noise variance.
+
+        Returns:
+            Noise variance (1.0 if whitened, actual value otherwise)
+        """
         return self._noise_var if (not self.whiten) else 1
 
     @noise_var.setter
-    def noise_var(self, noise_var):
+    def noise_var(self, noise_var: float) -> None:
+        """Set noise variance and generate corresponding noise.
+
+        Args:
+            noise_var: Noise variance value
+        """
         self._noise_var = noise_var
         self._image_noise = torch.randn(
             (self.n, self.L, self.L), dtype=self._clean_images.dtype, device=self._clean_images.device
         ) * (self._noise_var**0.5)
 
     @property
-    def images(self):
+    def images(self) -> Image:
+        """Get noisy images with optional whitening.
+
+        Returns:
+            ASPIRE Image object containing noisy particle images
+        """
         images = self._clean_images + self._image_noise
         if self.whiten:
             images /= (self._noise_var) ** 0.5
@@ -57,16 +106,38 @@ class SimulatedSource:
         return Image(images.numpy())
 
     @property
-    def unique_filters(self):
+    def unique_filters(self) -> List:
+        """Get unique filters with whitening applied.
+
+        Returns:
+            List of filters with whitening filter applied
+        """
         whiten_filter = ScalarFilter(dim=2, value=self._noise_var ** (-0.5))
         return [MultiplicativeFilter(filt, whiten_filter) for filt in self._unique_filters]
 
-    def noisify_rotations(self, rots, noise_std):
+    def noisify_rotations(self, rots: np.ndarray, noise_std: float) -> np.ndarray:
+        """Add noise to rotation matrices.
+
+        Args:
+            rots: Input rotation matrices
+            noise_std: Standard deviation of rotation noise
+
+        Returns:
+            Noisy rotation matrices
+        """
         noisy_rots = Rotation.from_matrix(rots).as_rotvec()
         noisy_rots += noise_std * np.random.randn(*noisy_rots.shape)
         return Rotation.from_rotvec(noisy_rots).matrices.astype(rots.dtype)
 
-    def _gen_clean_images(self, batch_size=1024):
+    def _gen_clean_images(self, batch_size: int = 1024) -> torch.Tensor:
+        """Generate clean images by projecting volumes.
+
+        Args:
+            batch_size: Batch size for processing
+
+        Returns:
+            Clean images tensor
+        """
         clean_images = torch.zeros((self.n, self.L, self.L))
         self._offsets = torch.zeros((self.n, 2))  # TODO: create non-zero gt offsets
         self.offsets = self._offsets + self.L * self.offsets_std * np.random.randn(self.n, 2)
@@ -122,9 +193,25 @@ class SimulatedSource:
 
         return full_ctf
 
-    def save(self, output_dir, file_prefix=None, save_image_stack=True, gt_pose=False, whiten=False):
+    def save(
+        self,
+        output_dir: str,
+        file_prefix: Optional[str] = None,
+        save_image_stack: bool = True,
+        gt_pose: bool = False,
+        whiten: bool = False,
+    ) -> None:
+        """Save simulated data to files.
 
-        def add_prefix(filename):
+        Args:
+            output_dir: Output directory for saved files
+            file_prefix: Optional prefix for filenames
+            save_image_stack: Whether to save image stack
+            gt_pose: Whether to use ground truth poses
+            whiten: Whether to apply whitening
+        """
+
+        def add_prefix(filename: str) -> str:
             return f"{file_prefix}_{filename}" if file_prefix is not None else filename
 
         mrcs_output = os.path.join(output_dir, add_prefix("particles.mrcs"))
@@ -156,7 +243,15 @@ class SimulatedSource:
             pickle.dump(self._ctf_cryodrgn_format(), f)
 
 
-def display_source(source, output_path, num_ims=2, display_clean=False):
+def display_source(source: SimulatedSource, output_path: str, num_ims: int = 2, display_clean: bool = False) -> None:
+    """Display sample images from the simulated source.
+
+    Args:
+        source: SimulatedSource instance
+        output_path: Path to save the display image
+        num_ims: Number of images to display per distinct volume
+        display_clean: Whether to display clean or noisy images
+    """
     num_vols = len(np.unique(source.states))
     fig, axs = plt.subplots(num_ims, num_vols, figsize=(2 * num_vols, 2 * num_ims))
     fig.subplots_adjust(wspace=0.05, hspace=0.05)
@@ -177,7 +272,15 @@ def display_source(source, output_path, num_ims=2, display_clean=False):
     fig.savefig(output_path, bbox_inches="tight", pad_inches=0.1)
 
 
-def replicate_source(source):
+def replicate_source(source: SimulatedSource) -> SimulatedSource:
+    """Replicate a simulated source by doubling all data.
+
+    Args:
+        source: SimulatedSource instance to replicate
+
+    Returns:
+        Modified source with doubled data
+    """
     source.rotations = np.tile(source.rotations, (2, 1, 1))
     source.filter_indices = np.tile(source.filter_indices, (2))
     source.states = torch.tile(source.states, (2,))

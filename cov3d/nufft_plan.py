@@ -1,6 +1,7 @@
 import logging
 import math
 from abc import ABC
+from typing import Any, Tuple, Union
 
 import numpy as np
 import torch
@@ -11,16 +12,17 @@ from finufft import Plan
 logger = logging.getLogger(__name__)
 
 
-def get_half_fourier_grid(points, dim):
+def get_half_fourier_grid(points: torch.Tensor, dim: Tuple[int, int]) -> torch.Tensor:
     """Converts a 2d rotated grid of points in fourier space into half a grid that represents only
     positive frequencies in the first dimension. This is used to reduce number of points to compute
     in  NUFFT since real signals have conjugate symmetry in fourier space.
 
     Args:
-        points (torch.Tensor) : Batch of 2d rotated grids of size (a,...,b,L,L,c,...,d)
-        dim (int) : Two tuple of dimensions of the actual grid (For example for shape (a,b,c,L,L) dim=(3,4))
+        points: Batch of 2d rotated grids of size (a,...,b,L,L,c,...,d)
+        dim: Two tuple of dimensions of the actual grid (For example for shape (a,b,c,L,L) dim=(3,4))
+
     Returns:
-        half_points (torch.Tensor) : Batch of 2d rotated half-grids of size (a,...,b,L/2,L,c,...,d)
+        Batch of 2d rotated half-grids of size (a,...,b,L/2,L,c,...,d)
     """
     L = points.shape[dim[0]]
     indices = [slice(None)] * points.ndim
@@ -33,23 +35,52 @@ def get_half_fourier_grid(points, dim):
 
 
 class BaseNufftPlan(ABC):
+    """Abstract base class for NUFFT plans.
 
-    def setpts(self, points):
+    Defines the interface for NUFFT (Non-Uniform Fast Fourier Transform) plans used for volume
+    projections.
+    """
+
+    def setpts(self, points: torch.Tensor) -> None:
+        """Set the points for NUFFT computation.
+
+        Args:
+            points: Point coordinates for NUFFT
+        """
         raise NotImplementedError
 
-    def execute_forward(self, volume):
+    def execute_forward(self, volume: torch.Tensor) -> torch.Tensor:
+        """Execute forward NUFFT.
+
+        Args:
+            volume: Input volume
+
+        Returns:
+            Forward NUFFT result
+        """
         raise NotImplementedError
 
 
 class NufftPlanDiscretized(BaseNufftPlan):
-    """Discretized version of the NUFFT operator (specifficaly for the usage of the projection
-    operator and not general case of NUFFT).
+    """Discretized version of the NUFFT operator.
 
-    Uses pytorch's `grid_sample` function to interpolate from the fourier tranform of the given volume.
+    Specifically designed for volume projection operators rather than general NUFFT usage.
+    Uses PyTorch's `grid_sample` function to interpolate from the Fourier transform of the given volume.
     Assumes input volume is already given in frequency domain.
+
+    Attributes:
+        sz: Size of the volume
+        upsample_factor: Upsampling factor for interpolation
+        mode: Interpolation mode for grid_sample
+        use_half_grid: Whether to use half-grid optimization
+        points_L: Resolution of the point grid
+        points: Transformed point coordinates
+        batch_points: Number of batch points
     """
 
-    def __init__(self, sz, upsample_factor=1, mode="bilinear", use_half_grid=False):
+    def __init__(
+        self, sz: Tuple[int, ...], upsample_factor: int = 1, mode: str = "bilinear", use_half_grid: bool = False
+    ) -> None:
         # TODO: fix issue with use_half_grid and cropped nufft points
         assert not use_half_grid, "half_grid not supported with NufftPlanDiscretized"
         self.sz = sz
@@ -57,9 +88,11 @@ class NufftPlanDiscretized(BaseNufftPlan):
         self.mode = mode
         self.use_half_grid = use_half_grid
 
-    def setpts(self, points):
-        """
-        points - (N,3,L**2)
+    def setpts(self, points: torch.Tensor) -> None:
+        """Set points for discretized NUFFT computation.
+
+        Args:
+            points: Point coordinates of shape (N, 3, L**2)
         """
         L = self.sz[0]
 
@@ -81,9 +114,16 @@ class NufftPlanDiscretized(BaseNufftPlan):
 
         self.batch_points = self.points.shape[1]
 
-    def execute_forward(self, volume):
-        """Assumes volume is given in fourier domain with shape (N,L,L,L) either as complex tensor
-        or as tuple pair of real and imag tensors."""
+    def execute_forward(self, volume: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
+        """Execute forward NUFFT using grid sampling.
+
+        Args:
+            volume: Volume in Fourier domain with shape (N,L,L,L) either as complex tensor
+                   or as tuple pair of real and imaginary tensors
+
+        Returns:
+            Forward NUFFT result
+        """
         L = self.points_L
         # For some reason grid_sample does not support complex data. Instead the real andimaginary
         # parts are splitted into different 'channels'
@@ -200,7 +240,32 @@ class NufftPlanDiscretized(BaseNufftPlan):
 
 
 class NufftPlan(BaseNufftPlan):
-    def __init__(self, sz, batch_size=1, eps=1e-6, dtype=torch.float32, device=torch.device("cpu"), **kwargs):
+    """NUFFT plan using FINUFFT/cuFINUFFT libraries.
+
+    Provides CPU and GPU implementations of non-uniform FFT for volume projections.
+
+    Attributes:
+        sz: Size of the volume
+        batch_size: Batch size for computation
+        device: Device for computation (CPU or GPU)
+        dtype: Data type for real numbers
+        complex_dtype: Data type for complex numbers
+        forward_plan: FINUFFT plan for forward transform
+        adjoint_plan: FINUFFT plan for adjoint transform
+        points_N: Number of point sets
+        points_L: Resolution of point grid
+        points: Point coordinates
+    """
+
+    def __init__(
+        self,
+        sz: Tuple[int, ...],
+        batch_size: int = 1,
+        eps: float = 1e-6,
+        dtype: torch.dtype = torch.float32,
+        device: torch.device = torch.device("cpu"),
+        **kwargs: Any,
+    ) -> None:
         self.sz = sz
         self.batch_size = batch_size
         self.device = device
@@ -247,9 +312,11 @@ class NufftPlan(BaseNufftPlan):
                 **default_kwargs,
             )
 
-    def setpts(self, points):
-        """
-        points - (N,3,L**2)
+    def setpts(self, points: torch.Tensor) -> None:
+        """Set points for NUFFT computation.
+
+        Args:
+            points: Point coordinates of shape (N, 3, L**2)
         """
         self.points_N = points.shape[0]
         self.points_L = int(points.shape[-1] ** 0.5)
@@ -265,7 +332,15 @@ class NufftPlan(BaseNufftPlan):
         self.forward_plan.setpts(*points)
         self.adjoint_plan.setpts(*points)
 
-    def execute_forward(self, signal):
+    def execute_forward(self, signal: torch.Tensor) -> torch.Tensor:
+        """Execute forward NUFFT.
+
+        Args:
+            signal: Input signal tensor
+
+        Returns:
+            Forward NUFFT result
+        """
         zero_pad = False
         if signal.shape[0] < self.batch_size:
             logger.warning("Signal batch size is smaller than the nufft plan batch size. Padding with zeros")
@@ -285,7 +360,15 @@ class NufftPlan(BaseNufftPlan):
             forward_signal = torch.from_numpy(forward_signal)
         return forward_signal.reshape((self.batch_size, self.points_N, self.points_L, self.points_L))
 
-    def execute_adjoint(self, signal):
+    def execute_adjoint(self, signal: torch.Tensor) -> torch.Tensor:
+        """Execute adjoint NUFFT.
+
+        Args:
+            signal: Input signal tensor
+
+        Returns:
+            Adjoint NUFFT result
+        """
         zero_pad = False
         if signal.shape[0] < self.batch_size:
             logger.warning("Signal batch size is smaller than the nufft plan batch size. Padding with zeros")
@@ -307,8 +390,12 @@ class NufftPlan(BaseNufftPlan):
 
 
 class TorchNufftForward(torch.autograd.Function):
+    """PyTorch autograd function for forward NUFFT with gradient support."""
+
     @staticmethod
-    def forward(ctx, signal, points, nufft_plan, reset_pts=False):
+    def forward(
+        ctx: Any, signal: torch.Tensor, points: torch.Tensor, nufft_plan: Any, reset_pts: bool = False
+    ) -> torch.Tensor:
         if reset_pts:
             nufft_plan.setpts(points)
         # Otherwise assumes nufft_plan.setpts was already called prior
@@ -346,8 +433,10 @@ class TorchNufftForward(torch.autograd.Function):
 
 
 class TorchNufftAdjoint(torch.autograd.Function):
+    """PyTorch autograd function for adjoint NUFFT with gradient support."""
+
     @staticmethod
-    def forward(ctx, signal, nufft_plan):
+    def forward(ctx: Any, signal: torch.Tensor, nufft_plan: Any) -> torch.Tensor:
         ctx.signal_shape = signal.shape
         ctx.nufft_plan = nufft_plan
         ctx.complex_input = signal.is_complex()
@@ -362,7 +451,16 @@ class TorchNufftAdjoint(torch.autograd.Function):
         return signal_grad, None
 
 
-def nufft_forward(signal, nufft_plan):
+def nufft_forward(signal: torch.Tensor, nufft_plan: BaseNufftPlan) -> torch.Tensor:
+    """Execute forward NUFFT with autograd support.
+
+    Args:
+        signal: Input signal tensor
+        nufft_plan: NUFFT plan instance
+
+    Returns:
+        Forward NUFFT result
+    """
     return (
         TorchNufftForward.apply(signal, nufft_plan.points, nufft_plan)
         if isinstance(nufft_plan, NufftPlan)
@@ -370,7 +468,16 @@ def nufft_forward(signal, nufft_plan):
     )  # NufftPlan.execute_forward does not have autograd and so we must pass it into the autograd class
 
 
-def nufft_adjoint(signal, nufft_plan):
+def nufft_adjoint(signal: torch.Tensor, nufft_plan: BaseNufftPlan) -> torch.Tensor:
+    """Execute adjoint NUFFT with autograd support.
+
+    Args:
+        signal: Input signal tensor
+        nufft_plan: NUFFT plan instance
+
+    Returns:
+        Adjoint NUFFT result
+    """
     return (
         TorchNufftAdjoint.apply(signal, nufft_plan)
         if isinstance(nufft_plan, NufftPlan)

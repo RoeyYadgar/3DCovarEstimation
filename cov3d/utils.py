@@ -3,13 +3,12 @@ import multiprocessing
 import os
 import pickle
 import re
+from typing import Any, List, Optional, Tuple, Union
 
 import aspire
 import numpy as np
 import pandas as pd
 import torch
-from aspire.basis import FFBBasis3D
-from aspire.reconstruction import MeanEstimator
 from aspire.storage.starfile import StarFile
 from aspire.utils import coor_trans, grid_2d, grid_3d
 from aspire.volume import Volume
@@ -22,8 +21,17 @@ from cov3d.wiener_coords import mahalanobis_distance, mahalanobis_threshold
 logger = logging.getLogger(__name__)
 
 
-def generateBallVoxel(center, radius, L):
+def generateBallVoxel(center: Tuple[float, float, float], radius: float, L: int) -> np.ndarray:
+    """Generate a ball-shaped voxel.
 
+    Args:
+        center: Center coordinates (x, y, z)
+        radius: Radius of the ball
+        L: Volume resolution
+
+    Returns:
+        Ball voxel as flattened array of shape (1, L^3)
+    """
     grid = coor_trans.grid_3d(L)
     voxel = ((grid["x"] - center[0]) ** 2 + (grid["y"] - center[1]) ** 2 + (grid["z"] - center[2]) ** 2) <= np.power(
         radius, 2
@@ -32,8 +40,18 @@ def generateBallVoxel(center, radius, L):
     return np.single(voxel.reshape((1, L**3)))
 
 
-def generateCylinderVoxel(center, radius, L, axis=2):
+def generateCylinderVoxel(center: Tuple[float, float], radius: float, L: int, axis: int = 2) -> np.ndarray:
+    """Generate a cylinder-shaped voxel.
 
+    Args:
+        center: Center coordinates in the cylinder plane
+        radius: Radius of the cylinder
+        L: Volume resolution
+        axis: Axis along which the cylinder extends (0=x, 1=y, 2=z)
+
+    Returns:
+        Cylinder voxel as flattened array of shape (1, L^3)
+    """
     grid = coor_trans.grid_3d(L)
     dims = ("x", "y", "z")
     cylinder_axes = tuple(dims[i] for i in range(3) if i != axis)
@@ -44,12 +62,37 @@ def generateCylinderVoxel(center, radius, L, axis=2):
     return np.single(voxel.reshape((1, L**3)))
 
 
-def replicateVoxelSign(voxels):
+def replicateVoxelSign(voxels: Volume) -> Volume:
+    """Replicate volumes with sign flipped versions.
 
+    Args:
+        voxels: Input volumes
+
+    Returns:
+        Volume with both original and sign-flipped versions
+    """
     return Volume(np.concatenate((voxels.asnumpy(), -voxels.asnumpy()), axis=0))
 
 
-def volsCovarEigenvec(vols, eigenval_threshold=1e-3, randomized_alg=False, max_eigennum=None, weights=None):
+def volsCovarEigenvec(
+    vols: Union[Volume, np.ndarray],
+    eigenval_threshold: float = 1e-3,
+    randomized_alg: bool = False,
+    max_eigennum: Optional[int] = None,
+    weights: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Compute covariance eigenvectors from volumes.
+
+    Args:
+        vols: Input volumes
+        eigenval_threshold: Threshold for eigenvalue selection
+        randomized_alg: Whether to use randomized SVD algorithm
+        max_eigennum: Maximum number of eigenvectors (for randomized algorithm)
+        weights: Optional weights for volumes
+
+    Returns:
+        Eigenvectors scaled by square root of eigenvalues
+    """
     vols_num = vols.shape[0]
     if weights is None:  # If
         vols_dist = np.ones(vols_num) / vols_num
@@ -188,11 +231,22 @@ def get_complex_real_dtype(dtype):
     return dtype_mapping[dtype]
 
 
-def get_torch_device():
+def get_torch_device() -> torch.device:
+    """Get the current PyTorch device (GPU if available, otherwise CPU).
+
+    Returns:
+        PyTorch device object
+    """
     return torch.device(f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu")
 
 
-def appendCSV(dataframe, csv_file):
+def appendCSV(dataframe: Any, csv_file: str) -> None:
+    """Append a dataframe to a CSV file.
+
+    Args:
+        dataframe: DataFrame to append
+        csv_file: Path to CSV file
+    """
     if os.path.isfile(csv_file):
         current_dataframe = pd.read_csv(csv_file, index_col=0)
         updated_dataframe = pd.concat([current_dataframe, dataframe], ignore_index=True)
@@ -202,7 +256,23 @@ def appendCSV(dataframe, csv_file):
         dataframe.to_csv(csv_file)
 
 
-def soft_edged_kernel(radius, L, dim, radius_backoff=2, in_fourier=False):
+def soft_edged_kernel(
+    radius: float, L: int, dim: int, radius_backoff: int = 2, in_fourier: bool = False
+) -> torch.Tensor:
+    """Create a soft-edged kernel in real or Fourier space.
+
+    Implementation based on RECOVAR: https://github.com/ma-gilles/recovar/blob/main/recovar/mask.py#L106
+
+    Args:
+        radius: Radius of the kernel
+        L: Box size (assumed square/cubic)
+        dim: Dimension (2 or 3)
+        radius_backoff: Soft edge width (default: 2)
+        in_fourier: Whether to create kernel in Fourier space (default: False)
+
+    Returns:
+        Soft-edged kernel tensor
+    """
     # Implementation is based on RECOVAR https://github.com/ma-gilles/recovar/blob/main/recovar/mask.py#L106
     if radius < 3:
         radius = 3
@@ -231,18 +301,41 @@ def soft_edged_kernel(radius, L, dim, radius_backoff=2, in_fourier=False):
     return kernel
 
 
-def meanCTFPSD(ctfs, L):
+def meanCTFPSD(ctfs: List[Any], L: int) -> np.ndarray:
+    """Compute mean CTF power spectral density.
+
+    Args:
+        ctfs: List of CTF objects
+        L: Grid size
+
+    Returns:
+        Mean PSD array
+    """
     ctfs_eval_grid = [np.power(ctf.evaluate_grid(L), 2) for ctf in ctfs]
     return np.mean(np.array(ctfs_eval_grid), axis=0)
 
 
-def sub_starfile(star_input, star_output, mrcs_index):
+def sub_starfile(star_input: str, star_output: str, mrcs_index: Any) -> None:
+    """Create a subset of a star file based on given indices.
+
+    Args:
+        star_input: Input star file path
+        star_output: Output star file path
+        mrcs_index: Indices to subset
+    """
     star_out = StarFile(star_input)
     star_out["particles"] = pd.DataFrame(star_out["particles"]).iloc[mrcs_index].to_dict(orient="list")
     star_out.write(star_output)
 
 
-def mrcs_replace_starfile(star_input, star_output, mrcs_name):
+def mrcs_replace_starfile(star_input: str, star_output: str, mrcs_name: str) -> None:
+    """Replace MRCS file name in star file.
+
+    Args:
+        star_input: Input star file path
+        star_output: Output star file path
+        mrcs_name: New MRCS file name
+    """
     star_out = StarFile(star_input)
     star_out["particles"]["_rlnImageName"] = [
         re.sub(r"@[^@]+", f"@{mrcs_name}", s) for s in star_out["particles"]["_rlnImageName"]
@@ -250,17 +343,19 @@ def mrcs_replace_starfile(star_input, star_output, mrcs_name):
     star_out.write(star_output)
 
 
-def estimateMean(source, basis=None):
-    if basis is None:
-        L = source.L
-        basis = FFBBasis3D((L, L, L))
-    mean_estimator = MeanEstimator(source, basis=basis)
-    mean_est = mean_estimator.estimate()
+def vol_fsc(vol1: Union[torch.Tensor, Any], vol2: Union[torch.Tensor, Any]) -> Any:
+    """Compute Fourier Shell Correlation between two volumes.
 
-    return mean_est
+    Args:
+        vol1: First volume
+        vol2: Second volume
 
+    Returns:
+        FSC values
 
-def vol_fsc(vol1, vol2):
+    Raises:
+        Exception: If volumes are not of the same type
+    """
     if not isinstance(vol2, type(vol1)):
         raise Exception(
             f"Volumes of the same type expected vol1 is of type {type(vol1)} while vol2 is of type {type(vol2)}"
@@ -277,7 +372,12 @@ def vol_fsc(vol1, vol2):
         return vol1.fsc(vol2)
 
 
-def get_cpu_count():
+def get_cpu_count() -> int:
+    """Get the number of available CPUs, accounting for job schedulers.
+
+    Returns:
+        Number of available CPUs
+    """
 
     # Check for SLURM environment variable first
     # TODO : handle other job schedulers
@@ -288,7 +388,12 @@ def get_cpu_count():
     return multiprocessing.cpu_count()
 
 
-def get_mpi_cpu_count():
+def get_mpi_cpu_count() -> int:
+    """Get the number of MPI tasks, accounting for job schedulers.
+
+    Returns:
+        Number of MPI tasks
+    """
 
     # Check for SLURM environment variable first
     # TODO : handle other job schedulers
@@ -301,7 +406,27 @@ def get_mpi_cpu_count():
     return multiprocessing.cpu_count()
 
 
-def relionReconstruct(inputfile, outputfile, classnum=None, overwrite=True, mrcs_index=None, invert=False):
+def relionReconstruct(
+    inputfile: str,
+    outputfile: str,
+    classnum: Optional[int] = None,
+    overwrite: bool = True,
+    mrcs_index: Optional[Any] = None,
+    invert: bool = False,
+) -> Any:
+    """Reconstruct volume using RELION.
+
+    Args:
+        inputfile: Input star file path
+        outputfile: Output volume file path
+        classnum: Class number to reconstruct (will use only the particles with the given class if exists) (optional)
+        overwrite: Whether to overwrite existing output (default: True)
+        mrcs_index: Indices for subset (optional)
+        invert: Whether to invert volume (default: False)
+
+    Returns:
+        Reconstructed volume
+    """
     if mrcs_index is not None:
         subfile = f"{inputfile}.sub.tmp"
         sub_starfile(inputfile, subfile, mrcs_index)
@@ -330,7 +455,17 @@ def relionReconstruct(inputfile, outputfile, classnum=None, overwrite=True, mrcs
     return vol
 
 
-def relionReconstructFromEmbedding(inputfile, outputfolder, embedding_positions, q=0.95):
+def relionReconstructFromEmbedding(
+    inputfile: str, outputfolder: str, embedding_positions: np.ndarray, q: float = 0.95
+) -> None:
+    """Reconstruct volumes from embedding positions using RELION.
+
+    Args:
+        inputfile: Input pickle file path
+        outputfolder: Output folder path
+        embedding_positions: Embedding positions array
+        q: Quantile for outlier removal (default: 0.95)
+    """
     with open(inputfile, "rb") as f:
         result = pickle.load(f)
     zs = torch.tensor(result["coords_est"])

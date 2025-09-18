@@ -1,4 +1,5 @@
 import math
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -7,7 +8,17 @@ from aspire.utils import grid_3d
 from cov3d.nufft_plan import BaseNufftPlan, nufft_adjoint, nufft_forward
 
 
-def pad_tensor(tensor, size, dims=None):
+def pad_tensor(tensor: torch.Tensor, size: List[int], dims: Optional[List[int]] = None) -> torch.Tensor:
+    """Pad tensor to specified size along given dimensions.
+
+    Args:
+        tensor: Input tensor to pad
+        size: Target size for each dimension
+        dims: Dimensions to pad (default: last N dimensions)
+
+    Returns:
+        Padded tensor
+    """
     tensor_shape = tensor.shape
     if dims is None:
         dims = [(-1 - i) % tensor.ndim for i in range(len(size))]
@@ -27,7 +38,17 @@ def pad_tensor(tensor, size, dims=None):
     return padded_tensor
 
 
-def crop_tensor(tensor, size, dims=None):
+def crop_tensor(tensor: torch.Tensor, size: List[int], dims: Optional[List[int]] = None) -> torch.Tensor:
+    """Crop tensor to specified size along given dimensions.
+
+    Args:
+        tensor: Input tensor to crop
+        size: Target size for each dimension
+        dims: Dimensions to crop (default: last N dimensions)
+
+    Returns:
+        Cropped tensor
+    """
     tensor_shape = tensor.shape
     if dims is None:
         dims = [(-1 - i) % tensor.ndim for i in range(len(size))]
@@ -43,48 +64,135 @@ def crop_tensor(tensor, size, dims=None):
     return tensor[slice_ind_full]
 
 
-def crop_image(images, L_crop):
+def crop_image(images: torch.Tensor, L_crop: int) -> torch.Tensor:
+    """Crop images to specified size.
+
+    Args:
+        images: Input images
+        L_crop: Target crop size
+
+    Returns:
+        Cropped images
+    """
     L = images.shape[-1]
     img_idx = torch.arange(-(L_crop // 2), L_crop // 2 + L_crop % 2) + L // 2
     return images[..., img_idx, :][..., img_idx].reshape(*images.shape[:-2], L_crop, L_crop)
 
 
-def centered_fft2(image, im_dim=[-1, -2], padding_size=None):
+def centered_fft2(
+    image: torch.Tensor, im_dim: List[int] = [-1, -2], padding_size: Optional[List[int]] = None
+) -> torch.Tensor:
+    """Compute centered 2D FFT.
+
+    Args:
+        image: Input image
+        im_dim: Dimensions to apply FFT to (default: [-1, -2])
+        padding_size: Size to pad to before FFT (optional)
+
+    Returns:
+        Centered 2D FFT
+    """
     return _centered_fft(torch.fft.fft2, image, im_dim, padding_size)
 
 
-def centered_ifft2(image, im_dim=[-1, -2], cropping_size=None):
+def centered_ifft2(
+    image: torch.Tensor, im_dim: List[int] = [-1, -2], cropping_size: Optional[List[int]] = None
+) -> torch.Tensor:
+    """Compute centered 2D inverse FFT.
+
+    Args:
+        image: Input image
+        im_dim: Dimensions to apply IFFT to (default: [-1, -2])
+        cropping_size: Size to crop to after IFFT (optional)
+
+    Returns:
+        Centered 2D inverse FFT
+    """
     tensor = _centered_fft(torch.fft.ifft2, image, im_dim)
     return crop_tensor(tensor, cropping_size, im_dim) if cropping_size is not None else tensor
 
 
-def centered_fft3(image, im_dim=[-1, -2, -3], padding_size=None):
+def centered_fft3(
+    image: torch.Tensor, im_dim: List[int] = [-1, -2, -3], padding_size: Optional[List[int]] = None
+) -> torch.Tensor:
+    """Compute centered 3D FFT.
+
+    Args:
+        image: Input image
+        im_dim: Dimensions to apply FFT to (default: [-1, -2, -3])
+        padding_size: Size to pad to before FFT (optional)
+
+    Returns:
+        Centered 3D FFT
+    """
     return _centered_fft(torch.fft.fftn, image, im_dim, padding_size)
 
 
-def centered_ifft3(image, im_dim=[-1, -2, -3], cropping_size=None):
+def centered_ifft3(
+    image: torch.Tensor, im_dim: List[int] = [-1, -2, -3], cropping_size: Optional[List[int]] = None
+) -> torch.Tensor:
+    """Compute centered 3D inverse FFT.
+
+    Args:
+        image: Input image
+        im_dim: Dimensions to apply IFFT to (default: [-1, -2, -3])
+        cropping_size: Size to crop to after IFFT (optional)
+
+    Returns:
+        Centered 3D inverse FFT
+    """
     tensor = _centered_fft(torch.fft.ifftn, image, im_dim)
     return crop_tensor(tensor, cropping_size, im_dim) if cropping_size is not None else tensor
 
 
-def _centered_fft(fft_func, tensor, dim, size=None, **fft_kwargs):
+def _centered_fft(
+    fft_func, tensor: torch.Tensor, dim: List[int], size: Optional[List[int]] = None, **fft_kwargs
+) -> torch.Tensor:
+    """Helper function for centered FFT operations.
+
+    Args:
+        fft_func: FFT function to apply
+        tensor: Input tensor
+        dim: Dimensions to apply FFT to
+        size: Size to pad to before FFT (optional)
+        **fft_kwargs: Additional FFT arguments
+
+    Returns:
+        Centered FFT result
+    """
     if size is not None:
         tensor = pad_tensor(tensor, size, dim)
     return torch.fft.fftshift(fft_func(torch.fft.ifftshift(tensor, dim=dim, **fft_kwargs), dim=dim), dim=dim)
 
 
 def preprocess_image_batch(
-    images,
-    nufft_plan,
-    filters,
-    pose,
-    mean_volume,
-    mask=None,
-    mask_threshold=None,
-    softening_kernel_fourier=None,
-    fourier_domain=False,
-):
-    """Shifts images, subtracts projected mean volume and applies masking on a batch of images."""
+    images: torch.Tensor,
+    nufft_plan: BaseNufftPlan,
+    filters: torch.Tensor,
+    pose: Tuple[torch.Tensor, torch.Tensor],
+    mean_volume: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+    mask_threshold: Optional[float] = None,
+    softening_kernel_fourier: Optional[torch.Tensor] = None,
+    fourier_domain: bool = False,
+) -> torch.Tensor:
+    """Preprocess image batch by shifting images, subtracting projected mean volume and applying
+    masking.
+
+    Args:
+        images: Input images
+        nufft_plan: NUFFT plan for projection
+        filters: CTF filters
+        pose: Tuple of (rotated points, phase shift)
+        mean_volume: Mean volume to subtract
+        mask: Volume mask (optional)
+        mask_threshold: Threshold for mask (optional)
+        softening_kernel_fourier: Softening kernel in Fourier domain (optional)
+        fourier_domain: Whether to return in Fourier domain (default: False)
+
+    Returns:
+        Preprocessed images
+    """
     pts_rot, phase_shift = pose
     nufft_plan.setpts(pts_rot)
 
@@ -113,7 +221,16 @@ def preprocess_image_batch(
     return images
 
 
-def get_mask_threshold(mask, nufft_plan):
+def get_mask_threshold(mask: torch.Tensor, nufft_plan: BaseNufftPlan) -> float:
+    """Get threshold for mask projection.
+
+    Args:
+        mask: Volume mask
+        nufft_plan: NUFFT plan for projection
+
+    Returns:
+        Mask threshold value
+    """
     projected_mask = vol_forward(mask, nufft_plan).squeeze(1)
     vals = projected_mask.reshape(-1).cpu().numpy()
     return np.percentile(
@@ -121,7 +238,17 @@ def get_mask_threshold(mask, nufft_plan):
     )  # filter values which aren't too close to 0 and take a threhosld that captures 90% of the projected mask
 
 
-def lowpass_volume(volume, cutoff, lowpass_shape="rect"):
+def lowpass_volume(volume: torch.Tensor, cutoff: float, lowpass_shape: str = "rect") -> torch.Tensor:
+    """Apply low-pass filter to volume.
+
+    Args:
+        volume: Input volume
+        cutoff: Cutoff frequency
+        lowpass_shape: Shape of filter ("rect" or "sphere") (default: "rect")
+
+    Returns:
+        Low-pass filtered volume
+    """
     fourier_vol = centered_fft3(volume)
     L = volume.shape[-1]
     if lowpass_shape == "rect":
@@ -136,7 +263,17 @@ def lowpass_volume(volume, cutoff, lowpass_shape="rect"):
     return centered_ifft3(fourier_vol).real
 
 
-def highpass_volume(volume, cutoff, highpass_shape="rect"):
+def highpass_volume(volume: torch.Tensor, cutoff: float, highpass_shape: str = "rect") -> torch.Tensor:
+    """Apply high-pass filter to volume.
+
+    Args:
+        volume: Input volume
+        cutoff: Cutoff frequency
+        highpass_shape: Shape of filter ("rect" or "sphere") (default: "rect")
+
+    Returns:
+        High-pass filtered volume
+    """
     fourier_vol = centered_fft3(volume)
     L = volume.shape[-1]
     if highpass_shape == "rect":
@@ -150,7 +287,23 @@ def highpass_volume(volume, cutoff, highpass_shape="rect"):
     return centered_ifft3(fourier_vol).real
 
 
-def vol_forward(volume, plan, filters=None, fourier_domain=False):
+def vol_forward(
+    volume: torch.Tensor,
+    plan: Union[BaseNufftPlan, List[BaseNufftPlan]],
+    filters: Optional[torch.Tensor] = None,
+    fourier_domain: bool = False,
+) -> torch.Tensor:
+    """Forward project volume to images.
+
+    Args:
+        volume: Input volume
+        plan: NUFFT plan or list of plans
+        filters: CTF filters (optional)
+        fourier_domain: Whether to return in Fourier domain (default: False)
+
+    Returns:
+        Projected images
+    """
     L = plan.sz[-1]
     if isinstance(plan, (list, tuple)):  # When multiple plans are given loop through them
         volume_forward = torch.zeros((len(plan), volume.shape[0], L, L), dtype=volume.dtype, device=volume.device)
@@ -186,7 +339,20 @@ def vol_forward(volume, plan, filters=None, fourier_domain=False):
         return volume_forward / L
 
 
-def im_backward(image, plan, filters=None, fourier_domain=False):
+def im_backward(
+    image: torch.Tensor, plan: BaseNufftPlan, filters: Optional[torch.Tensor] = None, fourier_domain: bool = False
+) -> torch.Tensor:
+    """Backward project images to volume.
+
+    Args:
+        image: Input images
+        plan: NUFFT plan
+        filters: CTF filters (optional)
+        fourier_domain: Whether input is in Fourier domain (default: False)
+
+    Returns:
+        Back-projected volume
+    """
     L = image.shape[-1]
     im_fft = centered_fft2(image / L**2) if (not fourier_domain) else image
 

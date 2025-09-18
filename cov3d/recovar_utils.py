@@ -1,5 +1,6 @@
 import os
 import pickle
+from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 import recovar
@@ -10,8 +11,27 @@ from recovar import output as recovar_output
 from scipy.ndimage import binary_dilation
 
 
-def getRecovarDataset(particles_path, ctf_path=None, poses_path=None, split=True, perm=None, uninvert_data=False):
-    # TODO: handle ctf and poses pkl files not in the same dir as star and mrcs files
+def getRecovarDataset(
+    particles_path: str,
+    ctf_path: Optional[str] = None,
+    poses_path: Optional[str] = None,
+    split: bool = True,
+    perm: Optional[np.ndarray] = None,
+    uninvert_data: bool = False,
+) -> Tuple[Any, Optional[np.ndarray]]:
+    """Get RECOVAR dataset from file paths.
+
+    Args:
+        particles_path: Path to particles file
+        ctf_path: Path to CTF file (optional)
+        poses_path: Path to poses file (optional)
+        split: Whether to split dataset into two halves
+        perm: Permutation array for splitting (optional)
+        uninvert_data: Whether to uninvert data
+
+    Returns:
+        Tuple of (dataset, permutation_array)
+    """
 
     particles_dir, _ = os.path.split(particles_path)
     dataset_dict = {"datadir": None, "uninvert_data": uninvert_data}
@@ -29,8 +49,15 @@ def getRecovarDataset(particles_path, ctf_path=None, poses_path=None, split=True
         return recovar_ds.load_dataset_from_dict(dataset_dict), None
 
 
-def recovarReconstruct(inputfile, outputfile, overwrite=True, compute_mask=False):
+def recovarReconstruct(inputfile: str, outputfile: str, overwrite: bool = True, compute_mask: bool = False) -> None:
+    """Reconstruct volume using RECOVAR.
 
+    Args:
+        inputfile: Path to input particles file
+        outputfile: Path to output volume file
+        overwrite: Whether to overwrite existing output file
+        compute_mask: Whether to compute and save volume mask
+    """
     if overwrite or (not os.path.isfile(outputfile)):
         dataset, _ = getRecovarDataset(inputfile)
         batch_size = recovar.utils.get_image_batch_size(
@@ -51,14 +78,28 @@ def recovarReconstruct(inputfile, outputfile, overwrite=True, compute_mask=False
             dilated_volume_mask = recovar.mask.soften_volume_mask(dilated_volume_mask, kernel_size)
             recovar_output.save_volume(dilated_volume_mask, outputfile.replace(".mrc", "_mask"), from_ft=False)
 
-    # return vol
 
+def torch_to_numpy(arr: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
+    """Convert torch tensor to numpy array if needed.
 
-def torch_to_numpy(arr):
+    Args:
+        arr: Input tensor or array
+
+    Returns:
+        Numpy array
+    """
     return arr.numpy() if isinstance(arr, torch.Tensor) else arr
 
 
-def prepareDatasetForReconstruction(result_path):
+def prepareDatasetForReconstruction(result_path: str) -> Tuple[Any, np.ndarray, np.ndarray, float, np.ndarray]:
+    """Prepare dataset for reconstruction from result file.
+
+    Args:
+        result_path: Path to result pickle file
+
+    Returns:
+        Tuple of (dataset, coordinates, covariance_inverse, noise_variance, permutation)
+    """
     with open(result_path, "rb") as f:
         result = pickle.load(f)
     particles_path = result["particles_path"]
@@ -78,7 +119,17 @@ def prepareDatasetForReconstruction(result_path):
     return dataset, zs, cov_zs, noise_variance, dataset_perm
 
 
-def recovarReconstructFromEmbedding(inputfile, outputfolder, embedding_positions, n_bins=30):
+def recovarReconstructFromEmbedding(
+    inputfile: str, outputfolder: str, embedding_positions: Union[str, np.ndarray], n_bins: int = 30
+) -> None:
+    """Reconstruct volumes from embedding positions using RECOVAR.
+
+    Args:
+        inputfile: Path to input result file
+        outputfolder: Path to output folder
+        embedding_positions: Embedding positions (file path or array)
+        n_bins: Number of bins for reconstruction
+    """
     dataset, zs, cov_zs, noise_variance, dataset_perm = prepareDatasetForReconstruction(inputfile)
     L = dataset[0].grid_size
     B_factor = 0  # TODO: handle B_factor

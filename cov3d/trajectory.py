@@ -1,4 +1,5 @@
 import logging
+from typing import List, Optional, Tuple, Union
 
 import networkx as nx
 import numpy as np
@@ -8,7 +9,15 @@ from sklearn.neighbors import KernelDensity, NearestNeighbors
 logger = logging.getLogger(__name__)
 
 
-def compute_kde_density(zs):
+def compute_kde_density(zs: np.ndarray) -> np.ndarray:
+    """Compute density using kernel density estimation.
+
+    Args:
+        zs: Input data points of shape (n_samples, n_features)
+
+    Returns:
+        Density values for each data point
+    """
     normalize_factor = np.mean(np.std(zs, axis=0))
     zs = zs / normalize_factor
     kde = KernelDensity(bandwidth=zs.shape[0] ** (-1 / (zs.shape[1] + 4))).fit(zs)
@@ -16,7 +25,20 @@ def compute_kde_density(zs):
     return np.exp(log_density)
 
 
-def compute_density(zs, k=100, bandwidth=None, batch_size=1000):
+def compute_density(
+    zs: np.ndarray, k: int = 100, bandwidth: Optional[float] = None, batch_size: int = 1000
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute density using k-nearest neighbors with Gaussian kernel.
+
+    Args:
+        zs: Input data points of shape (n_samples, n_features)
+        k: Number of nearest neighbors to use
+        bandwidth: Bandwidth for Gaussian kernel (auto-computed if None)
+        batch_size: Batch size for processing large datasets
+
+    Returns:
+        Tuple of (density_values, neighbor_indices)
+    """
     n, d = zs.shape
     normalize_factor = np.std(zs, axis=0)
     zs = zs / normalize_factor
@@ -53,7 +75,31 @@ def compute_density(zs, k=100, bandwidth=None, batch_size=1000):
     return density, indices
 
 
-def compute_trajectory(zs, density, start_idx, end_idx, k=100, knn_indices=None):
+def compute_trajectory(
+    zs: np.ndarray,
+    density: np.ndarray,
+    start_idx: Union[int, List[int]],
+    end_idx: Union[int, List[int]],
+    k: int = 100,
+    knn_indices: Optional[np.ndarray] = None,
+) -> Union[np.ndarray, List[np.ndarray]]:
+    """Compute trajectory between start and end points using shortest path on density-weighted
+    graph.
+
+    Args:
+        zs: Data points of shape (n_samples, n_features)
+        density: Density values for each data point
+        start_idx: Starting point index or list of starting indices
+        end_idx: Ending point index or list of ending indices
+        k: Number of nearest neighbors for graph construction
+        knn_indices: Pre-computed neighbor indices (optional)
+
+    Returns:
+        Trajectory points or list of trajectory points
+
+    Raises:
+        Exception: If knn_indices doesn't have enough neighbors
+    """
     if knn_indices is None:
         # compute KNN
         nbrs = NearestNeighbors(n_neighbors=k).fit(zs)
@@ -86,8 +132,21 @@ def compute_trajectory(zs, density, start_idx, end_idx, k=100, knn_indices=None)
     return path_indices
 
 
-def pick_trajectory_pairs(centers, n_pairs):
-    # from RECOVAR Implementation https://github.com/ma-gilles/recovar/blob/main/recovar/commands/analyze.py#L240
+def pick_trajectory_pairs(centers: np.ndarray, n_pairs: int) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+    """Pick trajectory pairs from cluster centers.
+
+    Selects pairs of cluster centers that are far apart, using both distance-based
+    and principal component-based selection strategies.
+    Implementation is based on RECOVAR
+        https://github.com/ma-gilles/recovar/blob/main/recovar/commands/analyze.py#L240
+
+    Args:
+        centers: Cluster center coordinates of shape (n_centers, n_features)
+        n_pairs: Number of trajectory pairs to select
+
+    Returns:
+        Tuple of (start_points, end_points) lists
+    """
     pair_start = []
     pair_end = []
     X = distance_matrix(centers[:, :], centers[:, :])
@@ -113,7 +172,16 @@ def pick_trajectory_pairs(centers, n_pairs):
     return pair_start, pair_end
 
 
-def find_closet_idx(data, point):
+def find_closet_idx(data: np.ndarray, point: np.ndarray) -> Tuple[np.ndarray, int]:
+    """Find the closest data point to a given point.
+
+    Args:
+        data: Data points of shape (n_samples, n_features)
+        point: Query point of shape (n_features,)
+
+    Returns:
+        Tuple of (closest_point, closest_index)
+    """
     dist = np.linalg.norm(data - point, axis=1)
     idx = np.argmin(dist)
     return data[idx], idx

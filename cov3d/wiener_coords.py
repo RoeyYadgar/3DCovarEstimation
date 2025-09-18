@@ -1,16 +1,38 @@
 import math
+from typing import Any, Optional, Tuple, Union
 
 import torch
 from scipy.stats import chi2
 from tqdm import tqdm
 
+from cov3d.dataset import CovarDataset
 from cov3d.nufft_plan import NufftPlan, NufftPlanDiscretized
 from cov3d.projection_funcs import centered_fft3, vol_forward
 
 
 def wiener_coords(
-    dataset, eigenvecs, eigenvals, batch_size=1024, start_ind=None, end_ind=None, return_eigen_forward=False
-):
+    dataset: CovarDataset,
+    eigenvecs: torch.Tensor,
+    eigenvals: torch.Tensor,
+    batch_size: int = 1024,
+    start_ind: Optional[int] = None,
+    end_ind: Optional[int] = None,
+    return_eigen_forward: bool = False,
+) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    """Compute Wiener-filtered latent coordinates from eigenvectors.
+
+    Args:
+        dataset: Dataset containing particle images and poses
+        eigenvecs: Eigenvectors of shape (rank, L, L, L)
+        eigenvals: Eigenvalues of shape (rank,) or diagonal matrix of shape (rank, rank)
+        batch_size: Batch size for processing
+        start_ind: Starting index for processing (default: 0)
+        end_ind: Ending index for processing (default: len(dataset))
+        return_eigen_forward: Whether to return eigenvector projections
+
+    Returns:
+        Latent coordinates or tuple of (coordinates, eigen_forward_images)
+    """
     if start_ind is None:
         start_ind = 0
     if end_ind is None:
@@ -61,16 +83,32 @@ def wiener_coords(
 
 
 def latentMAP(
-    dataset,
-    eigenvecs,
-    eigenvals,
-    batch_size=1024,
-    start_ind=None,
-    end_ind=None,
-    return_coords_covar=False,
-    nufft_plan=NufftPlan,
-    **nufft_plan_kwargs,
-):
+    dataset: CovarDataset,
+    eigenvecs: torch.Tensor,
+    eigenvals: torch.Tensor,
+    batch_size: int = 1024,
+    start_ind: Optional[int] = None,
+    end_ind: Optional[int] = None,
+    return_coords_covar: bool = False,
+    nufft_plan: type = NufftPlan,
+    **nufft_plan_kwargs: Any,
+) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    """Compute maximum a posteriori latent coordinates.
+
+    Args:
+        dataset: Dataset containing particle images and poses
+        eigenvecs: Eigenvectors of shape (rank, L, L, L)
+        eigenvals: Eigenvalues of shape (rank,) or (rank, rank)
+        batch_size: Batch size for processing
+        start_ind: Starting index for processing (default: 0)
+        end_ind: Ending index for processing (default: len(dataset))
+        return_coords_covar: Whether to return coordinate covariance inverse
+        nufft_plan: NUFFT plan class to use
+        **nufft_plan_kwargs: Additional arguments for NUFFT plan
+
+    Returns:
+        Latent coordinates or tuple of (coordinates, coords_covar_inv)
+    """
     if start_ind is None:
         start_ind = 0
     if end_ind is None:
@@ -127,7 +165,23 @@ def latentMAP(
         return coords, coords_covar_inv
 
 
-def compute_latentMAP_batch(images, eigen_forward, noise_var, eigenvals_inv=None):
+def compute_latentMAP_batch(
+    images: torch.Tensor,
+    eigen_forward: torch.Tensor,
+    noise_var: float,
+    eigenvals_inv: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute MAP latent coordinates for a batch of images.
+
+    Args:
+        images: Input images of shape (batch, L, L)
+        eigen_forward: Forward projections of eigenvectors of shape (batch, rank, L*L)
+        noise_var: Noise variance
+        eigenvals_inv: Inverse eigenvalues (default: identity matrix)
+
+    Returns:
+        Tuple of (latent_coords, covariance_matrix, projected_images)
+    """
     n = images.shape[0]
     r = eigen_forward.shape[1]
     if eigenvals_inv is None:
@@ -149,13 +203,38 @@ def compute_latentMAP_batch(images, eigen_forward, noise_var, eigenvals_inv=None
     return latent_coords, m, projected_images
 
 
-def mahalanobis_distance(coords, coords_mean, coords_covar_inv):
+def mahalanobis_distance(
+    coords: torch.Tensor, coords_mean: torch.Tensor, coords_covar_inv: torch.Tensor
+) -> torch.Tensor:
+    """Compute Mahalanobis distance for coordinates.
+
+    Args:
+        coords: Coordinate vectors of shape (n_samples, n_features)
+        coords_mean: Mean coordinates of shape (n_features,)
+        coords_covar_inv: Inverse covariance matrix of shape (n_features, n_features)
+
+    Returns:
+        Mahalanobis distances of shape (n_samples,)
+    """
     mean_centered_coords = coords - coords_mean
     dist = torch.sum((mean_centered_coords @ (coords_covar_inv)) * mean_centered_coords, dim=1)
 
     return dist
 
 
-def mahalanobis_threshold(coords, coords_mean, coords_covar_inv, q=0.95):
+def mahalanobis_threshold(
+    coords: torch.Tensor, coords_mean: torch.Tensor, coords_covar_inv: torch.Tensor, q: float = 0.95
+) -> torch.Tensor:
+    """Compute Mahalanobis distance threshold for outlier detection.
+
+    Args:
+        coords: Coordinate vectors of shape (n_samples, n_features)
+        coords_mean: Mean coordinates of shape (n_features,)
+        coords_covar_inv: Inverse covariance matrix of shape (n_features, n_features)
+        q: Quantile for threshold (default: 0.95)
+
+    Returns:
+        Boolean mask indicating inliers
+    """
     dist = mahalanobis_distance(coords, coords_mean, coords_covar_inv)
     return dist < chi2.ppf(q, df=coords.shape[1])

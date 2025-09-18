@@ -1,4 +1,5 @@
 from collections import deque
+from typing import Any, Callable, Dict, Optional
 
 import torch
 from torch.optim.optimizer import Optimizer
@@ -9,11 +10,35 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
 
     Assumes hessian is block diagonal with respect to the parameters and batch (first dim) of
     tensor.
+
+    Attributes:
+        param_groups: List of parameter groups
+        defaults: Default parameter values
     """
 
     def __init__(
-        self, params, lr=1.0, max_ls_steps=10, c=1e-4, beta=0.1, damping=1e-6, line_search=True, step_size_limit=None
-    ):
+        self,
+        params: Any,
+        lr: float = 1.0,
+        max_ls_steps: int = 10,
+        c: float = 1e-4,
+        beta: float = 0.1,
+        damping: float = 1e-6,
+        line_search: bool = True,
+        step_size_limit: Optional[float] = None,
+    ) -> None:
+        """Initialize the Block Newton optimizer.
+
+        Args:
+            params: Iterable of parameters to optimize
+            lr: Learning rate (default: 1.0)
+            max_ls_steps: Maximum number of line search steps (default: 10)
+            c: Armijo condition constant (default: 1e-4)
+            beta: Line search step size reduction factor (default: 0.1)
+            damping: Hessian damping factor for numerical stability (default: 1e-6)
+            line_search: Whether to use backtracking line search (default: True)
+            step_size_limit: Maximum step size limit (optional)
+        """
         defaults = dict(
             lr=lr,
             max_ls_steps=max_ls_steps,
@@ -25,7 +50,18 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
         )
         super().__init__(params, defaults)
 
-    def step(self, closure=None):
+    def step(self, closure: Optional[Callable[[], torch.Tensor]] = None) -> Optional[torch.Tensor]:
+        """Perform a single optimization step.
+
+        Args:
+            closure: A closure that reevaluates the model and returns the loss
+
+        Returns:
+            The loss value
+
+        Raises:
+            ValueError: If closure is None
+        """
         loss = None
         if closure is None:
             raise ValueError("Newton optimizer requires a closure to reevaluate the model.")
@@ -104,7 +140,32 @@ class BlockNewtonOptimizer(torch.optim.Optimizer):
 
 
 class BlockwiseLBFGS(Optimizer):
-    def __init__(self, params, lr=1.0, history_size=10, step_size_limit=None):
+    """Blockwise Limited-memory BFGS optimizer.
+
+    Implements L-BFGS optimization for block-diagonal parameters, where each block
+    is optimized independently using its own history of gradients and parameter updates.
+
+    Attributes:
+        param_groups: List of parameter groups
+        defaults: Default parameter values
+        history_size: Maximum number of history vectors to store
+        state: Internal state for tracking optimization history
+    """
+
+    def __init__(
+        self, params: Any, lr: float = 1.0, history_size: int = 10, step_size_limit: Optional[float] = None
+    ) -> None:
+        """Initialize the Blockwise L-BFGS optimizer.
+
+        Args:
+            params: Iterable of parameters to optimize
+            lr: Learning rate (default: 1.0)
+            history_size: Maximum number of history vectors to store (default: 10)
+            step_size_limit: Maximum step size limit (optional)
+
+        Raises:
+            ValueError: If learning rate is not positive
+        """
         if lr <= 0:
             raise ValueError(f"Invalid learning rate: {lr}")
         defaults = dict(lr=lr, step_size_limit=step_size_limit)
@@ -115,7 +176,12 @@ class BlockwiseLBFGS(Optimizer):
         # Each param is assumed to be a single nn.Embedding
         self.state = self._init_state()
 
-    def _init_state(self):
+    def _init_state(self) -> Dict[str, Dict[int, Any]]:
+        """Initialize the optimizer state.
+
+        Returns:
+            Dictionary containing state for tracking optimization history
+        """
         return {
             "s_history": {},  # row_id -> deque of s vectors (delta_x)
             "y_history": {},  # row_id -> deque of y vectors (delta_grad)
@@ -124,9 +190,14 @@ class BlockwiseLBFGS(Optimizer):
         }
 
     @torch.no_grad()
-    def step(self, closure=None):
-        """
-        closure: a function that reevaluates the model and returns the loss.
+    def step(self, closure: Optional[Callable[[], torch.Tensor]] = None) -> Optional[torch.Tensor]:
+        """Perform a single optimization step.
+
+        Args:
+            closure: A closure that reevaluates the model and returns the loss
+
+        Returns:
+            The loss value
         """
         loss = None
         if closure is not None:

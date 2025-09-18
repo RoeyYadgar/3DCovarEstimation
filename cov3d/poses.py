@@ -1,3 +1,5 @@
+from typing import Optional, Tuple, Union
+
 import numpy as np
 import torch
 from aspire.utils import grid_2d
@@ -6,21 +8,48 @@ from cov3d.newton_opt import BlockNewtonOptimizer
 from cov3d.projection_funcs import centered_fft2, centered_ifft2, crop_image
 
 
-def pose_cryoDRGN2APIRE(poses, L):
+def pose_cryoDRGN2APIRE(poses: Tuple[np.ndarray, np.ndarray], L: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert poses from cryoDRGN format to ASPIRE format.
+
+    Args:
+        poses: Tuple of (rotations, offsets) in cryoDRGN format
+        L: Image resolution
+
+    Returns:
+        Tuple of (rotations, offsets) in ASPIRE format
+    """
     rots = np.transpose(poses[0], axes=(0, 2, 1))
     offsets = poses[1] * L
 
     return rots, offsets
 
 
-def pose_ASPIRE2cryoDRGN(rots, offsets, L):
+def pose_ASPIRE2cryoDRGN(rots: np.ndarray, offsets: np.ndarray, L: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert poses from ASPIRE format to cryoDRGN format.
+
+    Args:
+        rots: Rotation matrices in ASPIRE format
+        offsets: Translation offsets in ASPIRE format
+        L: Image resolution
+
+    Returns:
+        Tuple of (rotations, offsets) in cryoDRGN format
+    """
     rots = np.transpose(rots, axes=(0, 2, 1))
     offsets = offsets / L
 
     return (rots, offsets)
 
 
-def rotvec_to_rotmat(rotvecs):
+def rotvec_to_rotmat(rotvecs: torch.Tensor) -> torch.Tensor:
+    """Convert rotation vectors to rotation matrices using Rodrigues' formula.
+
+    Args:
+        rotvecs: Rotation vectors of shape (N, 3)
+
+    Returns:
+        Rotation matrices of shape (N, 3, 3)
+    """
     theta = torch.norm(rotvecs, dim=-1, keepdim=True)  # (N, 1)
     k = rotvecs / (theta + 1e-6)  # Normalize, avoiding division by zero
 
@@ -38,7 +67,19 @@ def rotvec_to_rotmat(rotvecs):
     return R
 
 
-def get_phase_shift_grid(resolution, dtype=torch.float32, device=None):
+def get_phase_shift_grid(
+    resolution: int, dtype: torch.dtype = torch.float32, device: Optional[torch.device] = None
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Generate phase shift grid for translation correction.
+
+    Args:
+        resolution: Image resolution
+        dtype: Data type for tensors (default: torch.float32)
+        device: Device for tensors (default: CPU)
+
+    Returns:
+        Tuple of (phase_shift_grid_x, phase_shift_grid_y)
+    """
     if device is None:
         device = torch.device("cpu")
     grid_shifted = torch.ceil(torch.arange(-resolution / 2, resolution / 2, dtype=dtype))
@@ -48,7 +89,24 @@ def get_phase_shift_grid(resolution, dtype=torch.float32, device=None):
     return phase_shift_grid_x.to(device), phase_shift_grid_y.to(device)
 
 
-def offset_to_phase_shift(offsets, resolution=None, phase_shift_grid=None):
+def offset_to_phase_shift(
+    offsets: torch.Tensor,
+    resolution: Optional[int] = None,
+    phase_shift_grid: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+) -> torch.Tensor:
+    """Convert translation offsets to phase shift factors.
+
+    Args:
+        offsets: Translation offsets of shape (N, 2)
+        resolution: Image resolution (optional if phase_shift_grid provided)
+        phase_shift_grid: Pre-computed phase shift grid (optional)
+
+    Returns:
+        Phase shift factors of shape (N, resolution, resolution)
+
+    Raises:
+        ValueError: If neither resolution nor phase_shift_grid is provided
+    """
     if phase_shift_grid is None:
         if resolution is None:
             raise ValueError("Either resolution or phase_shift_grid must be provided.")
@@ -68,7 +126,40 @@ def offset_to_phase_shift(offsets, resolution=None, phase_shift_grid=None):
 
 
 class PoseModule(torch.nn.Module):
-    def __init__(self, init_rotvecs, offsets, resolution, dtype=torch.float32, use_contrast=False):
+    """Module for managing particle poses including rotations and translations.
+
+    Attributes:
+        resolution: Image resolution
+        dtype: Data type for tensors
+        use_contrast: Whether to use contrast parameters
+        rotvec: Embedding layer for rotation vectors
+        offsets: Embedding layer for translation offsets
+        contrasts: Embedding layer for contrast parameters (if enabled)
+        xy_rot_grid: Grid for rotation calculations
+        phase_shift_grid_x: X-component of phase shift grid
+        phase_shift_grid_y: Y-component of phase shift grid
+    """
+
+    def __init__(
+        self,
+        init_rotvecs: Union[torch.Tensor, np.ndarray],
+        offsets: Union[torch.Tensor, np.ndarray],
+        resolution: int,
+        dtype: torch.dtype = torch.float32,
+        use_contrast: bool = False,
+    ) -> None:
+        """Initialize PoseModule.
+
+        Args:
+            init_rotvecs: Initial rotation vectors of shape (N, 3)
+            offsets: Initial translation offsets of shape (N, 2)
+            resolution: Image resolution
+            dtype: Data type for tensors (default: torch.float32)
+            use_contrast: Whether to use contrast parameters (default: False)
+
+        Raises:
+            AssertionError: If input shapes are invalid
+        """
         super().__init__()
         self.resolution = resolution
         self.dtype = dtype
@@ -95,10 +186,20 @@ class PoseModule(torch.nn.Module):
         self._init_grid(dtype)
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
+        """Get device of the module.
+
+        Returns:
+            Device of the module
+        """
         return self.xy_rot_grid.device
 
-    def _init_grid(self, dtype):
+    def _init_grid(self, dtype: torch.dtype) -> None:
+        """Initialize rotation and phase shift grids.
+
+        Args:
+            dtype: Data type for tensors
+        """
         grid2d = grid_2d(self.resolution, indexing="yx")
         num_pts = self.resolution**2
 
@@ -113,7 +214,15 @@ class PoseModule(torch.nn.Module):
 
         self.phase_shift_grid_x, self.phase_shift_grid_y = get_phase_shift_grid(self.resolution, dtype=self.dtype)
 
-    def _downsample_grid(self, ds_resolution):
+    def _downsample_grid(self, ds_resolution: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Downsample grids to specified resolution.
+
+        Args:
+            ds_resolution: Target resolution
+
+        Returns:
+            Tuple of (xy_rot_grid, phase_shift_grid_x, phase_shift_grid_y)
+        """
         if ds_resolution == self.resolution:
             return self.xy_rot_grid, self.phase_shift_grid_x, self.phase_shift_grid_y
 
@@ -125,8 +234,18 @@ class PoseModule(torch.nn.Module):
 
         return xy_rot_grid, phase_shift_grid_x, phase_shift_grid_y
 
-    def forward(self, index, ds_resolution=None):
+    def forward(
+        self, index: torch.Tensor, ds_resolution: Optional[int] = None
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Forward pass to compute rotated points and phase shifts.
 
+        Args:
+            index: Indices of particles
+            ds_resolution: Downsampled resolution (optional)
+
+        Returns:
+            Tuple of (rotated_points, phase_shift) or (rotated_points, phase_shift, contrasts)
+        """
         if ds_resolution is None:
             ds_resolution = self.resolution
 
@@ -149,45 +268,94 @@ class PoseModule(torch.nn.Module):
         else:
             return pts_rot, phase_shift, self.contrasts(index)
 
-    def to(self, *args, **kwargs):
+    def to(self, *args, **kwargs) -> "PoseModule":
+        """Move module to specified device.
+
+        Args:
+            *args: Positional arguments for torch.nn.Module.to
+            **kwargs: Keyword arguments for torch.nn.Module.to
+
+        Returns:
+            Self for method chaining
+        """
         super().to(*args, **kwargs)
         self.xy_rot_grid = self.xy_rot_grid.to(*args, **kwargs)
         self.phase_shift_grid_x = self.phase_shift_grid_x.to(*args, **kwargs)
         self.phase_shift_grid_y = self.phase_shift_grid_y.to(*args, **kwargs)
         return self
 
-    def get_rotvecs(self):
+    def get_rotvecs(self) -> torch.Tensor:
+        """Get rotation vectors.
+
+        Returns:
+            Rotation vectors
+        """
         return self.rotvec.weight.data
 
-    def set_rotvecs(self, rotvecs, idx=None):
+    def set_rotvecs(self, rotvecs: torch.Tensor, idx: Optional[torch.Tensor] = None) -> None:
+        """Set rotation vectors.
+
+        Args:
+            rotvecs: New rotation vectors
+            idx: Indices to update (optional)
+        """
         if idx is None:
             self.rotvec.weight.data.copy_(rotvecs)
         else:
             with torch.no_grad():
                 self.rotvec.weight[idx] = rotvecs
 
-    def get_offsets(self):
+    def get_offsets(self) -> torch.Tensor:
+        """Get translation offsets.
+
+        Returns:
+            Translation offsets
+        """
         return self.offsets.weight.data
 
-    def set_offsets(self, offsets, idx=None):
+    def set_offsets(self, offsets: torch.Tensor, idx: Optional[torch.Tensor] = None) -> None:
+        """Set translation offsets.
+
+        Args:
+            offsets: New translation offsets
+            idx: Indices to update (optional)
+        """
         if idx is None:
             self.offsets.weight.data.copy_(offsets)
         else:
             with torch.no_grad():
                 self.offsets.weight[idx] = offsets
 
-    def get_contrasts(self):
+    def get_contrasts(self) -> torch.Tensor:
+        """Get contrast parameters.
+
+        Returns:
+            Contrast parameters
+        """
         return self.contrasts.weight.data
 
-    def set_contrasts(self, contrasts, idx=None):
+    def set_contrasts(self, contrasts: torch.Tensor, idx: Optional[torch.Tensor] = None) -> None:
+        """Set contrast parameters.
+
+        Args:
+            contrasts: New contrast parameters
+            idx: Indices to update (optional)
+        """
         if idx is None:
             self.contrasts.weight.data.copy_(contrasts)
         else:
             with torch.no_grad():
                 self.contrasts.weight[idx] = contrasts
 
-    def split_module(self, permutation=None):
-        """Returns two modules, each with non-overlapping subsets of pose entries."""
+    def split_module(self, permutation: Optional[torch.Tensor] = None) -> Tuple["PoseModule", "PoseModule"]:
+        """Split module into two modules with non-overlapping subsets of poses.
+
+        Args:
+            permutation: Permutation of indices (optional)
+
+        Returns:
+            Tuple of (module1, module2)
+        """
         n = self.offsets.weight.shape[0]
         device = self.offsets.weight.device
         dtype = self.offsets.weight.dtype
@@ -219,9 +387,20 @@ class PoseModule(torch.nn.Module):
         return module1, module2
 
     @staticmethod
-    def merge_modules(module1, module2, permutation):
-        """Merges two PoseModule instances into a new PoseModule containing all poses, reordered
-        according to the given permutation."""
+    def merge_modules(module1: "PoseModule", module2: "PoseModule", permutation: torch.Tensor) -> "PoseModule":
+        """Merge two PoseModule instances into a new module.
+
+        Args:
+            module1: First module
+            module2: Second module
+            permutation: Permutation for reordering
+
+        Returns:
+            Merged module
+
+        Raises:
+            AssertionError: If modules have different contrast settings
+        """
         device = module1.rotvec.weight.device
         dtype = module1.rotvec.weight.dtype
         resolution = module1.resolution
@@ -249,12 +428,17 @@ class PoseModule(torch.nn.Module):
         merged_module = merged_module.to(device)
         return merged_module
 
-    def update_from_modules(self, module1, module2, permutation):
-        """Updates module from two sub module instances.
+    def update_from_modules(self, module1: "PoseModule", module2: "PoseModule", permutation: torch.Tensor) -> None:
+        """Update module from two sub-modules.
 
-        reordered according to the given permutation.
+        Args:
+            module1: First sub-module
+            module2: Second sub-module
+            permutation: Permutation for reordering
+
+        Raises:
+            AssertionError: If modules have different contrast settings
         """
-
         assert module1.use_contrast == module2.use_contrast, "Both modules must have the same value for use_contrast"
         use_contrast = module1.use_contrast
 
@@ -277,8 +461,20 @@ class PoseModule(torch.nn.Module):
             self.set_contrasts(contrats)
 
 
-def estimate_image_offsets_correlation(images, reference, upsampling=4, mask=None):
+def estimate_image_offsets_correlation(
+    images: torch.Tensor, reference: torch.Tensor, upsampling: int = 4, mask: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """Estimate image offsets using cross-correlation with upsampling.
 
+    Args:
+        images: Input images of shape (N, L, L)
+        reference: Reference image of shape (N, L, L)
+        upsampling: Upsampling factor for correlation (default: 4)
+        mask: Optional mask to apply (optional)
+
+    Returns:
+        Estimated offsets of shape (N, 2)
+    """
     n, h, w = images.shape
 
     images = images * mask if mask is not None else images
@@ -302,9 +498,26 @@ def estimate_image_offsets_correlation(images, reference, upsampling=4, mask=Non
 
 
 def estimate_image_offsets_newton(
-    images, reference, mask=None, init_offsets=None, in_fourier_domain=False, obj_func=None
-):
+    images: torch.Tensor,
+    reference: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+    init_offsets: Optional[torch.Tensor] = None,
+    in_fourier_domain: bool = False,
+    obj_func: Optional[callable] = None,
+) -> torch.Tensor:
+    """Estimate image offsets using Newton's method optimization.
 
+    Args:
+        images: Input images
+        reference: Reference image
+        mask: Optional mask to apply (optional)
+        init_offsets: Initial offset estimates (optional)
+        in_fourier_domain: Whether input is in Fourier domain (default: False)
+        obj_func: Custom objective function (optional)
+
+    Returns:
+        Estimated offsets
+    """
     if not in_fourier_domain:
         dtype = images.dtype
         images = centered_fft2(images * mask) if mask is not None else centered_fft2(images)
@@ -347,8 +560,20 @@ def estimate_image_offsets_newton(
     return init_offsets
 
 
-def estimate_image_offsets(images, reference, mask=None, in_fourier_domain=False):
+def estimate_image_offsets(
+    images: torch.Tensor, reference: torch.Tensor, mask: Optional[torch.Tensor] = None, in_fourier_domain: bool = False
+) -> torch.Tensor:
+    """Estimate image offsets using correlation followed by Newton optimization.
 
+    Args:
+        images: Input images
+        reference: Reference image
+        mask: Optional mask to apply (optional)
+        in_fourier_domain: Whether input is in Fourier domain (default: False)
+
+    Returns:
+        Estimated offsets
+    """
     if not in_fourier_domain:
         images = centered_fft2(images * mask) if mask is not None else centered_fft2(images)
         reference = centered_fft2(reference * mask) if mask is not None else centered_fft2(reference)
@@ -371,10 +596,18 @@ def estimate_image_offsets(images, reference, mask=None, in_fourier_domain=False
     return estimate_image_offsets_newton(images, reference, init_offsets=init_offsets, in_fourier_domain=True)
 
 
-def out_of_plane_rot_error(rot1, rot2):
-    """
+def out_of_plane_rot_error(rot1: torch.Tensor, rot2: torch.Tensor) -> Tuple[np.ndarray, float, float]:
+    """Compute out-of-plane rotation error between two sets of rotation matrices.
+
     Implementation is used from DRGN-AI
     https://github.com/ml-struct-bio/drgnai/blob/d45341d1f3411d6db6da6f557207f10efd16da17/src/metrics.py#L134
+
+    Args:
+        rot1: First set of rotation matrices
+        rot2: Second set of rotation matrices
+
+    Returns:
+        Tuple of (angles, mean_angle, median_angle) in degrees
     """
     unitvec_gt = torch.tensor([0, 0, 1], dtype=torch.float32).reshape(3, 1)
 
@@ -391,14 +624,19 @@ def out_of_plane_rot_error(rot1, rot2):
     return angles, np.mean(angles), np.median(angles)
 
 
-def in_plane_rot_error(rot1, rot2):
-    """Computes the in-plane rotation error (in degrees) between two sets of rotation matrices.
+def in_plane_rot_error(
+    rot1: Union[torch.Tensor, np.ndarray], rot2: Union[torch.Tensor, np.ndarray]
+) -> Tuple[np.ndarray, float, float]:
+    """Compute the in-plane rotation error (in degrees) between two sets of rotation matrices.
 
     The in-plane rotation is the rotation about the z-axis (beam axis).
+
+    Args:
+        rot1: First set of rotation matrices
+        rot2: Second set of rotation matrices
+
     Returns:
-        angles: array of per-particle in-plane rotation errors (degrees)
-        mean_angle: mean in-plane rotation error (degrees)
-        median_angle: median in-plane rotation error (degrees)
+        Tuple of (angles, mean_angle, median_angle) in degrees
     """
     # The in-plane rotation angle psi can be extracted from the rotation matrix as:
     # psi = atan2(R[1,0], R[0,0])
@@ -427,7 +665,17 @@ def in_plane_rot_error(rot1, rot2):
     return angles, mean_angle, median_angle
 
 
-def offset_mean_error(offsets1, offsets2, L=None):
+def offset_mean_error(offsets1: torch.Tensor, offsets2: torch.Tensor, L: Optional[int] = None) -> float:
+    """Compute mean error between two sets of offsets.
+
+    Args:
+        offsets1: First set of offsets
+        offsets2: Second set of offsets
+        L: Image resolution for normalization (optional)
+
+    Returns:
+        Mean error (normalized by L if provided)
+    """
     mean_err = torch.norm(offsets1 - offsets2, dim=1).mean()
     if L is not None:
         mean_err /= L

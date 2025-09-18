@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+from typing import Any, Dict, Optional, Union
 
 import torch
 import torch.multiprocessing as mp
@@ -8,8 +9,10 @@ from torch import distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
+from cov3d.covar import Covar, Mean
 from cov3d.covar_sgd import CovarPoseTrainer, CovarTrainer, compute_updated_fourier_reg
-from cov3d.dataset import create_dataloader
+from cov3d.dataset import CovarDataset, GTData, create_dataloader
+from cov3d.poses import PoseModule
 from cov3d.utils import get_cpu_count
 
 logger = logging.getLogger(__name__)
@@ -17,7 +20,14 @@ logger = logging.getLogger(__name__)
 TMP_STATE_DICT_FILE = "tmp_state_dict.pt"
 
 
-def ddp_setup(rank, world_size, backend):
+def ddp_setup(rank: int, world_size: int, backend: str) -> None:
+    """Set up distributed data parallel environment.
+
+    Args:
+        rank: Process rank
+        world_size: Total number of processes
+        backend: Communication backend ("nccl" or "gloo")
+    """
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12356"
     dist.init_process_group(
@@ -27,18 +37,35 @@ def ddp_setup(rank, world_size, backend):
 
 
 def ddp_train(
-    rank,
-    world_size,
-    covar_model,
-    dataset,
-    batch_size_per_proc,
-    optimize_pose=False,
-    mean_model=None,
-    pose=None,
-    savepath=None,
-    gt_data=None,
-    kwargs={},
-):
+    rank: int,
+    world_size: int,
+    covar_model: Covar,
+    dataset: CovarDataset,
+    batch_size_per_proc: int,
+    optimize_pose: bool = False,
+    mean_model: Optional[Mean] = None,
+    pose: Optional[PoseModule] = None,
+    savepath: Optional[str] = None,
+    gt_data: Optional[GTData] = None,
+    kwargs: Dict[str, Any] = None,
+) -> None:
+    """Train covariance model using distributed data parallel.
+
+    Args:
+        rank: Process rank
+        world_size: Total number of processes
+        covar_model: Covariance model to train
+        dataset: Dataset for training
+        batch_size_per_proc: Batch size per process
+        optimize_pose: Whether to optimize poses (default: False)
+        mean_model: Mean model for pose optimization (optional)
+        pose: Pose model for optimization (optional)
+        savepath: Path to save results (optional)
+        gt_data: Ground truth data for evaluation (optional)
+        kwargs: Additional training parameters
+    """
+    if kwargs is None:
+        kwargs = {}
     backend = (
         "nccl" if kwargs.get("nufft_disc") is not None else "gloo"
     )  # For some reason cuFINUFFT breaks when using NCCL backend
@@ -160,17 +187,31 @@ def ddp_train(
 
 
 def trainParallel(
-    covar_model,
-    dataset,
-    batch_size,
-    num_gpus="max",
-    optimize_pose=False,
-    mean_model=None,
-    pose=None,
-    savepath=None,
-    gt_data=None,
-    **kwargs,
-):
+    covar_model: Covar,
+    dataset: CovarDataset,
+    batch_size: int,
+    num_gpus: Union[int, str] = "max",
+    optimize_pose: bool = False,
+    mean_model: Optional[Mean] = None,
+    pose: Optional[PoseModule] = None,
+    savepath: Optional[str] = None,
+    gt_data: Optional[GTData] = None,
+    **kwargs: Any,
+) -> None:
+    """Train covariance model in parallel across multiple GPUs.
+
+    Args:
+        covar_model: Covariance model to train
+        dataset: Dataset for training
+        batch_size: Total batch size across all GPUs
+        num_gpus: Number of GPUs to use or "max" for all available (default: "max")
+        optimize_pose: Whether to optimize poses (default: False)
+        mean_model: Mean model for pose optimization (optional)
+        pose: Pose model for optimization (optional)
+        savepath: Path to save results (optional)
+        gt_data: Ground truth data for evaluation (optional)
+        **kwargs: Additional training parameters
+    """
     if num_gpus == "max":
         num_gpus = torch.cuda.device_count()
 
@@ -196,7 +237,13 @@ def trainParallel(
         nprocs=num_gpus,
     )
 
-    def update_module_from_state_dict(module, state_dict_file):
+    def update_module_from_state_dict(module: torch.nn.Module, state_dict_file: str) -> None:
+        """Update module from saved state dictionary and clean up file.
+
+        Args:
+            module: Module to update
+            state_dict_file: Path to state dictionary file
+        """
         module.load_state_dict(torch.load(state_dict_file))
         os.remove(state_dict_file)
 

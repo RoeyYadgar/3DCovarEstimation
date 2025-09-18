@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Any, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -15,14 +15,27 @@ from cov3d.utils import get_complex_real_dtype, get_cpu_count, get_torch_device
 
 def reconstruct_mean(
     dataset: Union[CovarDataset, DataLoader],
-    init_vol=None,
-    mask=None,
-    upsampling_factor=2,
-    batch_size=1024,
-    idx=None,
-    return_lhs_rhs=False,
-):
+    init_vol: Optional[torch.Tensor] = None,
+    mask: Optional[torch.Tensor] = None,
+    upsampling_factor: int = 2,
+    batch_size: int = 1024,
+    idx: Optional[torch.Tensor] = None,
+    return_lhs_rhs: bool = False,
+) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Reconstruct mean volume from particle images.
 
+    Args:
+        dataset: Dataset or DataLoader containing particle images
+        init_vol: Initial volume for regularization (optional)
+        mask: Volume mask to apply (optional)
+        upsampling_factor: Upsampling factor for NUFFT (default: 2)
+        batch_size: Batch size for processing (default: 1024)
+        idx: Indices of particles to use (optional)
+        return_lhs_rhs: Whether to return left-hand side and right-hand side terms
+
+    Returns:
+        Reconstructed mean volume or tuple of (mean_volume, lhs, rhs)
+    """
     if not isinstance(dataset, DataLoader):
         if idx is None:
             idx = torch.arange(len(dataset))
@@ -99,8 +112,19 @@ def reconstruct_mean(
         return mean_volume, backproj_im, backproj_ctf
 
 
-def reconstruct_mean_from_halfsets(dataset: CovarDataset, idx=None, **reconstruction_kwargs):
+def reconstruct_mean_from_halfsets(
+    dataset: CovarDataset, idx: Optional[torch.Tensor] = None, **reconstruction_kwargs: Any
+) -> torch.Tensor:
+    """Reconstruct mean volume using half-sets for regularization.
 
+    Args:
+        dataset: Dataset containing particle images
+        idx: Indices of particles to use (optional)
+        **reconstruction_kwargs: Additional arguments for reconstruction
+
+    Returns:
+        Regularized mean volume
+    """
     reconstruction_kwargs["return_lhs_rhs"] = True
     if idx is None:
         idx = torch.arange(len(dataset))
@@ -113,9 +137,22 @@ def reconstruct_mean_from_halfsets(dataset: CovarDataset, idx=None, **reconstruc
     )
 
 
-def reconstruct_mean_from_halfsets_DDP(dataset: DataLoader, ranks=None, **reconstruction_kwargs):
-    # This function assumes the input dataloader has a distributed sampler.
-    # Each node will only pass on its corresponding samples determined by the sampler.
+def reconstruct_mean_from_halfsets_DDP(
+    dataset: DataLoader, ranks: Optional[List[int]] = None, **reconstruction_kwargs: Any
+) -> torch.Tensor:
+    """Reconstruct mean volume using half-sets with distributed data parallel processing.
+
+    This function assumes the input dataloader has a distributed sampler.
+    Each node will only pass on its corresponding samples determined by the sampler.
+
+    Args:
+        dataset: DataLoader with distributed sampler
+        ranks: List of ranks to use (default: all available ranks)
+        **reconstruction_kwargs: Additional arguments for reconstruction
+
+    Returns:
+        Regularized mean volume
+    """
     if ranks is None:
         ranks = [i for i in range(dist.get_world_size())]
 
@@ -160,8 +197,29 @@ def reconstruct_mean_from_halfsets_DDP(dataset: DataLoader, ranks=None, **recons
     return regularize_mean_from_halfsets(*half1, *half2, reconstruction_kwargs.get("mask", None))
 
 
-def regularize_mean_from_halfsets(mean_half1, lhs1, rhs1, mean_half2, lhs2, rhs2, mask=None):
+def regularize_mean_from_halfsets(
+    mean_half1: torch.Tensor,
+    lhs1: torch.Tensor,
+    rhs1: torch.Tensor,
+    mean_half2: torch.Tensor,
+    lhs2: torch.Tensor,
+    rhs2: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Regularize mean volume using FSC-based regularization from half-sets.
 
+    Args:
+        mean_half1: First half-set mean volume
+        lhs1: First half-set left-hand side term
+        rhs1: First half-set right-hand side term
+        mean_half2: Second half-set mean volume
+        lhs2: Second half-set left-hand side term
+        rhs2: Second half-set right-hand side term
+        mask: Volume mask to apply (optional)
+
+    Returns:
+        Regularized mean volume
+    """
     L = mean_half1.shape[-1]
 
     filter_gain = centered_fft3(centered_ifft3((rhs1 + rhs2), cropping_size=(L,) * 3)).abs() / 2

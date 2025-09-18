@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import click
 import numpy as np
@@ -20,7 +21,18 @@ from cov3d.trajectory import compute_density, compute_trajectory, find_closet_id
 logger = logging.getLogger(__name__)
 
 
-def get_embedding_reconstruct_func(method):
+def get_embedding_reconstruct_func(method: str) -> Callable:
+    """Get the reconstruction function for a given method.
+
+    Args:
+        method: Name of the reconstruction method
+
+    Returns:
+        The corresponding reconstruction function
+
+    Raises:
+        KeyError: If method is not supported
+    """
     methods = {
         "recovar": recovarReconstructFromEmbedding,
         "relion": utils.relionReconstructFromEmbedding,
@@ -31,7 +43,20 @@ def get_embedding_reconstruct_func(method):
     return methods[method]
 
 
-def create_scatter_figure(coords, cluster_coords, labels, scatter_size=0.1):
+def create_scatter_figure(
+    coords: np.ndarray, cluster_coords: Optional[np.ndarray], labels: Optional[np.ndarray], scatter_size: float = 0.1
+) -> plt.Figure:
+    """Create a scatter plot figure for coordinate visualization.
+
+    Args:
+        coords: 2D array of coordinates to plot
+        cluster_coords: Optional cluster center coordinates to annotate
+        labels: Optional labels for color coding points
+        scatter_size: Size of scatter points
+
+    Returns:
+        Matplotlib figure object
+    """
     fig = plt.figure()
     plt.scatter(coords[:, 0], coords[:, 1], s=scatter_size, c=labels)
     x_min, x_max = np.percentile(coords[:, 0], [0.5, 99.5])
@@ -46,7 +71,19 @@ def create_scatter_figure(coords, cluster_coords, labels, scatter_size=0.1):
     return fig
 
 
-def create_hist_figure(coords, cluster_coords=None, **scater_kwargs):
+def create_hist_figure(
+    coords: np.ndarray, cluster_coords: Optional[np.ndarray] = None, **scater_kwargs: Any
+) -> plt.Figure:
+    """Create a hexagonal binning histogram figure for coordinate visualization.
+
+    Args:
+        coords: 2D array of coordinates to plot
+        cluster_coords: Optional cluster center coordinates to annotate
+        **scater_kwargs: Additional keyword arguments for seaborn jointplot
+
+    Returns:
+        Matplotlib figure object
+    """
     fig = sns.jointplot(x=coords[:, 0], y=coords[:, 1], kind="hex", **scater_kwargs).figure
     if cluster_coords is not None:
         for i in range(cluster_coords.shape[0]):
@@ -61,7 +98,25 @@ def create_hist_figure(coords, cluster_coords=None, **scater_kwargs):
     return fig
 
 
-def create_umap_figure(umap_coords, cluster_coords=None, labels=None, fig_type="scatter", **scatter_kwargs):
+def create_umap_figure(
+    umap_coords: np.ndarray,
+    cluster_coords: Optional[np.ndarray] = None,
+    labels: Optional[np.ndarray] = None,
+    fig_type: str = "scatter",
+    **scatter_kwargs: Any,
+) -> Dict[str, plt.Figure]:
+    """Create a UMAP visualization figure.
+
+    Args:
+        umap_coords: 2D UMAP coordinates
+        cluster_coords: Optional cluster center coordinates
+        labels: Optional labels for color coding
+        fig_type: Type of figure ("scatter" or "hist")
+        **scatter_kwargs: Additional keyword arguments for plotting
+
+    Returns:
+        Dictionary containing the UMAP figure
+    """
     fig = (
         create_scatter_figure(umap_coords, cluster_coords, labels, **scatter_kwargs)
         if fig_type == "scatter"
@@ -72,7 +127,27 @@ def create_umap_figure(umap_coords, cluster_coords=None, labels=None, fig_type="
     return {"umap": fig}
 
 
-def create_pc_figure(pc_coords, cluster_coords=None, labels=None, num_pcs=5, fig_type="scatter", **scatter_kwargs):
+def create_pc_figure(
+    pc_coords: np.ndarray,
+    cluster_coords: Optional[np.ndarray] = None,
+    labels: Optional[np.ndarray] = None,
+    num_pcs: int = 5,
+    fig_type: str = "scatter",
+    **scatter_kwargs: Any,
+) -> Dict[str, plt.Figure]:
+    """Create principal component analysis visualization figures.
+
+    Args:
+        pc_coords: Principal component coordinates
+        cluster_coords: Optional cluster center coordinates
+        labels: Optional labels for color coding
+        num_pcs: Number of principal components to plot
+        fig_type: Type of figure ("scatter" or "hist")
+        **scatter_kwargs: Additional keyword arguments for plotting
+
+    Returns:
+        Dictionary containing PCA figures for each component pair
+    """
     figures = {}
     num_pcs = min(num_pcs, pc_coords.shape[1])
     for i in range(num_pcs):
@@ -91,7 +166,15 @@ def create_pc_figure(pc_coords, cluster_coords=None, labels=None, num_pcs=5, fig
     return figures
 
 
-def create_covar_fsc_figure(fsc):
+def create_covar_fsc_figure(fsc: np.ndarray) -> plt.Figure:
+    """Create a figure showing covariance FSC analysis.
+
+    Args:
+        fsc: Fourier shell correlation matrix
+
+    Returns:
+        Matplotlib figure with FSC visualization
+    """
     fig, axs = plt.subplots(1, 2, figsize=(12, 6), gridspec_kw={"width_ratios": [1, 1]})
     im1 = axs[0].imshow(fsc, vmin=0, vmax=1, aspect="auto")
     fsc_mean = np.mean(fsc)
@@ -112,11 +195,17 @@ def create_covar_fsc_figure(fsc):
     return fig
 
 
-def plot_volume_projections(volumes):
+def plot_volume_projections(volumes: np.ndarray) -> plt.Figure:
     """Plot k x 3 projections (mean along axis) for a k x n x n x n tensor of volumes.
 
     Positive values shown in red, negative in blue, zero as white. Adds black horizontal bars
     between volume rows.
+
+    Args:
+        volumes: 4D array of volumes with shape (k, n, n, n)
+
+    Returns:
+        Matplotlib figure with volume projections
     """
     k = volumes.shape[0]
     fig = plt.figure(figsize=(12, 4 * k + k - 1))  # Add extra height for black bars
@@ -191,22 +280,45 @@ def plot_volume_projections(volumes):
     default=None,
     help="path to pkl file containing gt labels. if provided used for coloring embedding figures",
 )
-def analyze_cli(result_data, **kwargs):
+def analyze_cli(result_data: str, **kwargs: Any) -> None:
+    """Command line interface for the analyze function.
+
+    Args:
+        result_data: Path to pickle file containing algorithm results
+        **kwargs: Additional keyword arguments passed to analyze function
+    """
     analyze(result_data, **kwargs)
 
 
 def analyze(
-    result_data,
-    output_dir=None,
-    analyze_with_gt=False,
-    num_clusters=40,
-    latent_coords=None,
-    reconstruct_method="recovar",
-    skip_reconstruction=False,
-    skip_coor_analysis=False,
-    num_trajectories=0,
-    gt_labels=None,
-):
+    result_data: str,
+    output_dir: Optional[str] = None,
+    analyze_with_gt: bool = False,
+    num_clusters: int = 40,
+    latent_coords: Optional[Union[str, np.ndarray]] = None,
+    reconstruct_method: str = "recovar",
+    skip_reconstruction: bool = False,
+    skip_coor_analysis: bool = False,
+    num_trajectories: int = 0,
+    gt_labels: Optional[Union[str, np.ndarray]] = None,
+) -> Dict[str, str]:
+    """Perform comprehensive analysis of covariance estimation results.
+
+    Args:
+        result_data: Path to pickle file containing algorithm results
+        output_dir: Directory to store analysis output (defaults to result_data directory)
+        analyze_with_gt: Whether to perform analysis with ground truth eigenvolumes
+        num_clusters: Number of k-means clusters for reconstruction
+        latent_coords: Path to pickle file or array of latent coordinates for cluster centers
+        reconstruct_method: Method for volume reconstruction ("recovar", "relion", etc.)
+        skip_reconstruction: Whether to skip volume reconstruction
+        skip_coor_analysis: Whether to skip coordinate analysis (k-means & UMAP)
+        num_trajectories: Number of trajectories to compute
+        gt_labels: Path to pickle file or array of ground truth labels for coloring
+
+    Returns:
+        Dictionary mapping figure names to file paths
+    """
     with open(result_data, "rb") as f:
         data = pickle.load(f)
 
@@ -303,8 +415,19 @@ def analyze(
     return figure_paths
 
 
-def analyze_coordinates(coords, num_clusters, gt_labels):
+def analyze_coordinates(
+    coords: np.ndarray, num_clusters: Union[int, np.ndarray], gt_labels: Optional[np.ndarray]
+) -> Tuple[Dict[str, Any], Dict[str, plt.Figure], UMAP]:
+    """Analyze coordinates using UMAP and k-means clustering.
 
+    Args:
+        coords: Coordinate data to analyze
+        num_clusters: Number of clusters for k-means or pre-computed cluster coordinates
+        gt_labels: Optional ground truth labels for coloring
+
+    Returns:
+        Tuple containing (data_dict, figures_dict, umap_reducer)
+    """
     reducer = UMAP(n_components=2)
     umap_coords = reducer.fit_transform(coords)
 
@@ -335,7 +458,23 @@ def analyze_coordinates(coords, num_clusters, gt_labels):
     return data, figures, reducer
 
 
-def save_analysis_result(dir, data=None, figures=None, eigenvols=None):
+def save_analysis_result(
+    dir: str,
+    data: Optional[Dict[str, Any]] = None,
+    figures: Optional[Dict[str, plt.Figure]] = None,
+    eigenvols: Optional[np.ndarray] = None,
+) -> Dict[str, str]:
+    """Save analysis results to disk.
+
+    Args:
+        dir: Directory to save results
+        data: Optional data dictionary to save as pickle
+        figures: Optional dictionary of matplotlib figures to save
+        eigenvols: Optional eigenvolumes to save as MRC files
+
+    Returns:
+        Dictionary mapping figure names to file paths
+    """
     os.makedirs(dir, exist_ok=True)
 
     if data is not None:
