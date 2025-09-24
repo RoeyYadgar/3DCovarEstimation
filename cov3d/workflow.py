@@ -15,8 +15,9 @@ from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset, GTData, LazyCovarDataset
 from cov3d.logger import setup_logger
 from cov3d.poses import PoseModule, offset_mean_error, out_of_plane_rot_error, pose_ASPIRE2cryoDRGN, pose_cryoDRGN2APIRE
+from cov3d.reconstruct_utils import relionReconstruct
 from cov3d.source import ImageSource
-from cov3d.utils import cosineSimilarity, get_torch_device, readVols, relionReconstruct, volsCovarEigenvec
+from cov3d.utils import cosineSimilarity, get_torch_device, readVols, volsCovarEigenvec
 from cov3d.wiener_coords import latentMAP
 
 logger = logging.getLogger(__name__)

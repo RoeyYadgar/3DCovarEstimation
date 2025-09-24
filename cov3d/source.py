@@ -1,14 +1,22 @@
 import os
 import pickle
 from copy import deepcopy
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
+import mrcfile
+import numpy as np
 import torch
+from aspire.image import Image
+from aspire.operators import ArrayFilter, MultiplicativeFilter, ScalarFilter
+from aspire.utils import Rotation
+from aspire.volume import Volume, rotated_grids
 from cryodrgn.ctf import compute_ctf, load_ctf_for_training
 from cryodrgn.source import ImageSource as CryoDRGNImageSource
 
-from cov3d.poses import get_phase_shift_grid, pose_cryoDRGN2APIRE
-from cov3d.projection_funcs import centered_fft2, centered_ifft2
+from cov3d.nufft_plan import NufftPlan
+from cov3d.poses import get_phase_shift_grid, pose_ASPIRE2cryoDRGN, pose_cryoDRGN2APIRE
+from cov3d.projection_funcs import centered_fft2, centered_ifft2, vol_forward
+from cov3d.utils import get_torch_device
 
 
 class ImageSource:
@@ -299,3 +307,226 @@ class ImageSource:
             Tuple of (particles_path, ctf_path, poses_path)
         """
         return self.particles_path, self.ctf_path, self.poses_path
+
+
+class SimulatedSource:
+    """Simulated source for generating synthetic cryo-EM heterogeneity dataset. Uses the same
+    interface as ASPIRE ImageSource needed to be consumed by CovarDataset.
+
+    Attributes:
+        n: Number of particles to generate
+        L: Image resolution
+        num_vols: Number of volumes
+        vols: Volume data
+        whiten: Whether to whiten the images
+        _unique_filters: List of unique CTF filters
+        rotations_std: Standard deviation for rotation noise
+        offsets_std: Standard deviation for offset noise
+        _clean_images: Clean images without noise
+        _noise_var: Noise variance
+        _image_noise: Noise tensor
+        offsets: Translation offsets
+        amplitudes: Amplitude scaling factors
+        states: Volume state assignments
+        filter_indices: Filter index assignments
+        rotations: Rotation matrices
+        _rotations: Original rotation matrices without noise
+        _offsets: Original offsets without noise
+    """
+
+    def __init__(
+        self,
+        n: int,
+        vols: Volume,
+        noise_var: float,
+        whiten: bool = True,
+        unique_filters: Optional[List] = None,
+        rotations_std: float = 0,
+        offsets_std: float = 0,
+    ) -> None:
+        self.n = n
+        self.L = vols.shape[-1]
+        self.num_vols = vols.shape[0]
+        self.vols = vols
+        self.whiten = whiten
+        if unique_filters is None:
+            unique_filters = [ArrayFilter(np.ones((self.L, self.L)))]
+        self._unique_filters = unique_filters
+        self.rotations_std = rotations_std
+        self.offsets_std = offsets_std
+        self._clean_images = self._gen_clean_images()
+        self.noise_var = noise_var
+
+    @property
+    def noise_var(self) -> float:
+        """Get effective noise variance.
+
+        Returns:
+            Noise variance (1.0 if whitened, actual value otherwise)
+        """
+        return self._noise_var if (not self.whiten) else 1
+
+    @noise_var.setter
+    def noise_var(self, noise_var: float) -> None:
+        """Set noise variance and generate corresponding noise.
+
+        Args:
+            noise_var: Noise variance value
+        """
+        self._noise_var = noise_var
+        self._image_noise = torch.randn(
+            (self.n, self.L, self.L), dtype=self._clean_images.dtype, device=self._clean_images.device
+        ) * (self._noise_var**0.5)
+
+    @property
+    def images(self) -> Image:
+        """Get noisy images with optional whitening.
+
+        Returns:
+            ASPIRE Image object containing noisy particle images
+        """
+        images = self._clean_images + self._image_noise
+        if self.whiten:
+            images /= (self._noise_var) ** 0.5
+
+        return Image(images.numpy())
+
+    @property
+    def unique_filters(self) -> List:
+        """Get unique filters with whitening applied.
+
+        Returns:
+            List of filters with whitening filter applied
+        """
+        if self.whiten:
+            whiten_filter = ScalarFilter(dim=2, value=self._noise_var ** (-0.5))
+            return [MultiplicativeFilter(filt, whiten_filter) for filt in self._unique_filters]
+
+        return self._unique_filters
+
+    def noisify_rotations(self, rots: np.ndarray, noise_std: float) -> np.ndarray:
+        """Add noise to rotation matrices.
+
+        Args:
+            rots: Input rotation matrices
+            noise_std: Standard deviation of rotation noise
+
+        Returns:
+            Noisy rotation matrices
+        """
+        noisy_rots = Rotation.from_matrix(rots).as_rotvec()
+        noisy_rots += noise_std * np.random.randn(*noisy_rots.shape)
+        return Rotation.from_rotvec(noisy_rots).matrices.astype(rots.dtype)
+
+    def _gen_clean_images(self, batch_size: int = 1024) -> torch.Tensor:
+        """Generate clean images by projecting volumes.
+
+        Args:
+            batch_size: Batch size for processing
+
+        Returns:
+            Clean images tensor
+        """
+        clean_images = torch.zeros((self.n, self.L, self.L))
+        self._offsets = torch.zeros((self.n, 2))  # TODO: create non-zero gt offsets
+        self.offsets = self._offsets + self.L * self.offsets_std * np.random.randn(self.n, 2)
+        self.amplitudes = np.ones((self.n))
+        self.states = torch.tensor(np.random.choice(self.num_vols, self.n))
+        self.filter_indices = np.random.choice(len(self._unique_filters), self.n)
+        self._rotations = Rotation.generate_random_rotations(self.n).matrices
+        self.rotations = self.noisify_rotations(self._rotations, self.rotations_std)
+
+        unique_filters = torch.tensor(
+            np.array([self._unique_filters[i].evaluate_grid(self.L) for i in range(len(self._unique_filters))]),
+            dtype=torch.float32,
+        )
+        pts_rot = torch.tensor(rotated_grids(self.L, self._rotations).copy()).reshape((3, self.n, self.L**2))
+        pts_rot = pts_rot.transpose(0, 1)
+        pts_rot = torch.remainder(pts_rot + torch.pi, 2 * torch.pi) - torch.pi
+
+        device = get_torch_device()
+        volumes = torch.tensor(self.vols.asnumpy(), device=device)
+        nufft_plan = NufftPlan((self.L,) * 3, batch_size=1, dtype=volumes.dtype, device=device)
+
+        for i in range(self.num_vols):
+            idx = (self.states == i).nonzero().reshape(-1)
+            for j in range(0, len(idx), batch_size):
+                batch_ind = idx[j : j + batch_size]
+                ptsrot = pts_rot[batch_ind].to(device)
+                filter_indices = self.filter_indices[batch_ind]
+                filters = unique_filters[filter_indices].to(device)
+
+                nufft_plan.setpts(ptsrot)
+                projected_volume = vol_forward(volumes[i].unsqueeze(0), nufft_plan, filters).squeeze(1)
+
+                clean_images[batch_ind] = projected_volume.cpu()
+
+        return clean_images
+
+    def _ctf_cryodrgn_format(self):
+        ctf = np.zeros((len(self._unique_filters), 9))
+        for i, ctf_filter in enumerate(self._unique_filters):
+            ctf[i, 0] = self.L
+            ctf[i, 1] = ctf_filter.pixel_size
+            ctf[i, 2] = ctf_filter.defocus_u
+            ctf[i, 3] = ctf_filter.defocus_v
+            ctf[i, 4] = ctf_filter.defocus_ang / np.pi * 180
+            ctf[i, 5] = ctf_filter.voltage
+            ctf[i, 6] = ctf_filter.Cs
+            ctf[i, 7] = ctf_filter.alpha
+            ctf[i, 8] = 0  # phase shift
+
+        full_ctf = np.zeros((self.n, 9))
+        for i in range(ctf.shape[0]):
+            full_ctf[self.filter_indices == i] = ctf[i]
+
+        return full_ctf
+
+    def save(
+        self,
+        output_dir: str,
+        file_prefix: Optional[str] = None,
+        save_image_stack: bool = True,
+        gt_pose: bool = False,
+        whiten: bool = False,
+    ) -> None:
+        """Save simulated data to files.
+
+        Args:
+            output_dir: Output directory for saved files
+            file_prefix: Optional prefix for filenames
+            save_image_stack: Whether to save image stack
+            gt_pose: Whether to use ground truth poses
+            whiten: Whether to apply whitening
+        """
+
+        def add_prefix(filename: str) -> str:
+            return f"{file_prefix}_{filename}" if file_prefix is not None else filename
+
+        mrcs_output = os.path.join(output_dir, add_prefix("particles.mrcs"))
+        poses_output = os.path.join(output_dir, add_prefix("poses.pkl"))
+        ctf_output = os.path.join(output_dir, add_prefix("ctf.pkl"))
+
+        if save_image_stack:
+            whiten_val = self.whiten
+            self.whiten = whiten
+            with mrcfile.new(mrcs_output, overwrite=True) as mrc:
+                mrc.set_data(self.images.asnumpy().astype(np.float32))
+                # mrc.voxel_size = self.vols.pixel_size
+                # mrc.set_spacegroup(1)
+                # mrc.data = np.transpose(mrc.data,(0,2,1))
+                # mrc.update_header()
+            self.whiten = whiten_val
+
+        if gt_pose:
+            rots = self._rotations
+            offsets = self._offsets
+        else:
+            rots = self.rotations
+            offsets = self.offsets
+        poses = pose_ASPIRE2cryoDRGN(rots, offsets, self.L)
+        with open(poses_output, "wb") as f:
+            pickle.dump(poses, f)
+
+        with open(ctf_output, "wb") as f:
+            pickle.dump(self._ctf_cryodrgn_format(), f)

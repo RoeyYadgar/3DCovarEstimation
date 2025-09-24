@@ -13,7 +13,7 @@ from matplotlib import pyplot as plt
 from sklearn.cluster import KMeans
 from umap import UMAP
 
-from cov3d import utils
+from cov3d import reconstruct_utils
 from cov3d.fsc_utils import covar_fsc
 from cov3d.recovar_utils import recovarReconstructFromEmbedding
 from cov3d.trajectory import compute_density, compute_trajectory, find_closet_idx, pick_trajectory_pairs
@@ -35,9 +35,9 @@ def get_embedding_reconstruct_func(method: str) -> Callable:
     """
     methods = {
         "recovar": recovarReconstructFromEmbedding,
-        "relion": utils.relionReconstructFromEmbedding,
-        "reprojection": utils.reprojectVolumeFromEmbedding,
-        "relion_disjoint": utils.relionReconstructFromEmbeddingDisjointSets,
+        "relion": reconstruct_utils.relionReconstructFromEmbedding,
+        "reprojection": reconstruct_utils.reprojectVolumeFromEmbedding,
+        "relion_disjoint": reconstruct_utils.relionReconstructFromEmbeddingDisjointSets,
     }
 
     return methods[method]

@@ -23,8 +23,7 @@ from cov3d.projection_funcs import (
     im_backward,
     preprocess_image_batch,
 )
-from cov3d.sim_source import SimulatedSource
-from cov3d.source import ImageSource
+from cov3d.source import ImageSource, SimulatedSource
 from cov3d.utils import get_torch_device, set_module_grad, soft_edged_kernel
 
 logger = logging.getLogger(__name__)
@@ -92,7 +91,7 @@ class CovarDataset(Dataset):
         self.images = source.images(torch.arange(0, len(source)))
         self.filters = source.get_ctf(torch.arange(0, len(source)))
 
-    def _init_from_aspire_source(self, source: Any) -> None:
+    def _init_from_aspire_source(self, source: Union[ASPIREImageSource, SimulatedSource]) -> None:
         """Initialize dataset from ASPIRE source object.
 
         Args:
