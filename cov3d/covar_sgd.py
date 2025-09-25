@@ -254,6 +254,12 @@ class CovarTrainer:
         if self.logTraining:
             pbar = tqdm(total=self.dataloader_len, desc=f"Epoch {epoch} , ", position=0, leave=True)
 
+        mem_allocated = torch.cuda.memory_allocated(self.device) / (1024**3)
+        mem_reserved = torch.cuda.memory_reserved(self.device) / (1024**3)
+        logger.debug(
+            f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB"
+        )
+
         self.cost_in_epoch = torch.tensor(0, device=self.device, dtype=torch.float32)
         for batch_ind, data in enumerate(self.train_data):
             images, pts_rot, filters = self.prepare_batch(data)
@@ -888,12 +894,6 @@ class CovarPoseTrainer(CovarTrainer):
             epoch: Current epoch number
         """
         super().run_epoch(epoch)
-
-        mem_allocated = torch.cuda.memory_allocated(self.device) / (1024**3)
-        mem_reserved = torch.cuda.memory_reserved(self.device) / (1024**3)
-        logger.debug(
-            f"Device {self.device} GPU memory allocated: {mem_allocated:.2f} GB, reserved: {mem_reserved:.2f} GB"
-        )
 
         if epoch % self.mean_update_frequency == self.mean_update_frequency - 1:
             if self.offset_est_method == "Newton":
