@@ -280,6 +280,17 @@ def plot_volume_projections(volumes: np.ndarray) -> plt.Figure:
     default=None,
     help="path to pkl file containing gt labels. if provided used for coloring embedding figures",
 )
+@click.option(
+    "--override-particles",
+    nargs=3,
+    type=str,
+    default=None,
+    help=(
+        "Override particles for volume reconstruction "
+        "(Used for reconstruction at original resolution, before downsampling). "
+        "Specify particles_path ctf_path poses_path"
+    ),
+)
 def analyze_cli(result_data: str, **kwargs: Any) -> None:
     """Command line interface for the analyze function.
 
@@ -301,6 +312,7 @@ def analyze(
     skip_coor_analysis: bool = False,
     num_trajectories: int = 0,
     gt_labels: Optional[Union[str, np.ndarray]] = None,
+    override_particles: Optional[Tuple[str, str, str]] = None,
 ) -> Dict[str, str]:
     """Perform comprehensive analysis of covariance estimation results.
 
@@ -315,6 +327,7 @@ def analyze(
         skip_coor_analysis: Whether to skip coordinate analysis (k-means & UMAP)
         num_trajectories: Number of trajectories to compute
         gt_labels: Path to pickle file or array of ground truth labels for coloring
+        override_particles: Path to particles, ctf and poses to be used for reconstruction instead of original data.
 
     Returns:
         Dictionary mapping figure names to file paths
@@ -353,6 +366,20 @@ def analyze(
                 "analyze_with_gt was set to True but coords_GT is not present in result_data - "
                 "skipping analysis with gt coordinates"
             )
+
+    if override_particles is not None:
+        with open(result_data, "rb") as f:
+            orig_data = pickle.load(f)
+        orig_data["particles_path"] = os.path.abspath(override_particles[0])
+        orig_data["ctf_path"] = os.path.abspath(override_particles[1])
+        orig_data["poses_path"] = os.path.abspath(override_particles[2])
+
+        overriden_path = f"{result_data}.overriden.tmp"
+
+        with open(overriden_path, "wb") as f:
+            pickle.dump(orig_data, f)
+
+        result_data = overriden_path
 
     figure_paths = {}
     for coords_key, _, analysis_dir, fig_prefix, eigenvols_key in zip(
@@ -411,6 +438,9 @@ def analyze(
         figure_path = os.path.join(output_dir, analysis_output_dir[0], "covar_GT_fsc.jpg")
         covar_fsc_figure.savefig(figure_path)
         figure_paths["covar_GT_fsc"] = figure_path
+
+    if override_particles is not None:
+        os.remove(overriden_path)
 
     return figure_paths
 
