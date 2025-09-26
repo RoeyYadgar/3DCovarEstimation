@@ -15,6 +15,7 @@ def getRecovarDataset(
     particles_path: str,
     ctf_path: Optional[str] = None,
     poses_path: Optional[str] = None,
+    ind: Optional[np.ndarray] = None,
     split: bool = True,
     perm: Optional[np.ndarray] = None,
     uninvert_data: bool = False,
@@ -40,12 +41,13 @@ def getRecovarDataset(
     dataset_dict["particles_file"] = particles_path
 
     if split:
-        num_ims = ImageSource.from_file(dataset_dict["particles_file"]).n
+        num_ims = ImageSource.from_file(dataset_dict["particles_file"]).n if ind is None else len(ind)
         if perm is None:
-            perm = np.random.permutation(num_ims)
+            perm = np.random.permutation(num_ims) if ind is None else np.random.permutation(ind)
         ind_split = [perm[: num_ims // 2], perm[num_ims // 2 :]]
         return recovar_ds.get_split_datasets_from_dict(dataset_dict, ind_split, lazy=False), perm
     else:
+        dataset_dict["ind"] = ind
         return recovar_ds.load_dataset_from_dict(dataset_dict), None
 
 
@@ -105,8 +107,9 @@ def prepareDatasetForReconstruction(result_path: str) -> Tuple[Any, np.ndarray, 
     particles_path = result["particles_path"]
     ctf_path = result.get("ctf_path", None)
     poses_path = result.get("poses_path", None)
+    ind = result.get("ind", None)
     dataset, dataset_perm = getRecovarDataset(
-        particles_path, ctf_path=ctf_path, poses_path=poses_path, uninvert_data=result["data_sign_inverted"]
+        particles_path, ctf_path=ctf_path, poses_path=poses_path, ind=ind, uninvert_data=result["data_sign_inverted"]
     )
     batch_size = recovar.utils.get_image_batch_size(
         dataset[0].grid_size, gpu_memory=recovar.utils.get_gpu_memory_total()

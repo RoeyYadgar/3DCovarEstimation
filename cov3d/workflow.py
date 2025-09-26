@@ -162,6 +162,7 @@ def covar_workflow(
     poses: Optional[str] = None,
     ctf: Optional[str] = None,
     lazy: bool = False,
+    ind: Optional[str] = None,
     whiten: bool = True,
     mask: Optional[str] = "fuzzy",
     optimize_pose: bool = False,
@@ -182,6 +183,7 @@ def covar_workflow(
         poses: Path to poses file (optional)
         ctf: Path to CTF file (optional)
         lazy: Whether to use lazy dataset (default: False)
+        ind: Path to pkl file with particle indeces to be used (optional)
         whiten: Whether to whiten images (default: True)
         mask: Mask specification (default: "fuzzy")
         optimize_pose: Whether to optimize poses (default: False)
@@ -207,11 +209,15 @@ def covar_workflow(
         if not path.isdir(output_dir):
             os.mkdir(output_dir)
 
-        source = ImageSource(inputfile, poses_path=poses, ctf_path=ctf, apply_preprocessing=whiten)
+        if ind is not None:
+            with open(ind, "rb") as f:
+                ind = pickle.load(f)
+
+        source = ImageSource(inputfile, poses_path=poses, ctf_path=ctf, indices=ind, apply_preprocessing=whiten)
         noise_var = source.estimate_noise_var() if not whiten else 1
         L = source.resolution
 
-        mean_est = relionReconstruct(inputfile, path.join(output_dir, "mean_est.mrc"), overwrite=True)
+        mean_est = relionReconstruct(inputfile, path.join(output_dir, "mean_est.mrc"), overwrite=True, mrcs_index=ind)
 
         logger.debug(f"Norm squared of mean volume : {np.linalg.norm(mean_est)**2}")
 
@@ -233,7 +239,10 @@ def covar_workflow(
             invert_data=invert_data,
             apply_preprocessing=not optimize_pose,
         )  # When pose is being optimized the pre-processing must be done in the training loop itself
+
+        # Attach source metadata
         dataset.input_paths = source.get_paths()
+        dataset.indices = source.indices
 
         if gt_path is None:
             # Construct GT data from availble inputs
@@ -363,7 +372,7 @@ def covar_processing(
         "batch_size": 1024,
         "max_epochs": 20,
         "lr": 1e-6,
-        "optim_type": "Adam",  # TODO : refine learning rate and reg values
+        "optim_type": "Adam",
         "reg": 1,
         "orthogonal_projection": False,
         "nufft_disc": "bilinear",
@@ -404,7 +413,7 @@ def covar_processing(
         mean = None
         pose = None
 
-    if torch.cuda.device_count() > 1:  # TODO : implement halfsets for parallel training
+    if torch.cuda.device_count() > 1:
         trainParallel(
             cov,
             dataset,
@@ -489,6 +498,7 @@ def covar_processing(
         "particles_path": get_abspath(input_paths[0]),
         "ctf_path": get_abspath(input_paths[1]),
         "poses_path": get_abspath(input_paths[2]),
+        "ind": dataset.indices,
         "data_sign_inverted": dataset.data_inverted,
     }
     if is_gt_eigenvols:
@@ -504,7 +514,6 @@ def covar_processing(
         pickle.dump(data_dict, fid)
     if dataset.mask is not None:
         aspire.volume.Volume(dataset.mask.cpu().numpy()).save(path.join(output_dir, "used_mask.mrc"), overwrite=True)
-    # TODO: save eigenvolumes as MRC
 
     training_data = torch.load(path.join(output_dir, "training_results.bin"))
 
@@ -551,6 +560,7 @@ def workflow_click_decorator(func: Callable) -> Callable:
             "and will be processed when accessed. This is useful for large datasets."
         ),
     )
+    @click.option("--ind", type=str, default=None, help="Path to pkl file with particle indices to be used (optional)")
     @click.option("-w", "--whiten", type=bool, default=True, help="whether to whiten the images before processing")
     @click.option(
         "--mask",
