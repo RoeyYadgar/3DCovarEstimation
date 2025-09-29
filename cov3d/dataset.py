@@ -565,6 +565,10 @@ class LazyCovarDataset(CovarDataset):
                 )
             )
 
+        if not self.apply_preprocessing:
+            logger.debug("Apply pre-preprocessing is False, when preprocess_from_modoules was called. Changing to True")
+            self.apply_preprocessing = True
+
         self._set_internal_preprocessing_modules(mean_module, pose_module, nufft_plan)
 
     def _set_internal_preprocessing_modules(self, mean_module, pose_module, nufft_plan):
