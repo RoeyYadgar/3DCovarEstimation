@@ -596,7 +596,29 @@ def estimate_image_offsets(
     return estimate_image_offsets_newton(images, reference, init_offsets=init_offsets, in_fourier_domain=True)
 
 
-def out_of_plane_rot_error(rot1: torch.Tensor, rot2: torch.Tensor) -> Tuple[np.ndarray, float, float]:
+def find_global_alignment(rot1: torch.Tensor, rot2: torch.Tensor) -> torch.Tensor:
+    """Find the best global rotation Q such that rot1 ≈ Q @ rot2.
+
+    Uses orthogonal Procrustes via SVD.
+    """
+    # rot1, rot2: (N, 3, 3)
+    M = torch.zeros((3, 3), dtype=rot1.dtype, device=rot1.device)
+    for i in range(rot1.shape[0]):
+        M += rot1[i] @ rot2[i].T
+
+    U, _, Vt = torch.linalg.svd(M)
+    Q = U @ Vt
+
+    # Ensure det(Q) = +1 (proper rotation)
+    if torch.det(Q) < 0:
+        U[:, -1] *= -1
+        Q = U @ Vt
+    return Q
+
+
+def out_of_plane_rot_error(
+    rot1: torch.Tensor, rot2: torch.Tensor, global_align: bool = False
+) -> Tuple[np.ndarray, float, float]:
     """Compute out-of-plane rotation error between two sets of rotation matrices.
 
     Implementation is used from DRGN-AI
@@ -605,10 +627,15 @@ def out_of_plane_rot_error(rot1: torch.Tensor, rot2: torch.Tensor) -> Tuple[np.n
     Args:
         rot1: First set of rotation matrices
         rot2: Second set of rotation matrices
+        global_align: Whether to perform global alignment of rotations before computing error
 
     Returns:
         Tuple of (angles, mean_angle, median_angle) in degrees
     """
+    if global_align:
+        Q = find_global_alignment(rot1, rot2)
+        rot2 = torch.einsum("ij,njk->nik", Q, rot2)  # rot2' = Q @ rot2
+
     unitvec_gt = torch.tensor([0, 0, 1], dtype=torch.float32).reshape(3, 1)
 
     out_of_planes_1 = torch.sum(rot1 * unitvec_gt, dim=-2)
@@ -625,7 +652,7 @@ def out_of_plane_rot_error(rot1: torch.Tensor, rot2: torch.Tensor) -> Tuple[np.n
 
 
 def in_plane_rot_error(
-    rot1: Union[torch.Tensor, np.ndarray], rot2: Union[torch.Tensor, np.ndarray]
+    rot1: Union[torch.Tensor, np.ndarray], rot2: Union[torch.Tensor, np.ndarray], global_align: bool = False
 ) -> Tuple[np.ndarray, float, float]:
     """Compute the in-plane rotation error (in degrees) between two sets of rotation matrices.
 
@@ -634,10 +661,14 @@ def in_plane_rot_error(
     Args:
         rot1: First set of rotation matrices
         rot2: Second set of rotation matrices
+        global_align: Whether to perform global alignment of rotations before computing error
 
     Returns:
         Tuple of (angles, mean_angle, median_angle) in degrees
     """
+    if global_align:
+        Q = find_global_alignment(rot1, rot2)
+        rot2 = torch.einsum("ij,njk->nik", Q, rot2)  # rot2' = Q @ rot2
     # The in-plane rotation angle psi can be extracted from the rotation matrix as:
     # psi = atan2(R[1,0], R[0,0])
     # rot1, rot2: (..., 3, 3) tensors
