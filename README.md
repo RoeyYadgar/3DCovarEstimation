@@ -9,7 +9,7 @@ conda activate cov3d
 
 conda install -c nvidia -c conda-forge cuda=12.1 cudnn=9.8
 pip install torch --index-url https://download.pytorch.org/whl/cu121
-pip install --upgrade "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+pip install --upgrade "jax[cuda12]>=0.5.0,<0.6.0" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 pip install -e .
 
 #Install recovar with no dependecies - due to some dependecies confclits

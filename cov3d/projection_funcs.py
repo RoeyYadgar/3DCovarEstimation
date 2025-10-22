@@ -354,7 +354,7 @@ def im_backward(
         Back-projected volume
     """
     L = image.shape[-1]
-    im_fft = centered_fft2(image / L**2) if (not fourier_domain) else image
+    im_fft = centered_fft2(image / L**2) if (not fourier_domain) else image.clone()
 
     if filters is not None:
         im_fft *= filters
