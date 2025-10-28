@@ -31,7 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "comet_ml==3.48.1",
-    "dadapy==0.3.2"
+    "pre-commit"
 ]
 
 [tool.setuptools]
