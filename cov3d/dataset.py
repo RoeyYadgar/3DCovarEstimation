@@ -106,7 +106,7 @@ class CovarDataset(Dataset):
             source.filter_indices.astype(int)
         )  # For some reason ASPIRE store filter_indices as string for some star files
         num_filters = len(source.unique_filters)
-        unique_filters = torch.zeros((num_filters, source.L, source.L))
+        unique_filters = torch.zeros((num_filters, source.L, source.L), dtype=self.images.dtype)
         for i in range(num_filters):
             unique_filters[i] = torch.tensor(source.unique_filters[i].evaluate_grid(source.L))
 
@@ -698,6 +698,10 @@ class LazyCovarDataset(CovarDataset):
             subset._pose_module = PoseModule(rot_vecs, offsets, self.resolution)
 
         return subset
+
+    def half_split(self, permute: bool = False) -> Tuple["LazyCovarDataset", "LazyCovarDataset", torch.Tensor]:
+        assert not permute, "Cannot permute dataset in lazy mode"
+        return super().half_split(False)
 
     def to_fourier_domain(self):
         if self._in_spatial_domain:
