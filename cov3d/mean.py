@@ -66,9 +66,11 @@ def reconstruct_mean(
     for batch in tqdm(dataloader, desc="Reconstructing mean volume"):
         images, pts_rot, filters, idx = batch
         image_offsets = dataset.offsets[idx].to(device).to(pts_rot.dtype)
+        image_contrasts = dataset.contrasts[idx].to(device)
         images = images.to(device) * offset_to_phase_shift(-image_offsets, phase_shift_grid=phase_shift_grid)
         pts_rot = pts_rot.to(device)
         filters = filters.to(device)
+        filters *= image_contrasts.reshape(-1, 1, 1)
 
         nufft_plan.setpts(pts_rot)
 
@@ -97,7 +99,8 @@ def reconstruct_mean(
         plt.yscale("log")
         fig.savefig("test.jpg")
     else:
-        reg = torch.ones_like(backproj_ctf) * 1e-1  # 3 #TODO: determine this constant adapatively
+        # reg = torch.ones_like(backproj_ctf) * 1e-1  # 3 #TODO: determine this constant adapatively
+        reg = backproj_ctf.abs().max() * 1e-4
 
     mean_volume = backproj_im / (backproj_ctf + reg)
 

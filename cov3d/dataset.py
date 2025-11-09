@@ -73,10 +73,10 @@ class CovarDataset(Dataset):
             self.preprocess_from_modules(
                 *self.construct_mean_pose_modules(mean_volume, mask, self.rot_vecs, self.offsets)
             )
-            self.offsets[:] = 0  # After preprocessing images have no offsets
 
         self.dtype = self.images.dtype
         self.mask = torch.tensor(mask.asnumpy()) if mask is not None else None
+        self.contrasts = torch.ones((len(self)), dtype=self.offsets.dtype)
 
     def _init_from_source(self, source: "ImageSource") -> None:
         """Initialize dataset from ImageSource object.
@@ -233,18 +233,16 @@ class CovarDataset(Dataset):
             pbar = tqdm(total=np.ceil(len(self) / batch_size), desc="Applying preprocessing on dataset images")
             for i in range(0, len(self), batch_size):
                 idx = torch.arange(i, min(i + batch_size, len(self)))
-                images, _, filters, _ = self[idx]
-                idx = idx.to(device)
-                images = images.to(device)
-                filters = filters.to(device)
                 if pose_module.use_contrast:
-                    # If pose module containts contrasts - correct images
-                    # TODO: The ideal way to use it is to apply the contrast on the filters.
-                    # However, the dataset only contains the unique filters.
-                    pts_rot, phase_shift, contrasts = pose_module(idx)
-                    images = images / contrasts.reshape(-1, 1, 1)
+                    # If pose module containts contrasts - apply them on filters
+                    pts_rot, phase_shift, contrasts = pose_module(idx.to(device))
+                    self.filters[idx] *= contrasts.reshape(-1, 1, 1).cpu()
                 else:
                     pts_rot, phase_shift = pose_module(idx)
+
+                images, _, filters, _ = self[idx]
+                images = images.to(device)
+                filters = filters.to(device)
                 self.images[idx] = preprocess_image_batch(
                     images,
                     nufft_plan,
@@ -259,6 +257,9 @@ class CovarDataset(Dataset):
 
                 pbar.update(1)
             pbar.close()
+        # After preprocessing images have no offsets or contrast variabillity.
+        self.offsets[:] = 0
+        self.contrasts[:] = 1
 
     def get_subset(self, idx: Iterable[int]) -> "CovarDataset":
         """Get a subset of the dataset.
@@ -490,6 +491,8 @@ class CovarDataset(Dataset):
                 idx = torch.arange(i, min(i + batch_size, len(self)), device=pose_module.device)
                 self.pts_rot[idx.cpu()] = pose_module(idx)[0].detach().cpu()
                 self.offsets[idx.cpu()] = pose_module.get_offsets()[idx.cpu()].detach().cpu()
+                if pose_module.use_contrast:
+                    self.contrasts[idx.cpu()] = pose_module.get_contrasts()[idx.cpu()].detach().cpu().squeeze()
 
 
 class LazyCovarDataset(CovarDataset):
@@ -516,6 +519,7 @@ class LazyCovarDataset(CovarDataset):
         self._nufft_plan = None
         self._softening_kernel_fourier = None
         self._mask_threshold = None
+        self.contrasts = torch.ones((len(self)), dtype=self.offsets.dtype)
 
     @property
     def dtype(self):
@@ -730,8 +734,10 @@ class LazyCovarDataset(CovarDataset):
             self._pose_module.set_rotvecs(rot_vecs)
             self._pose_module.set_offsets(offsets)
 
-            if self._pose_module.use_contrast and pose_module.use_contrast:
-                self._pose_module.set_contrasts(pose_module.get_contrasts().detach().cpu())
+        if pose_module.use_contrast:
+            # We do not want to update internal pose module contrast
+            # since it will modify the returned filters on _get_images
+            self.contrasts = pose_module.get_contrasts().detach().cpu()
 
 
 class BatchIndexSampler(torch.utils.data.Sampler):

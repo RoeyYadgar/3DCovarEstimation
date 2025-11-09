@@ -746,7 +746,7 @@ class CovarPoseTrainer(CovarTrainer):
                 # predicted_images = mean_forward + torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1),dim=1)
                 predicted_images = mean_forward
 
-                predicted_images = centered_fft2(centered_ifft2(predicted_images).real * soft_mask)
+                # predicted_images = centered_fft2(centered_ifft2(predicted_images).real * soft_mask)
 
                 contrast_est = (
                     torch.sum(predicted_images.conj() * shifted_images, dim=(-1, -2))
@@ -778,6 +778,10 @@ class CovarPoseTrainer(CovarTrainer):
             )
 
             self.get_pose_module().set_offsets(offsets, idx=idx)
+
+        normalized_contrast = self.get_pose_module().get_contrasts()
+        normalized_contrast /= torch.mean(normalized_contrast)
+        self.get_pose_module().set_contrasts(normalized_contrast)
 
     def set_pose_grad_req(self, grad: bool) -> None:
         """Set gradient requirements for pose and mean modules.
@@ -976,6 +980,7 @@ class CovarPoseTrainer(CovarTrainer):
             **training_kwargs: Additional training parameters
         """
         while self.downsample_factor >= 0:
+            logger.debug(f"Using downsample factor of {self.downsample_factor}")
             self.apply_masking_on_epoch = self.downsample_factor == 0
             super().train_epochs(max_epochs, **training_kwargs)
             self.downsample_factor -= 1
