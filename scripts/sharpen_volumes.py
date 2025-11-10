@@ -105,7 +105,7 @@ def parse_postprocess_output(output):
     return resolution, bfactor
 
 
-def run_relion_postprocess(volume_dir, angpix, mask=None, bfac_val=None):
+def run_relion_postprocess(volume_dir, angpix, mask=None, bfac_val=None, use_unmasked=False):
     """Run relion_postprocess on a volume directory.
 
     Args:
@@ -163,7 +163,7 @@ def run_relion_postprocess(volume_dir, angpix, mask=None, bfac_val=None):
         return None, None, None
 
 
-def move_sharpened_volumes(analysis_dir, volume_dirs):
+def move_sharpened_volumes(analysis_dir, volume_dirs, use_unmasked=False):
     """Move all sharpened volumes to a new directory called all_volumes_sharpened.
 
     Args:
@@ -175,7 +175,9 @@ def move_sharpened_volumes(analysis_dir, volume_dirs):
 
     for volume_dir_name in volume_dirs:
         volume_dir = os.path.join(analysis_dir, volume_dir_name)
-        sharpened_vol = os.path.join(volume_dir, f"{volume_dir_name}_postprocess_masked.mrc")
+        masked = "_masked" if not use_unmasked else ""
+        volume_name = f"{volume_dir_name}_postprocess{masked}.mrc"
+        sharpened_vol = os.path.join(volume_dir, volume_name)
 
         if os.path.exists(sharpened_vol):
             dest = os.path.join(all_volumes_dir, f"{volume_dir_name}.mrc")
@@ -200,6 +202,11 @@ def main():
     )
     parser.add_argument("--angpix", type=float, required=True, help="Pixel size in Angstroms")
     parser.add_argument("--mask", type=str, default=None, help="Optional path to mask file")
+    parser.add_argument(
+        "--use-unmasked",
+        action="store_true",
+        help="Use unmasked map instead of masked map (In that case the mask is only used to determine the b-factor)",
+    )
     parser.add_argument(
         "--bfac-val",
         type=float,
@@ -262,17 +269,26 @@ def main():
     if volume_results:
         print("\nPost-processing Results Summary:")
         print("-" * 60)
+        bfactor_values = []
         for result in volume_results:
             print(f"{result['name']}:")
             if result["resolution"]:
                 print(f"  Resolution: {result['resolution']}")
             if result["bfactor"]:
                 print(f"  B-factor: {result['bfactor']}")
+                # Parse only the first float found in the string (ignore any extra text)
+                bfactor_str = str(result["bfactor"])
+                match = re.search(r"(-?\d+(?:\.\d+)?)", bfactor_str)
+                if match:
+                    bfactor_values.append(float(match.group(1)))
         print("-" * 60)
+
+        avg_bfactor = sum(bfactor_values) / len(bfactor_values)
+        print(f"Average B-factor: {avg_bfactor:.2f}")
 
     # Move all sharpened volumes to all_volumes_sharpened directory
     print("\nMoving sharpened volumes to all_volumes_sharpened...")
-    move_sharpened_volumes(args.analysis_dir, processed_volumes)
+    move_sharpened_volumes(args.analysis_dir, processed_volumes, use_unmasked=args.use_unmasked)
 
     print(f"\nDone! All sharpened volumes are in: {os.path.join(args.analysis_dir, 'all_volumes_sharpened')}")
 
