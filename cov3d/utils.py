@@ -299,6 +299,23 @@ def soft_edged_kernel(
     return kernel
 
 
+def project_mean_out_from_eigenvecs(eigenvecs: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
+
+    orig_shape = eigenvecs.shape
+    r = eigenvecs.shape[0]
+    eigenvecs = eigenvecs.reshape(r, -1)
+    mean = mean.reshape(1, -1)
+
+    inn_prod = torch.matmul(eigenvecs, mean.conj().T)
+    mean_norm_squared = torch.norm(mean) ** 2
+
+    projected_eigenvecs = eigenvecs - torch.matmul(inn_prod, mean) / mean_norm_squared
+
+    _, S, V = torch.linalg.svd(projected_eigenvecs, full_matrices=False)
+
+    return (S.reshape(-1, 1) * V).reshape(orig_shape)
+
+
 def meanCTFPSD(ctfs: List[Any], L: int) -> np.ndarray:
     """Compute mean CTF power spectral density.
 
