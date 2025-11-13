@@ -39,7 +39,7 @@ from cov3d.projection_funcs import (
     preprocess_image_batch,
     vol_forward,
 )
-from cov3d.utils import cosineSimilarity, get_cpu_count, soft_edged_kernel
+from cov3d.utils import cosineSimilarity, get_cpu_count, project_mean_out_from_eigenvecs, soft_edged_kernel
 from cov3d.wiener_coords import compute_latentMAP_batch
 
 logger = logging.getLogger(__name__)
@@ -601,6 +601,7 @@ class CovarPoseTrainer(CovarTrainer):
         self.offset_est_method = "Newton"
         self.rotation_est_method = "SGD"
         self.mean_update_frequency = 5
+        self.use_eigen_in_contrast_from_epoch = 0
 
         if self.mean_est_method != "SGD":
             for param in self.get_mean_module().parameters():
@@ -739,14 +740,12 @@ class CovarPoseTrainer(CovarTrainer):
             if self.get_pose_module().use_contrast:
                 shifted_images = images * self.pose(idx, ds_resolution=self.downsample_size)[1]
 
-                # TODO: use eigen info in predicted images - currently does not work well
-                # latent_coords, _, _ = compute_latentMAP_batch(
-                #     shifted_images - mean_forward, projected_eigenvecs, self.dataset.noise_var
-                # )
-                # predicted_images = mean_forward + torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1),dim=1)
                 predicted_images = mean_forward
-
-                # predicted_images = centered_fft2(centered_ifft2(predicted_images).real * soft_mask)
+                if self.epoch_index >= self.use_eigen_in_contrast_from_epoch:
+                    latent_coords, _, _ = compute_latentMAP_batch(
+                        shifted_images - mean_forward, projected_eigenvecs, self.dataset.noise_var
+                    )
+                    predicted_images += torch.sum(projected_eigenvecs * latent_coords.unsqueeze(-1), dim=1)
 
                 contrast_est = (
                     torch.sum(predicted_images.conj() * shifted_images, dim=(-1, -2))
@@ -898,6 +897,15 @@ class CovarPoseTrainer(CovarTrainer):
             epoch: Current epoch number
         """
         super().run_epoch(epoch)
+
+        if self.get_pose_module().use_contrast:
+            with torch.no_grad():
+                projected_vecs = project_mean_out_from_eigenvecs(
+                    self.covar.get_vectors_spatial_domain(), self.mean.get_volume_spatial_domain()
+                )
+                self.covar.vectors.data.copy_(
+                    projected_vecs / torch.exp(self.covar.log_sqrt_eigenvals).reshape(-1, 1, 1, 1)
+                )
 
         if epoch % self.mean_update_frequency == self.mean_update_frequency - 1:
             if self.offset_est_method == "Newton":
