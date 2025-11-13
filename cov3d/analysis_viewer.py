@@ -150,7 +150,6 @@ class AnalyzeViewer:
         if fig_type == "umap":
             fig_dict = create_umap_figure(self.umap_coords, self.umap_cluster_coords, labels, fig_type=type_fig)
             fig = fig_dict["umap"]
-            fig.savefig("test.jpg")
         else:
             i, j = map(int, fig_type.split("_")[1:])
             fig_dict = create_pc_figure(
@@ -245,7 +244,17 @@ class AnalyzeViewer:
 
             self.umap_cluster_coords = np.zeros((len(self.cluster_coords), self.umap_coords.shape[1]))
             for i, cluster_center in enumerate(self.cluster_coords):
-                idx = np.where(np.all(self.coords == cluster_center, axis=1))[0][0]
+                matches = np.where(np.all(self.coords == cluster_center, axis=1))[0]
+                if len(matches) > 0:
+                    idx = matches[0]
+                else:
+                    print(
+                        "Loaded latent coords do not match exact points from "
+                        "existing latent points. Displaying closest points instead"
+                    )
+                    # Find the closest coordinate
+                    dists = np.linalg.norm(self.coords - cluster_center, axis=1)
+                    idx = np.argmin(dists)
                 self.umap_cluster_coords[i] = self.umap_coords[idx]
             self._draw_figure()
 
