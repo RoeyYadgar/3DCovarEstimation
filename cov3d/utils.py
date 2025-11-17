@@ -7,6 +7,7 @@ from typing import Any, List, Optional, Tuple, Union
 import aspire
 import numpy as np
 import pandas as pd
+import starfile
 import torch
 from aspire.storage.starfile import StarFile
 from aspire.utils import coor_trans, grid_2d, grid_3d
@@ -338,9 +339,18 @@ def sub_starfile(star_input: str, star_output: str, mrcs_index: Any) -> None:
         star_output: Output star file path
         mrcs_index: Indices to subset
     """
-    star_out = StarFile(star_input)
-    star_out["particles"] = pd.DataFrame(star_out["particles"]).iloc[mrcs_index].to_dict(orient="list")
-    star_out.write(star_output)
+
+    # Read the star file as a pandas DataFrame
+    data = starfile.read(star_input)
+    # If the input is a dict, we assume "particles" key; otherwise it is just the DataFrame
+    if isinstance(data, dict) and "particles" in data:
+        # Subset the particles dataframe and store as dict
+        data["particles"] = data["particles"].iloc[mrcs_index]
+        starfile.write(data, star_output)
+    else:
+        # Single DataFrame case
+        data = data.iloc[mrcs_index]
+        starfile.write(data, star_output)
 
 
 def mrcs_replace_starfile(star_input: str, star_output: str, mrcs_name: str) -> None:
