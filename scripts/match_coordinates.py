@@ -69,7 +69,9 @@ def load_query_coords(filepath: str) -> np.ndarray:
     return coords
 
 
-def find_closest_coordinates(query_coords: np.ndarray, reference_coords: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def find_closest_coordinates(
+    query_coords: np.ndarray, reference_coords: np.ndarray, num_neighbors: int = 1
+) -> Tuple[np.ndarray, np.ndarray]:
     """Find closest coordinates in reference dataset for each query point.
 
     Args:
@@ -91,14 +93,23 @@ def find_closest_coordinates(query_coords: np.ndarray, reference_coords: np.ndar
     distances = cdist(query_coords, reference_coords, metric="euclidean")
 
     # Find closest indices for each query point
-    closest_indices = np.argmin(distances, axis=1)
-    min_distances = np.min(distances, axis=1)
+    # Use np.argpartition for efficiency to get indices of k nearest neighbors
+    closest_indices = np.argpartition(distances, range(num_neighbors), axis=1)[:, :num_neighbors]
+    # Sort these k neighbors for each query point based on the actual distances
+    row_indices = np.arange(distances.shape[0])[:, None]
+    sorted_order = np.argsort(distances[row_indices, closest_indices], axis=1)
+    closest_indices = closest_indices[row_indices, sorted_order]
+    min_distances = distances[row_indices, closest_indices]
 
     return closest_indices, min_distances
 
 
 def match_coordinates(
-    analysis_data1_path: str, analysis_data2_path: str, query_coords_path: str, output_path: Optional[str] = None
+    analysis_data1_path: str,
+    analysis_data2_path: str,
+    query_coords_path: str,
+    output_path: Optional[str] = None,
+    num_neighbors: int = 1,
 ) -> Dict[str, Any]:
     """Match coordinates between two analysis datasets.
 
@@ -128,10 +139,10 @@ def match_coordinates(
 
     # Find closest coordinates
     print("Finding closest coordinates...")
-    closest_indices, distances = find_closest_coordinates(query_coords, coords1)
+    closest_indices, distances = find_closest_coordinates(query_coords, coords1, num_neighbors)
 
     # Get corresponding coordinates from second dataset
-    matched_coords = coords2[closest_indices]
+    matched_coords = coords2[closest_indices].mean(axis=1)
 
     # Prepare results
     results = {
@@ -182,11 +193,17 @@ Examples:
     parser.add_argument(
         "output", nargs="?", help="Optional output path for matched coordinates pickle file (numpy array)"
     )
+    parser.add_argument(
+        "--num_neighbors",
+        type=int,
+        default=1000,
+        help="Number of nearest neighbors to match (default: 1)",
+    )
 
     args = parser.parse_args()
 
     try:
-        match_coordinates(args.analysis_data1, args.analysis_data2, args.query_coords, args.output)
+        match_coordinates(args.analysis_data1, args.analysis_data2, args.query_coords, args.output, args.num_neighbors)
 
         print("\nMatching completed successfully!")
         if args.output:
