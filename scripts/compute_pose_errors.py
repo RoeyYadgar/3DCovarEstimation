@@ -11,8 +11,12 @@ Usage:
 """
 
 import argparse
+import os
 import pickle
+import shutil
+import subprocess
 import sys
+import tempfile
 from typing import Tuple
 
 import numpy as np
@@ -50,6 +54,23 @@ def load_cryodrgn_poses(poses_file: str) -> Tuple[np.ndarray, np.ndarray]:
     print(f"  - Offsets shape: {offsets.shape}")
 
     return rotations, offsets
+
+
+def parse_pose(input_path: str, output_path: str, image_size: int):
+
+    if input_path.endswith(".pkl"):
+        shutil.copy(input_path, output_path)
+
+    elif input_path.endswith(".star"):
+        parse_cmd = f"cryodrgn parse_pose_star {input_path} -o {output_path} -D {image_size}"
+        subprocess.run(parse_cmd, shell=True, check=True)
+
+    elif input_path.endswith(".cs"):
+        parse_cmd = f"cryodrgn parse_pose_csparc {input_path} -o {output_path} -D {image_size}"
+        subprocess.run(parse_cmd, shell=True, check=True)
+
+    else:
+        raise ValueError(f"Unknown file type of input path {input_path}")
 
 
 def compute_pose_errors(poses1_file: str, poses2_file: str, global_align: bool = False, image_size: int = None) -> dict:
@@ -187,8 +208,15 @@ Examples:
     args = parser.parse_args()
 
     try:
-        # Compute pose errors
-        results = compute_pose_errors(args.poses1, args.poses2, args.global_align, args.image_size)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            print("Pasring input files")
+            poses1 = os.path.join(temp_dir, "poses1.pkl")
+            poses2 = os.path.join(temp_dir, "poses2.pkl")
+            parse_pose(args.poses1, poses1, args.image_size)
+            parse_pose(args.poses2, poses2, args.image_size)
+            # Compute pose errors
+            print("Computing pose error")
+            results = compute_pose_errors(poses1, poses2, args.global_align, args.image_size)
 
         # Print results
         print_results(results)
