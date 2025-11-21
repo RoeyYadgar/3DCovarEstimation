@@ -1,6 +1,5 @@
 import os
 import pickle
-import sys
 import tkinter as tk
 from tkinter import filedialog, ttk
 from typing import Any, Dict, List, Optional
@@ -11,7 +10,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Polygon as PolygonPatch
 from matplotlib.path import Path as MplPath
 
-from cov3d.analyze import create_pc_figure, create_umap_figure
 from cov3d.utils import sub_starfile
 
 
@@ -36,7 +34,7 @@ class AnalyzeViewer:
         figure_type: StringVar for figure type selection
     """
 
-    def __init__(self, master: tk.Tk, data: Dict[str, Any], dir: str) -> None:
+    def __init__(self, master: tk.Tk, data: Dict[str, Any], dir: str, max_points: int = None) -> None:
         """Initialize the AnalyzeViewer with data and directory.
 
         Args:
@@ -73,6 +71,21 @@ class AnalyzeViewer:
         self.polygon_completed: bool = False  # Flag to track if polygon is completed
         self.polygon_figure_type: Optional[str] = None  # Figure type where polygon was created
         self.starfile_path: Optional[str] = None  # Path to loaded star file
+        # Performance optimization: cache plot objects
+        self._current_scatter = None  # Cache for scatter plot
+        self._current_hexbin = None  # Cache for hexbin plot
+        self._current_fig_type = None  # Current figure type ("scatter" or "hist")
+        self._current_figure_type_key = None  # Current figure type key (e.g., "umap" or "pc_0_1")
+        self._current_plot_coords = None  # Current coordinates being plotted
+        self._max_points_for_scatter = max_points if max_points is not None else np.inf  # Downsample if more points
+        # Pre-compute fixed downsampling indices for deterministic visualization
+        n_total = len(self.coords)
+        if n_total > self._max_points_for_scatter:
+            np.random.seed(42)  # Fixed seed for reproducibility
+            self._downsample_indices = np.random.choice(n_total, self._max_points_for_scatter, replace=False)
+            np.random.seed()  # Reset seed to avoid affecting other random operations
+        else:
+            self._downsample_indices = None
         self._setup_gui()
         self._draw_figure()
 
@@ -103,6 +116,20 @@ class AnalyzeViewer:
         self.polygon_completed = False
         self.polygon_figure_type = None
         self.starfile_path = None
+        # Reset performance caches
+        self._current_scatter = None
+        self._current_hexbin = None
+        self._current_fig_type = None
+        self._current_figure_type_key = None
+        self._current_plot_coords = None
+        # Recompute fixed downsampling indices for new dataset
+        n_total = len(self.coords)
+        if n_total > self._max_points_for_scatter:
+            np.random.seed(42)  # Fixed seed for reproducibility
+            self._downsample_indices = np.random.choice(n_total, self._max_points_for_scatter, replace=False)
+            np.random.seed()  # Reset seed to avoid affecting other random operations
+        else:
+            self._downsample_indices = None
         self._draw_figure()
 
     def _setup_gui(self) -> None:
@@ -165,15 +192,20 @@ class AnalyzeViewer:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.master)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
         self.canvas.mpl_connect("button_press_event", self._on_click)
+        self.canvas.mpl_connect("button_release_event", self._on_button_release)
+        self.canvas.mpl_connect("motion_notify_event", self._on_motion)
 
     def _draw_figure(self) -> None:
         """Draw the current figure based on selected type and color scheme.
 
         Updates the matplotlib figure based on the current figure type (UMAP or PCA) and color
-        coding selection. Handles both scatter plots and density histograms.
+        coding selection. Handles both scatter plots and density histograms. Optimized to reuse
+        existing plots and update data directly for better performance.
         """
         fig_type = self.figure_type.get()
         color_by = self.color_by.get()
+        type_fig = "hist" if color_by == "Density" else "scatter"
+
         # Prepare labels for coloring
         if color_by == "None":
             # If there's a completed polygon, color points inside it red using labels
@@ -194,35 +226,120 @@ class AnalyzeViewer:
             idx = int(color_by.split(" ")[1])
             labels = self.coords[:, idx]
 
-        type_fig = "hist" if color_by == "Density" else "scatter"
-        # Use analyze.py plotting functions
+        # Get coordinates to plot
         if fig_type == "umap":
-            fig_dict = create_umap_figure(self.umap_coords, self.umap_cluster_coords, labels, fig_type=type_fig)
-            fig = fig_dict["umap"]
+            plot_coords = self.umap_coords
+            cluster_coords_2d = self.umap_cluster_coords
+            xlabel, ylabel = "UMAP 1", "UMAP 2"
         else:
             i, j = map(int, fig_type.split("_")[1:])
-            fig_dict = create_pc_figure(
-                self.coords, self.cluster_coords, labels, num_pcs=max(i, j) + 1, fig_type=type_fig
-            )
-            fig = fig_dict.get(fig_type)
-        # Remove the old canvas and create a new one
-        self.canvas.get_tk_widget().pack_forget()
-        plt.close(self.fig)  # Close the old figure to avoid memory leaks
-        self.fig = fig
-        self.ax = fig.axes[0] if fig.axes else None
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.master)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
-        self.canvas.mpl_connect("button_press_event", self._on_click)
-        self.canvas.mpl_connect("button_release_event", self._on_button_release)
-        self.canvas.mpl_connect("motion_notify_event", self._on_motion)
+            plot_coords = self.coords[:, [i, j]]
+            cluster_coords_2d = self.cluster_coords[:, [i, j]] if self.cluster_coords is not None else None
+            xlabel, ylabel = f"PC {i}", f"PC {j}"
+
+        # Check if we need to recreate the plot
+        # Recreate if: plot type changed (scatter<->hist), figure type changed (umap<->pc), or first time
+        plot_type_changed = self._current_fig_type != type_fig
+        figure_type_key_changed = self._current_figure_type_key != fig_type
+        is_first_time = self._current_plot_coords is None or self.ax is None
+
+        needs_recreate = plot_type_changed or figure_type_key_changed or is_first_time
+
+        if needs_recreate:
+            # Clear the axes completely
+            self.ax.clear()
+            self._current_scatter = None
+            self._current_hexbin = None
+            self._current_fig_type = type_fig
+            self._current_plot_coords = plot_coords.copy()
+            # Reset polygon patch when axes are cleared so preview can be redrawn
+            if self.polygon_patch is not None:
+                self.polygon_patch = None
+
+        # Downsample for very large datasets to improve performance (using fixed indices)
+        if type_fig == "scatter" and self._downsample_indices is not None:
+            # Use pre-computed fixed indices for deterministic visualization
+            plot_coords_sampled = plot_coords[self._downsample_indices]
+            labels_sampled = labels[self._downsample_indices] if labels is not None else None
+        else:
+            plot_coords_sampled = plot_coords
+            labels_sampled = labels
+
+        # Update or create the plot
+        if type_fig == "scatter":
+            if needs_recreate or self._current_scatter is None:
+                # Remove hexbin if it exists
+                if self._current_hexbin is not None:
+                    self._current_hexbin.remove()
+                    self._current_hexbin = None
+
+                # Create new scatter plot
+                self._current_scatter = self.ax.scatter(
+                    plot_coords_sampled[:, 0],
+                    plot_coords_sampled[:, 1],
+                    s=0.1,
+                    c=labels_sampled,
+                    cmap="viridis" if labels_sampled is not None else None,
+                    alpha=0.6,
+                )
+            else:
+                # Update existing scatter plot data - much faster than recreating
+                self._current_scatter.set_offsets(plot_coords_sampled)
+                if labels_sampled is not None:
+                    self._current_scatter.set_array(labels_sampled)
+                    self._current_scatter.set_clim(vmin=labels_sampled.min(), vmax=labels_sampled.max())
+                else:
+                    self._current_scatter.set_array(None)
+        else:  # hist/hexbin
+            if needs_recreate or self._current_hexbin is None:
+                # Remove scatter if it exists
+                if self._current_scatter is not None:
+                    self._current_scatter.remove()
+                    self._current_scatter = None
+
+                # Create hexbin plot using matplotlib hexbin directly
+                hb = self.ax.hexbin(plot_coords[:, 0], plot_coords[:, 1], gridsize=50, cmap="Blues", mincnt=1)
+                self._current_hexbin = hb
+            # Note: hexbin plots are harder to update, so we recreate them when needed
+
+        # Add cluster annotations
+        if cluster_coords_2d is not None:
+            # Remove old annotations
+            for artist in list(self.ax.texts):
+                if hasattr(artist, "_cluster_annotation"):
+                    artist.remove()
+            # Add new annotations
+            for i in range(cluster_coords_2d.shape[0]):
+                text = self.ax.annotate(str(i), (cluster_coords_2d[i, 0], cluster_coords_2d[i, 1]), fontweight="bold")
+                text._cluster_annotation = True
+
+        # Update axis labels and limits (only if figure type changed or first time)
+        if needs_recreate:
+            self.ax.set_xlabel(xlabel)
+            self.ax.set_ylabel(ylabel)
+
+            # Set axis limits based on percentiles (excluding outliers)
+            x_min, x_max = np.percentile(plot_coords[:, 0], [0.5, 99.5])
+            x_delta = x_max - x_min
+            y_min, y_max = np.percentile(plot_coords[:, 1], [0.5, 99.5])
+            y_delta = y_max - y_min
+            self.ax.set_xlim(x_min - 0.1 * x_delta, x_max + 0.1 * x_delta)
+            self.ax.set_ylim(y_min - 0.1 * y_delta, y_max + 0.1 * y_delta)
+
+        # Store current state for next update
+        self._current_fig_type = type_fig
+        self._current_figure_type_key = fig_type
+        if needs_recreate:
+            self._current_plot_coords = plot_coords.copy()
+
         # Redraw polygon only if in polygon mode, vertices exist, and figure type matches
-        current_fig_type = self.figure_type.get()
         if (
             self.mode.get() == "polygon"
             and len(self.polygon_vertices) > 0
-            and (not self.polygon_completed or self.polygon_figure_type == current_fig_type)
+            and (not self.polygon_completed or self.polygon_figure_type == fig_type)
         ):
             self._draw_polygon()
+
         # Update complete polygon button state
         self._update_polygon_button_state()
         self.canvas.draw()
@@ -500,6 +617,12 @@ class AnalyzeViewer:
         self.polygon_completed = False
         self.polygon_figure_type = None
         self.starfile_path = None
+        # Reset performance caches
+        self._current_scatter = None
+        self._current_hexbin = None
+        self._current_fig_type = None
+        self._current_figure_type_key = None
+        self._current_plot_coords = None
         self._update_polygon_button_state()
         self._draw_figure()
 
@@ -560,6 +683,17 @@ class AnalyzeViewer:
         self.master.destroy()
 
 
+def parse_number_with_suffix(x):
+    if x is None:
+        return None
+    s = x.strip().lower()
+    if s.endswith("k"):
+        return int(float(s[:-1]) * 1_000)
+    if s.endswith("m"):
+        return int(float(s[:-1]) * 1_000_000)
+    return int(s)  # default: just an integer
+
+
 def main() -> None:
     """Main function to launch the AnalyzeViewer application.
 
@@ -568,8 +702,17 @@ def main() -> None:
     """
     root = tk.Tk()
     root.title("Analyze Coordinates Viewer")
-    if len(sys.argv) >= 2:
-        path = sys.argv[1]
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Analyze Coordinates Viewer")
+    parser.add_argument("path", nargs="?", default=None, help="Path to analyze_coordinates pkl file")
+    parser.add_argument(
+        "-n", "--max-points", type=parse_number_with_suffix, default=None, help="Max points (e.g., 10k, 2M, 500)."
+    )
+    args = parser.parse_args()
+
+    if args.path:
+        path = args.path
     else:
         path = filedialog.askopenfilename(title="Select analyze_coordinates pkl", filetypes=[("Pickle files", "*.pkl")])
         if not path:
@@ -577,7 +720,7 @@ def main() -> None:
             return
     with open(path, "rb") as f:
         data = pickle.load(f)
-    AnalyzeViewer(root, data, dir=os.path.split(path)[0])
+    AnalyzeViewer(root, data, dir=os.path.split(path)[0], max_points=args.max_points)
     root.protocol("WM_DELETE_WINDOW", root.quit)
     root.mainloop()
 
