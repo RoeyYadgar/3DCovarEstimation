@@ -12,7 +12,7 @@ import torch
 from cov3d.covar import Covar, Mean
 from cov3d.covar_distributed import trainParallel
 from cov3d.covar_sgd import trainCovar
-from cov3d.dataset import CovarDataset, GTData, LazyCovarDataset
+from cov3d.dataset import CovarDataset, GTData, LazyCovarDataset, is_dataset_lazy
 from cov3d.logger import setup_logger
 from cov3d.poses import PoseModule, offset_mean_error, out_of_plane_rot_error, pose_ASPIRE2cryoDRGN, pose_cryoDRGN2APIRE
 from cov3d.reconstruct_utils import relionReconstruct
@@ -500,6 +500,7 @@ def covar_processing(
         "poses_path": get_abspath(input_paths[2]),
         "ind": dataset.indices,
         "data_sign_inverted": dataset.data_inverted,
+        "lazy": is_dataset_lazy(dataset),
     }
     if is_gt_eigenvols:
         data_dict = {

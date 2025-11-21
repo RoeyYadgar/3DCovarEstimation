@@ -740,6 +740,18 @@ class LazyCovarDataset(CovarDataset):
             self.contrasts = pose_module.get_contrasts().detach().cpu()
 
 
+def is_dataset_lazy(dataset: CovarDataset) -> bool:
+    """Check if a CovarDataset instance is an instance of LazyCovarDataset.
+
+    Args:
+        dataset (CovarDataset): The dataset to check.
+
+    Returns:
+        bool: True if the dataset is a LazyCovarDataset, False otherwise.
+    """
+    return isinstance(dataset, LazyCovarDataset)
+
+
 class BatchIndexSampler(torch.utils.data.Sampler):
     """Custom sampler for batching indices with optional shuffling.
 

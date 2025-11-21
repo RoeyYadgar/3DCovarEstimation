@@ -19,6 +19,7 @@ def getRecovarDataset(
     split: bool = True,
     perm: Optional[np.ndarray] = None,
     uninvert_data: bool = False,
+    lazy: bool = False,
 ) -> Tuple[Any, Optional[np.ndarray]]:
     """Get RECOVAR dataset from file paths.
 
@@ -45,10 +46,15 @@ def getRecovarDataset(
         if perm is None:
             perm = np.random.permutation(num_ims) if ind is None else np.random.permutation(ind)
         ind_split = [perm[: num_ims // 2], perm[num_ims // 2 :]]
-        return recovar_ds.get_split_datasets_from_dict(dataset_dict, ind_split, lazy=False), perm
+
+        # Re-order halfsets for faster reading speed
+        ind_split = [np.sort(ind_split[0]), np.sort(ind_split[1])]
+        perm = np.concatenate(ind_split)
+
+        return recovar_ds.get_split_datasets_from_dict(dataset_dict, ind_split, lazy=lazy), perm
     else:
         dataset_dict["ind"] = ind
-        return recovar_ds.load_dataset_from_dict(dataset_dict), None
+        return recovar_ds.load_dataset_from_dict(dataset_dict, lazy=lazy), None
 
 
 def recovarReconstruct(inputfile: str, outputfile: str, overwrite: bool = True, compute_mask: bool = False) -> None:
@@ -93,6 +99,30 @@ def torch_to_numpy(arr: Union[torch.Tensor, np.ndarray]) -> np.ndarray:
     return arr.numpy() if isinstance(arr, torch.Tensor) else arr
 
 
+def check_dataset_size_limit(particles_path: str, ind: Optional[np.ndarray] = None) -> bool:
+    """Check if the dataset size corresponding to the given particles file and indices is within a
+    set limit.
+
+    Args:
+        particles_path: Path to the particles file.
+        ind: Optional array of indices specifying which particles to use. If None, all particles are considered.
+
+    Returns:
+        True if the estimated dataset size is less than the maximum allowed limit (10 GB), False otherwise.
+    """
+    MAX_DATASET_LIMIT = 100 * (2**30)  # 100 GB
+    image_source = ImageSource.from_file(particles_path, indices=ind)
+
+    num_ims = image_source.n
+    im_size = image_source.D
+    dtype = np.dtype(image_source.dtype)
+    dtype_size = dtype.itemsize
+
+    dataset_size = num_ims * (im_size**2) * dtype_size
+
+    return dataset_size < MAX_DATASET_LIMIT
+
+
 def prepareDatasetForReconstruction(result_path: str) -> Tuple[Any, np.ndarray, np.ndarray, float, np.ndarray]:
     """Prepare dataset for reconstruction from result file.
 
@@ -108,8 +138,15 @@ def prepareDatasetForReconstruction(result_path: str) -> Tuple[Any, np.ndarray, 
     ctf_path = result.get("ctf_path", None)
     poses_path = result.get("poses_path", None)
     ind = result.get("ind", None)
+    # TODO: Force lazy if dataset is too big - current RECOVAR's lazy implentation seem to be slow?
+    lazy = False
     dataset, dataset_perm = getRecovarDataset(
-        particles_path, ctf_path=ctf_path, poses_path=poses_path, ind=ind, uninvert_data=result["data_sign_inverted"]
+        particles_path,
+        ctf_path=ctf_path,
+        poses_path=poses_path,
+        ind=ind,
+        uninvert_data=result["data_sign_inverted"],
+        lazy=lazy,
     )
     batch_size = recovar.utils.get_image_batch_size(
         dataset[0].grid_size, gpu_memory=recovar.utils.get_gpu_memory_total()
