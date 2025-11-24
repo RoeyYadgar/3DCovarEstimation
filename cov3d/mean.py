@@ -1,16 +1,95 @@
+import logging
 from typing import Any, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+from aspire.utils import grid_3d
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from cov3d.dataset import CovarDataset, create_dataloader
-from cov3d.fsc_utils import average_fourier_shell, rpsd, upsample_and_expand_fourier_shell, vol_fsc
+from cov3d.fsc_utils import (
+    average_fourier_shell,
+    expand_fourier_shell,
+    rpsd,
+    upsample_and_expand_fourier_shell,
+    vol_fsc,
+)
 from cov3d.nufft_plan import NufftPlanDiscretized
 from cov3d.poses import get_phase_shift_grid, offset_to_phase_shift
 from cov3d.projection_funcs import centered_fft3, centered_ifft3, im_backward
 from cov3d.utils import get_complex_real_dtype, get_cpu_count, get_torch_device
+
+logger = logging.getLogger(__name__)
+
+
+def get_grid_correction(L: int, upsampling_factor: int, nufft_disc: str):
+    assert nufft_disc in ("bilinear", "nearest"), "nufft_disc must be 'bilinear' or 'nearest'"
+
+    pixel_pos = torch.arange(-(L // 2), (L - 1) // 2 + 1) / L
+    pixel_pos = torch.pi * pixel_pos / upsampling_factor
+    sinc_val = torch.sin(pixel_pos) / pixel_pos
+    sinc_val[pixel_pos == 0] = 1
+    sinc_val[sinc_val < 1e-6] = 1
+
+    if nufft_disc == "bilinear":
+        sinc_val = sinc_val**2
+
+    sinc_volume = torch.einsum("i,j,k->ijk", sinc_val, sinc_val, sinc_val)
+    return sinc_volume
+
+
+def complex_conjugate_gradient(A_mv, b, x0=None, rtol=1e-8, maxiter=None):
+    """Solves the linear system Ax = b for complex-valued inputs using the Conjugate Gradient
+    method.
+
+    Args:
+        A_mv (callable): A function that computes the matrix-vector product A @ v.
+        b (torch.Tensor): The right-hand side vector (complex dtype expected).
+        x0 (torch.Tensor, optional): Initial guess for the solution. Defaults to None (zero vector).
+        rtol (float, optional): Relative tolerance for convergence (norm(r) < rtol * norm(b)).
+        maxiter (int, optional): Maximum number of iterations. Defaults to 10 * len(b).
+
+    Returns:
+        torch.Tensor: The approximate solution vector x.
+    """
+    if not b.is_complex():
+        raise ValueError("Input vector b must be a complex tensor.")
+
+    x = torch.zeros_like(b) if x0 is None else x0.clone()
+    r = b - A_mv(x)
+    p = r.clone()
+    # Use torch.vdot for complex inner product (conjugates the first argument)
+    rs_old = torch.vdot(r, r).real  # The result should always be real
+
+    if maxiter is None:
+        maxiter = len(b) * 10
+
+    b_norm = torch.norm(b)
+
+    for num_iter in range(maxiter):
+        Ap = A_mv(p)
+        # alpha = rs_old / torch.vdot(p, Ap)
+        p_Ap_vdot = torch.vdot(p, Ap)
+        alpha = rs_old / p_Ap_vdot  # alpha is a scalar (potentially complex, but ideally real for HPD A)
+
+        x += alpha * p
+        r -= alpha * Ap
+
+        rs_new = torch.vdot(r, r).real
+
+        # Check for convergence using the norm of the residual
+        if torch.sqrt(rs_new) < rtol * b_norm:
+            break
+
+        # Update search direction
+        beta = rs_new / rs_old
+        p = r + beta * p
+        rs_old = rs_new
+
+    print(f"CG converged in {num_iter} iterations")
+
+    return x
 
 
 def reconstruct_mean(
@@ -98,13 +177,46 @@ def reconstruct_mean(
         plt.plot(v.cpu().T)
         plt.yscale("log")
         fig.savefig("test.jpg")
+
+        reg_backproj_ctf = backproj_ctf + reg
     else:
-        # reg = torch.ones_like(backproj_ctf) * 1e-1  # 3 #TODO: determine this constant adapatively
-        reg = backproj_ctf.abs().max() * 1e-4
+        # reg = backproj_ctf.abs().max() * 1e-5
+        reg = average_fourier_shell(backproj_ctf.real) * 1e-3
+        reg = expand_fourier_shell(reg, L * upsampling_factor, 3)
 
-    mean_volume = backproj_im / (backproj_ctf + reg)
+        reg_backproj_ctf = torch.max(backproj_ctf.abs(), reg)
+        reg_backproj_ctf = torch.clamp(reg_backproj_ctf, min=1e-8)
 
+    mean_volume = backproj_im / reg_backproj_ctf
     mean_volume = centered_ifft3(mean_volume, cropping_size=(L,) * 3).real
+
+    if upsampling_factor > 1:
+        # When upsampling, the least squares operator will not be diagonal exactly in Fourier space
+        # this is because it is of the form (\sum F^{*}_us M^T F^{*} P_i^T P_i F M F_us)
+        # where F, F_us are the fourier transform in original and upsampled size, M is the zero padding operator.
+        # To correct for this we perform CG iterations
+
+        def A_operator(x):
+            x = x.reshape((L, L, L))
+            x_new = centered_fft3(x, padding_size=(upsampling_factor * L,) * 3)
+            x_new = reg_backproj_ctf * x_new
+            x_new = centered_ifft3(x_new, cropping_size=(L,) * 3)
+            return x_new.reshape(-1)
+
+        mean_volume = complex_conjugate_gradient(
+            A_operator,
+            b=centered_ifft3(backproj_im, cropping_size=(L,) * 3).reshape(-1),
+            x0=torch.complex(mean_volume.reshape(-1), torch.zeros_like(mean_volume.reshape(-1))),
+        )
+        mean_volume = mean_volume.reshape((L, L, L)).real
+
+    # Zero out frequencies outside the sphere
+    mean_volume = centered_ifft3(
+        centered_fft3(mean_volume) * torch.tensor(grid_3d(L, shifted=False, normalized=True)["r"] <= 1, device=device)
+    ).real
+
+    # grid_correction = get_grid_correction(L, upsampling_factor,'nearest').to(device)
+    # mean_volume = mean_volume / grid_correction
 
     if mask is not None:
         mean_volume *= mask.squeeze(0)

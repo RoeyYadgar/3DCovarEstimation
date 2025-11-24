@@ -354,6 +354,8 @@ class SimulatedSource:
         self._unique_filters = unique_filters
         self.rotations_std = rotations_std
         self.offsets_std = offsets_std
+        self.np_dtype = vols.asnumpy().dtype
+        self.dtype = torch.tensor(vols.asnumpy()).dtype
         self._clean_images = self._gen_clean_images()
         self.noise_var = noise_var
 
@@ -427,18 +429,18 @@ class SimulatedSource:
         Returns:
             Clean images tensor
         """
-        clean_images = torch.zeros((self.n, self.L, self.L))
+        clean_images = torch.zeros((self.n, self.L, self.L), dtype=self.dtype)
         self._offsets = torch.zeros((self.n, 2))  # TODO: create non-zero gt offsets
         self.offsets = self._offsets + self.L * self.offsets_std * np.random.randn(self.n, 2)
         self.amplitudes = np.ones((self.n))
         self.states = torch.tensor(np.random.choice(self.num_vols, self.n))
         self.filter_indices = np.random.choice(len(self._unique_filters), self.n)
-        self._rotations = Rotation.generate_random_rotations(self.n).matrices
+        self._rotations = Rotation.generate_random_rotations(self.n, dtype=self.np_dtype).matrices
         self.rotations = self.noisify_rotations(self._rotations, self.rotations_std)
 
         unique_filters = torch.tensor(
             np.array([self._unique_filters[i].evaluate_grid(self.L) for i in range(len(self._unique_filters))]),
-            dtype=torch.float32,
+            dtype=self.dtype,
         )
         pts_rot = torch.tensor(rotated_grids(self.L, self._rotations).copy()).reshape((3, self.n, self.L**2))
         pts_rot = pts_rot.transpose(0, 1)
