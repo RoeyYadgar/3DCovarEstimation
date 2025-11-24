@@ -99,6 +99,7 @@ def reconstruct_mean(
     upsampling_factor: int = 2,
     batch_size: int = 1024,
     idx: Optional[torch.Tensor] = None,
+    do_grid_correction: Optional[bool] = True,
     return_lhs_rhs: bool = False,
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     """Reconstruct mean volume from particle images.
@@ -110,6 +111,7 @@ def reconstruct_mean(
         upsampling_factor: Upsampling factor for NUFFT (default: 2)
         batch_size: Batch size for processing (default: 1024)
         idx: Indices of particles to use (optional)
+        do_grid_correction: Whether to perform grid correction of Nufft Discretization (default: True)
         return_lhs_rhs: Whether to return left-hand side and right-hand side terms
 
     Returns:
@@ -215,8 +217,9 @@ def reconstruct_mean(
         centered_fft3(mean_volume) * torch.tensor(grid_3d(L, shifted=False, normalized=True)["r"] <= 1, device=device)
     ).real
 
-    # grid_correction = get_grid_correction(L, upsampling_factor,'nearest').to(device)
-    # mean_volume = mean_volume / grid_correction
+    if do_grid_correction:
+        grid_correction = get_grid_correction(L, upsampling_factor, "nearest").to(device)
+        mean_volume = mean_volume / grid_correction
 
     if mask is not None:
         mean_volume *= mask.squeeze(0)

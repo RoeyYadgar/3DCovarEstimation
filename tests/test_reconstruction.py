@@ -12,6 +12,7 @@ from matplotlib import pyplot as plt
 
 from cov3d.dataset import CovarDataset
 from cov3d.mean import reconstruct_mean, reconstruct_mean_from_halfsets
+from cov3d.nufft_plan import NufftPlanDiscretized, NufftSpec
 from cov3d.projection_funcs import centered_fft3, centered_ifft3
 from cov3d.source import SimulatedSource
 
@@ -112,10 +113,15 @@ class TestYourClassName(unittest.TestCase):
         gaussian = np.exp(-(xx**2 + yy**2 + zz**2) / (2 * (L * sigma) ** 2))
         return torch.tensor(gaussian, dtype=self.dtype)
 
-    def _gen_dataset(self):
-        vol = self._gen_volume()
-        src = SimulatedSource(n=self.n, vols=vol, noise_var=0, whiten=False)
-        return CovarDataset(src, noise_var=0, apply_preprocessing=False), vol
+    def _gen_dataset(self, vol: Volume, nufft_type: str = "nufft"):
+        if nufft_type == "discretized":
+            nufft_spec = NufftSpec(
+                NufftPlanDiscretized, sz=(self.L,) * 3, upsample_factor=self.upsampling_factor, mode="nearest"
+            )
+        else:
+            nufft_spec = None
+        src = SimulatedSource(n=self.n, vols=vol, noise_var=0, whiten=False, nufft_spec=nufft_spec)
+        return CovarDataset(src, noise_var=0, apply_preprocessing=False)
 
     def setUp(self):
         torch.manual_seed(0)
@@ -125,23 +131,25 @@ class TestYourClassName(unittest.TestCase):
         self.upsampling_factor = 2
         self.dtype = torch.float64
         self.dtype_np = np.float64
-        dataset, source_vol = self._gen_dataset()
-        self.dataset = dataset
-        self.source_vol = torch.tensor(source_vol.asnumpy())
 
     def tearDown(self):
         # Clean up after tests
         pass
 
-    def test_reconstruct_mean_clean_dataset(self):
+    def _test_reconstruct_mean_clean_dataset(self, source_nufft_type: str):
+        source_vol = self._gen_volume()
+        dataset = self._gen_dataset(source_vol, nufft_type=source_nufft_type)
+        source_vol = torch.tensor(source_vol.asnumpy())
+        disc_nufft = source_nufft_type == "discretized"
+
         reconstructed_mean, rhs, lhs = reconstruct_mean(
-            self.dataset, upsampling_factor=self.upsampling_factor, return_lhs_rhs=True
+            dataset, upsampling_factor=self.upsampling_factor, return_lhs_rhs=True, do_grid_correction=(not disc_nufft)
         )
         reconstructed_mean = reconstructed_mean.to("cpu")
         rhs = rhs.to("cpu")
         lhs = lhs.to("cpu")
 
-        source_vol_fourier = centered_fft3(self.source_vol).squeeze()
+        source_vol_fourier = centered_fft3(source_vol).squeeze()
         reconstructed_mean_fourier = centered_fft3(reconstructed_mean)
 
         if self.L % 2 == 0:
@@ -153,19 +161,30 @@ class TestYourClassName(unittest.TestCase):
             source_vol_fourier = source_vol_fourier[1:, 1:, 1:]
             reconstructed_mean_fourier = reconstructed_mean_fourier[1:, 1:, 1:]
 
-        torch.testing.assert_close(
-            reconstructed_mean_fourier, source_vol_fourier, rtol=1e-8, atol=1e-4 * source_vol_fourier.abs().max()
-        )
+        if disc_nufft:
+            # When the source images come from actual NUFFT we cannot guarntee per-voxel accuracy
+            torch.testing.assert_close(
+                reconstructed_mean_fourier, source_vol_fourier, rtol=1e-8, atol=1e-4 * source_vol_fourier.abs().max()
+            )
 
         regularized_reconstructed_mean = reconstruct_mean_from_halfsets(
-            self.dataset, upsampling_factor=self.upsampling_factor
+            dataset, upsampling_factor=self.upsampling_factor
         )
         regularized_reconstructed_mean = regularized_reconstructed_mean.to("cpu")
-        relative_error = torch.norm(reconstructed_mean - self.source_vol) / torch.norm(self.source_vol)
-        relative_error_regularized = torch.norm(regularized_reconstructed_mean - self.source_vol) / torch.norm(
-            self.source_vol
-        )
+        relative_error = torch.norm(reconstructed_mean - source_vol) / torch.norm(source_vol)
+        relative_error_regularized = torch.norm(regularized_reconstructed_mean - source_vol) / torch.norm(source_vol)
         print(f"Relative error {relative_error} (unregularized) {relative_error_regularized} (regularized)")
+
+        unreg_relative_error_threshold = 1e-4 if disc_nufft else 2e-2
+        torch.testing.assert_close(
+            relative_error, torch.zeros_like(relative_error), atol=unreg_relative_error_threshold, rtol=0
+        )
+
+    def test_reconstruct_mean_clean_dataset_disc(self):
+        self._test_reconstruct_mean_clean_dataset("discretized")
+
+    def test_reconstruct_mean_clean_dataset_nufft(self):
+        self._test_reconstruct_mean_clean_dataset("nufft")
 
 
 if __name__ == "__main__":
