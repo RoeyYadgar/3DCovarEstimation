@@ -1,6 +1,9 @@
+import inspect
 import logging
 import math
 from abc import ABC
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Tuple, Union
 
 import numpy as np
@@ -387,6 +390,36 @@ class NufftPlan(BaseNufftPlan):
         if self.device == torch.device("cpu"):
             adjoint_signal = torch.from_numpy(adjoint_signal)
         return adjoint_signal.reshape((self.batch_size, *self.sz))
+
+
+class NufftType(Enum):
+    DISCRETIZED = NufftPlanDiscretized
+    FINUFFT = NufftPlan
+
+
+@dataclass
+class NufftSpec:
+    nufft_type: NufftType
+    sz: Tuple[int, int, int]
+    upsample_factor: int = None
+    mode: str = None
+    batch_size: int = None
+    eps: float = None
+    dtype: torch.dtype = None
+    device: str = None
+
+    def get_nufft_kwargs(self) -> dict:
+        """Returns a dictionary of kwargs for constructor the NUFFT type based on the provided
+        spec."""
+
+        constructor_sig = inspect.signature(self.nufft_type.__init__)
+        valid_params = constructor_sig.parameters.keys()
+
+        return {k: v for k, v in self.__dict__.items() if k in valid_params and v is not None}
+
+    @property
+    def input_in_fourier(self) -> bool:
+        return self.nufft_type == NufftPlanDiscretized
 
 
 class TorchNufftForward(torch.autograd.Function):

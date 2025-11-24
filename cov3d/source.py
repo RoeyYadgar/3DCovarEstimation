@@ -13,9 +13,9 @@ from aspire.volume import Volume, rotated_grids
 from cryodrgn.ctf import compute_ctf, load_ctf_for_training
 from cryodrgn.source import ImageSource as CryoDRGNImageSource
 
-from cov3d.nufft_plan import NufftPlan
+from cov3d.nufft_plan import NufftPlan, NufftSpec
 from cov3d.poses import get_phase_shift_grid, pose_ASPIRE2cryoDRGN, pose_cryoDRGN2APIRE
-from cov3d.projection_funcs import centered_fft2, centered_ifft2, vol_forward
+from cov3d.projection_funcs import centered_fft2, centered_ifft2, make_nufft_plan, vol_forward
 from cov3d.utils import get_torch_device
 
 
@@ -343,6 +343,7 @@ class SimulatedSource:
         unique_filters: Optional[List] = None,
         rotations_std: float = 0,
         offsets_std: float = 0,
+        nufft_spec: Optional[NufftSpec] = None,
     ) -> None:
         self.n = n
         self.L = vols.shape[-1]
@@ -356,6 +357,13 @@ class SimulatedSource:
         self.offsets_std = offsets_std
         self.np_dtype = vols.asnumpy().dtype
         self.dtype = torch.tensor(vols.asnumpy()).dtype
+
+        # Nufft spec is used to determine how to project input volumes into the dataset images
+        # default is standard nufft
+        if nufft_spec is None:
+            nufft_spec = NufftSpec(NufftPlan, (self.L,) * 3, batch_size=1, dtype=self.dtype, device=get_torch_device())
+        self.nufft_spec = nufft_spec
+
         self._clean_images = self._gen_clean_images()
         self.noise_var = noise_var
 
@@ -448,7 +456,7 @@ class SimulatedSource:
 
         device = get_torch_device()
         volumes = torch.tensor(self.vols.asnumpy(), device=device)
-        nufft_plan = NufftPlan((self.L,) * 3, batch_size=1, dtype=volumes.dtype, device=device)
+        nufft_plan, volumes = make_nufft_plan(self.nufft_spec, volumes)
 
         for i in range(self.num_vols):
             idx = (self.states == i).nonzero().reshape(-1)

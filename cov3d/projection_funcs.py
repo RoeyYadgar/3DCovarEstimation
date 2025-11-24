@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from aspire.utils import grid_3d
 
-from cov3d.nufft_plan import BaseNufftPlan, nufft_adjoint, nufft_forward
+from cov3d.nufft_plan import BaseNufftPlan, NufftSpec, nufft_adjoint, nufft_forward
 
 
 def pad_tensor(tensor: torch.Tensor, size: List[int], dims: Optional[List[int]] = None) -> torch.Tensor:
@@ -163,6 +163,37 @@ def _centered_fft(
     if size is not None:
         tensor = pad_tensor(tensor, size, dim)
     return torch.fft.fftshift(fft_func(torch.fft.ifftshift(tensor, dim=dim, **fft_kwargs), dim=dim), dim=dim)
+
+
+def make_nufft_plan(
+    spec: NufftSpec, input: Optional[torch.Tensor] = None
+) -> Union[BaseNufftPlan, Tuple[BaseNufftPlan, torch.Tensor]]:
+    """Create and configure a NUFFT (Non-uniform Fast Fourier Transform) plan from a NufftSpec.
+
+    Args:
+        spec (NufftSpec): The NUFFT specification containing configuration parameters, including
+            the NUFFT plan type and arguments.
+        input (Optional[torch.Tensor]): Optional input tensor in spatial domain. If provided,
+            the input is transformed into the correct domain the nufft plan expects.
+
+    Returns:
+        BaseNufftPlan or Tuple[BaseNufftPlan, torch.Tensor]:
+            If `input` is None, returns the constructed NUFFT plan.
+            If `input` is provided, returns a tuple of the constructed NUFFT plan and the (possibly
+            transformed) input tensor.
+    """
+    # TODO: Ideally this should be implemented in nufft_plan.py
+    # But that causes circular import errors - fix it.
+
+    nufft_plan = spec.nufft_type(**spec.get_nufft_kwargs())
+
+    if input is None:
+        return nufft_plan
+
+    if spec.input_in_fourier:
+        input = centered_fft3(input, padding_size=tuple(v * spec.upsample_factor for v in input.shape[-3:]))
+
+    return nufft_plan, input
 
 
 def preprocess_image_batch(
