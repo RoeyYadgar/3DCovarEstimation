@@ -39,7 +39,7 @@ def get_grid_correction(L: int, upsampling_factor: int, nufft_disc: str):
     return sinc_volume
 
 
-def complex_conjugate_gradient(A_mv, b, x0=None, rtol=1e-8, maxiter=None):
+def complex_conjugate_gradient(A_mv, b, x0=None, rtol=1e-6, maxiter=None):
     """Solves the linear system Ax = b for complex-valued inputs using the Conjugate Gradient
     method.
 
@@ -90,6 +90,45 @@ def complex_conjugate_gradient(A_mv, b, x0=None, rtol=1e-8, maxiter=None):
     print(f"CG converged in {num_iter} iterations")
 
     return x
+
+
+def correct_upsampling_padding(
+    lhs: torch.Tensor, rhs: torch.Tensor, cg_init: torch.Tensor, L: int, upsampling_factor: int
+) -> torch.tensor:
+    """Corrects for non-diagonal least-squares operator caused by zero padding in spatial domain
+    (upsampling in Fourier).
+
+    Args:
+        lhs (torch.Tensor): The left-hand side operator (in Fourier space,
+            shape (L*upsampling_factor, L*upsampling_factor, L*upsampling_factor)).
+        rhs (torch.Tensor): The right-hand side vector (in Fourier space, shape matching lhs).
+        cg_init (torch.Tensor): Initial guess for the iterative CG solver (in spatial domain, shape (L,L,L)).
+        L (int): Original volume edge length (before upsampling).
+        upsampling_factor (int): Upsampling factor applied to volume in Fourier space.
+
+    Returns:
+        torch.Tensor: The corrected mean volume tensor (in spatial domain, shape (L, L, L)).
+    """
+    # When upsampling, the least squares operator will not be diagonal exactly in Fourier space
+    # this is because it is of the form (\sum F^{*}_us M^T F^{*} P_i^T P_i F M F_us)
+    # where F, F_us are the fourier transform in original and upsampled size, M is the zero padding operator.
+    # To correct for this we perform CG iterations
+
+    def A_operator(x):
+        x = x.reshape((L, L, L))
+        x_new = centered_fft3(x, padding_size=(upsampling_factor * L,) * 3)
+        x_new = lhs * x_new
+        x_new = centered_ifft3(x_new, cropping_size=(L,) * 3)
+        return x_new.reshape(-1)
+
+    mean_volume = complex_conjugate_gradient(
+        A_operator,
+        b=centered_ifft3(rhs, cropping_size=(L,) * 3).reshape(-1),
+        x0=torch.complex(cg_init.reshape(-1), torch.zeros_like(cg_init.reshape(-1))),
+    )
+    mean_volume = mean_volume.reshape((L, L, L)).real
+
+    return mean_volume
 
 
 def reconstruct_mean(
@@ -193,24 +232,7 @@ def reconstruct_mean(
     mean_volume = centered_ifft3(mean_volume, cropping_size=(L,) * 3).real
 
     if upsampling_factor > 1:
-        # When upsampling, the least squares operator will not be diagonal exactly in Fourier space
-        # this is because it is of the form (\sum F^{*}_us M^T F^{*} P_i^T P_i F M F_us)
-        # where F, F_us are the fourier transform in original and upsampled size, M is the zero padding operator.
-        # To correct for this we perform CG iterations
-
-        def A_operator(x):
-            x = x.reshape((L, L, L))
-            x_new = centered_fft3(x, padding_size=(upsampling_factor * L,) * 3)
-            x_new = reg_backproj_ctf * x_new
-            x_new = centered_ifft3(x_new, cropping_size=(L,) * 3)
-            return x_new.reshape(-1)
-
-        mean_volume = complex_conjugate_gradient(
-            A_operator,
-            b=centered_ifft3(backproj_im, cropping_size=(L,) * 3).reshape(-1),
-            x0=torch.complex(mean_volume.reshape(-1), torch.zeros_like(mean_volume.reshape(-1))),
-        )
-        mean_volume = mean_volume.reshape((L, L, L)).real
+        mean_volume = correct_upsampling_padding(reg_backproj_ctf, backproj_im, mean_volume, L, upsampling_factor)
 
     # Zero out frequencies outside the sphere
     mean_volume = centered_ifft3(
@@ -247,11 +269,18 @@ def reconstruct_mean_from_halfsets(
     if idx is None:
         idx = torch.arange(len(dataset))
 
-    mean_half1, lhs1, rhs1 = reconstruct_mean(dataset, idx=idx[: len(idx) // 2], **reconstruction_kwargs)
-    mean_half2, lhs2, rhs2 = reconstruct_mean(dataset, idx=idx[len(idx) // 2 :], **reconstruction_kwargs)
+    mean_half1, rhs1, lhs1 = reconstruct_mean(dataset, idx=idx[: len(idx) // 2], **reconstruction_kwargs)
+    mean_half2, rhs2, lhs2 = reconstruct_mean(dataset, idx=idx[len(idx) // 2 :], **reconstruction_kwargs)
 
     return regularize_mean_from_halfsets(
-        mean_half1, lhs1, rhs1, mean_half2, lhs2, rhs2, mask=reconstruction_kwargs.get("mask", None)
+        mean_half1,
+        rhs1,
+        lhs1,
+        mean_half2,
+        rhs2,
+        lhs2,
+        mask=reconstruction_kwargs.get("mask", None),
+        do_grid_correction=reconstruction_kwargs.get("do_grid_correction", True),
     )
 
 
@@ -312,52 +341,66 @@ def reconstruct_mean_from_halfsets_DDP(
     dist.destroy_process_group(group1)
     dist.destroy_process_group(group2)
 
-    return regularize_mean_from_halfsets(*half1, *half2, reconstruction_kwargs.get("mask", None))
+    return regularize_mean_from_halfsets(
+        *half1,
+        *half2,
+        reconstruction_kwargs.get("mask", None),
+        do_grid_correction=reconstruction_kwargs.get("do_grid_correction", True),
+    )
 
 
 def regularize_mean_from_halfsets(
     mean_half1: torch.Tensor,
-    lhs1: torch.Tensor,
     rhs1: torch.Tensor,
+    lhs1: torch.Tensor,
     mean_half2: torch.Tensor,
-    lhs2: torch.Tensor,
     rhs2: torch.Tensor,
+    lhs2: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
+    do_grid_correction: Optional[bool] = True,
 ) -> torch.Tensor:
     """Regularize mean volume using FSC-based regularization from half-sets.
 
     Args:
         mean_half1: First half-set mean volume
-        lhs1: First half-set left-hand side term
-        rhs1: First half-set right-hand side term
+        rhs1: First half-set left-hand side term
+        lhs1: First half-set right-hand side term
         mean_half2: Second half-set mean volume
-        lhs2: Second half-set left-hand side term
-        rhs2: Second half-set right-hand side term
+        rhs2: Second half-set left-hand side term
+        lhs2: Second half-set right-hand side term
         mask: Volume mask to apply (optional)
+        do_grid_correction: Whether to perform grid correction of Nufft Discretization (default: True)
 
     Returns:
         Regularized mean volume
     """
     L = mean_half1.shape[-1]
+    upsampling_factor = lhs1.shape[-1] // L
 
-    filter_gain = centered_fft3(centered_ifft3((rhs1 + rhs2), cropping_size=(L,) * 3)).abs() / 2
+    filter_gain = centered_fft3(centered_ifft3((lhs1 + lhs2), cropping_size=(L,) * 3)).abs() / 2
 
     averaged_filter_gain = average_fourier_shell(1 / filter_gain).to(mean_half1.device)
 
     mean_fsc = vol_fsc(mean_half1, mean_half2)
-    fsc_epsilon = 1e-6
+    fsc_epsilon = 1e-3
     mean_fsc[mean_fsc < fsc_epsilon] = fsc_epsilon
     mean_fsc[mean_fsc > 1 - fsc_epsilon] = 1 - fsc_epsilon
 
     fourier_reg = 1 / ((mean_fsc / (1 - mean_fsc)) * averaged_filter_gain)
 
-    fourier_reg = upsample_and_expand_fourier_shell(fourier_reg.unsqueeze(0), lhs1.shape[-1], 3) / (
-        L**1
-    )  # TODO: check normalization constant
+    fourier_reg = upsample_and_expand_fourier_shell(fourier_reg.unsqueeze(0), rhs1.shape[-1], 3)
 
-    mean_volume = ((lhs1 / (rhs1 + fourier_reg)) + (lhs2 / (rhs2 + fourier_reg))) / 2
-
+    mean_volume = ((rhs1 / (lhs1 + fourier_reg)) + (rhs2 / (lhs2 + fourier_reg))) / 2
     mean_volume = centered_ifft3(mean_volume, cropping_size=(L,) * 3).real
+
+    if upsampling_factor > 1:
+        mean_volume = correct_upsampling_padding(
+            lhs1 + lhs2 + fourier_reg * 2, rhs1 + rhs2, mean_volume, L, upsampling_factor
+        )
+
+    if do_grid_correction:
+        grid_correction = get_grid_correction(L, upsampling_factor, "nearest").to(mean_volume.device)
+        mean_volume = mean_volume / grid_correction
 
     if mask is not None:
         mean_volume *= mask.squeeze(0)

@@ -15,6 +15,7 @@ from cov3d.mean import reconstruct_mean, reconstruct_mean_from_halfsets
 from cov3d.nufft_plan import NufftPlanDiscretized, NufftSpec
 from cov3d.projection_funcs import centered_fft3, centered_ifft3
 from cov3d.source import SimulatedSource
+from cov3d.utils import saveVol
 
 
 def download_mrc(emd_id: int, output_path: str):
@@ -168,16 +169,33 @@ class TestYourClassName(unittest.TestCase):
             )
 
         regularized_reconstructed_mean = reconstruct_mean_from_halfsets(
-            dataset, upsampling_factor=self.upsampling_factor
+            dataset, upsampling_factor=self.upsampling_factor, do_grid_correction=(not disc_nufft)
         )
         regularized_reconstructed_mean = regularized_reconstructed_mean.to("cpu")
         relative_error = torch.norm(reconstructed_mean - source_vol) / torch.norm(source_vol)
         relative_error_regularized = torch.norm(regularized_reconstructed_mean - source_vol) / torch.norm(source_vol)
         print(f"Relative error {relative_error} (unregularized) {relative_error_regularized} (regularized)")
 
-        unreg_relative_error_threshold = 1e-4 if disc_nufft else 2e-2
+        # -----For debugging - Inspect volumes-----------
+        debug_vols = [
+            (reconstructed_mean, "reconstructed_unreg.mrc"),
+            (regularized_reconstructed_mean, "reconstructed_reg.mrc"),
+            (source_vol, "source_vol.mrc"),
+        ]
+        for vol, fname in debug_vols:
+            saveVol(vol, fname)
+
+        # break point here
+        for _, fname in debug_vols:
+            os.remove(fname)
+        # --------------------------------
+
+        relative_error_threshold = 1e-4 if disc_nufft else 2e-2
         torch.testing.assert_close(
-            relative_error, torch.zeros_like(relative_error), atol=unreg_relative_error_threshold, rtol=0
+            relative_error, torch.zeros_like(relative_error), atol=relative_error_threshold, rtol=0
+        )
+        torch.testing.assert_close(
+            relative_error_regularized, torch.zeros_like(relative_error), atol=relative_error_threshold, rtol=0
         )
 
     def test_reconstruct_mean_clean_dataset_disc(self):
