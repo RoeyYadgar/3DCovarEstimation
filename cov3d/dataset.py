@@ -740,6 +740,25 @@ class LazyCovarDataset(CovarDataset):
             self.contrasts = pose_module.get_contrasts().detach().cpu()
 
 
+def get_ordered_half_split(n: int) -> torch.Tensor:
+    """Split n indices into two random halves and keep each half ordered. This is usefull for lazy
+    dataset where reading Truly shuffled data can be very slow.
+
+    Args:
+        n (int): Total number of elements to split
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Two sorted tensors containing the indices for each half
+    """
+    idx = torch.randperm(n)
+    half1 = idx[: n // 2]
+    half2 = idx[n // 2 :]
+    # Order the two halves (smallest index first in each half)
+    half1, _ = torch.sort(half1)
+    half2, _ = torch.sort(half2)
+    return half1, half2
+
+
 class BatchIndexSampler(torch.utils.data.Sampler):
     """Custom sampler for batching indices with optional shuffling.
 

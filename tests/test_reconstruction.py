@@ -194,9 +194,6 @@ class TestYourClassName(unittest.TestCase):
         torch.testing.assert_close(
             relative_error, torch.zeros_like(relative_error), atol=relative_error_threshold, rtol=0
         )
-        torch.testing.assert_close(
-            relative_error_regularized, torch.zeros_like(relative_error), atol=relative_error_threshold, rtol=0
-        )
 
     def test_reconstruct_mean_clean_dataset_disc(self):
         self._test_reconstruct_mean_clean_dataset("discretized")

@@ -7,7 +7,7 @@ from aspire.utils import grid_3d
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from cov3d.dataset import CovarDataset, create_dataloader
+from cov3d.dataset import CovarDataset, create_dataloader, get_ordered_half_split
 from cov3d.fsc_utils import (
     average_fourier_shell,
     expand_fourier_shell,
@@ -87,7 +87,7 @@ def complex_conjugate_gradient(A_mv, b, x0=None, rtol=1e-6, maxiter=None):
         p = r + beta * p
         rs_old = rs_new
 
-    print(f"CG converged in {num_iter} iterations")
+    logger.debug(f"CG converged in {num_iter} iterations")
 
     return x
 
@@ -129,6 +129,16 @@ def correct_upsampling_padding(
     mean_volume = mean_volume.reshape((L, L, L)).real
 
     return mean_volume
+
+
+def regularize_lhs(lhs: torch.Tensor) -> torch.Tensor:
+    reg = average_fourier_shell(lhs.real) * 1e-3
+    reg = expand_fourier_shell(reg, lhs.shape[-1], 3)
+
+    reg_lhs = torch.max(lhs.abs(), reg)
+    reg_lhs = torch.clamp(reg_lhs, min=1e-8)
+
+    return reg_lhs
 
 
 def reconstruct_mean(
@@ -222,11 +232,7 @@ def reconstruct_mean(
         reg_backproj_ctf = backproj_ctf + reg
     else:
         # reg = backproj_ctf.abs().max() * 1e-5
-        reg = average_fourier_shell(backproj_ctf.real) * 1e-3
-        reg = expand_fourier_shell(reg, L * upsampling_factor, 3)
-
-        reg_backproj_ctf = torch.max(backproj_ctf.abs(), reg)
-        reg_backproj_ctf = torch.clamp(reg_backproj_ctf, min=1e-8)
+        reg_backproj_ctf = regularize_lhs(backproj_ctf)
 
     mean_volume = backproj_im / reg_backproj_ctf
     mean_volume = centered_ifft3(mean_volume, cropping_size=(L,) * 3).real
@@ -267,7 +273,7 @@ def reconstruct_mean_from_halfsets(
     """
     reconstruction_kwargs["return_lhs_rhs"] = True
     if idx is None:
-        idx = torch.arange(len(dataset))
+        idx = torch.concatenate(get_ordered_half_split(len(dataset)))
 
     mean_half1, rhs1, lhs1 = reconstruct_mean(dataset, idx=idx[: len(idx) // 2], **reconstruction_kwargs)
     mean_half2, rhs2, lhs2 = reconstruct_mean(dataset, idx=idx[len(idx) // 2 :], **reconstruction_kwargs)
@@ -386,17 +392,23 @@ def regularize_mean_from_halfsets(
     mean_fsc[mean_fsc < fsc_epsilon] = fsc_epsilon
     mean_fsc[mean_fsc > 1 - fsc_epsilon] = 1 - fsc_epsilon
 
+    logger.debug(f"Halfset FSC: {mean_fsc[:L//2].cpu().numpy()}")
+
     fourier_reg = 1 / ((mean_fsc / (1 - mean_fsc)) * averaged_filter_gain)
 
     fourier_reg = upsample_and_expand_fourier_shell(fourier_reg.unsqueeze(0), rhs1.shape[-1], 3)
 
-    mean_volume = ((rhs1 / (lhs1 + fourier_reg)) + (rhs2 / (lhs2 + fourier_reg))) / 2
+    reg_lhs = regularize_lhs(lhs1 + lhs2 + fourier_reg)
+    mean_volume = (rhs1 + rhs2) / reg_lhs
     mean_volume = centered_ifft3(mean_volume, cropping_size=(L,) * 3).real
 
     if upsampling_factor > 1:
-        mean_volume = correct_upsampling_padding(
-            lhs1 + lhs2 + fourier_reg * 2, rhs1 + rhs2, mean_volume, L, upsampling_factor
-        )
+        mean_volume = correct_upsampling_padding(reg_lhs, rhs1 + rhs2, mean_volume, L, upsampling_factor)
+
+    mean_volume = centered_ifft3(
+        centered_fft3(mean_volume)
+        * torch.tensor(grid_3d(L, shifted=False, normalized=True)["r"] <= 1, device=mean_volume.device)
+    ).real
 
     if do_grid_correction:
         grid_correction = get_grid_correction(L, upsampling_factor, "nearest").to(mean_volume.device)
