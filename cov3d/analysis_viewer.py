@@ -694,6 +694,25 @@ def parse_number_with_suffix(x):
     return int(s)  # default: just an integer
 
 
+def read_cryodrgn_format(analysis_dir: str) -> Dict:
+    data_dict = {}
+    output_dir, analysis_dirname = os.path.split(analysis_dir)
+
+    epoch_num = os.path.splitext(analysis_dirname)[1].replace(".", "")
+
+    coords_path = os.path.join(output_dir, f"z.{epoch_num}.pkl")
+
+    with open(coords_path, "rb") as f:
+        data_dict["coords"] = pickle.load(f)
+
+    umap_path = os.path.join(analysis_dir, "umap.pkl")
+
+    with open(umap_path, "rb") as f:
+        data_dict["umap_coords"] = pickle.load(f)
+
+    return data_dict
+
+
 def main() -> None:
     """Main function to launch the AnalyzeViewer application.
 
@@ -709,6 +728,7 @@ def main() -> None:
     parser.add_argument(
         "-n", "--max-points", type=parse_number_with_suffix, default=None, help="Max points (e.g., 10k, 2M, 500)."
     )
+    parser.add_argument("-f", "--format", choices=["solvar", "cryodrgn"], default="solvar", help="Input data format")
     args = parser.parse_args()
 
     if args.path:
@@ -718,8 +738,11 @@ def main() -> None:
         if not path:
             print("No file selected.")
             return
-    with open(path, "rb") as f:
-        data = pickle.load(f)
+    if args.format == "solvar":
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+    elif args.format == "cryodrgn":
+        data = read_cryodrgn_format(path)
     AnalyzeViewer(root, data, dir=os.path.split(path)[0], max_points=args.max_points)
     root.protocol("WM_DELETE_WINDOW", root.quit)
     root.mainloop()
