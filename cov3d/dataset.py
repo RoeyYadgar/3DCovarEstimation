@@ -88,8 +88,20 @@ class CovarDataset(Dataset):
         # TODO: replace with non ASPIRE implemntation?
         self.rot_vecs = torch.tensor(Rotation(source.rotations.numpy()).as_rotvec(), dtype=source.rotations.dtype)
         self.offsets = source.offsets
-        self.images = source.images(torch.arange(0, len(source)))
-        self.filters = source.get_ctf(torch.arange(0, len(source)))
+
+        batch_size = 1024 * 16
+        images_list = []
+        ctf_list = []
+        for i in range(0, len(source), batch_size):
+            batch_idx = torch.arange(i, min(i + batch_size, len(source)))
+
+            images_batch = source.images(batch_idx).cpu()
+            images_list.append(images_batch)
+
+            ctf_batch = source.get_ctf(batch_idx).cpu()
+            ctf_list.append(ctf_batch)
+        self.images = torch.cat(images_list, dim=0)
+        self.filters = torch.cat(ctf_list, dim=0)
 
     def _init_from_aspire_source(self, source: Union[ASPIREImageSource, SimulatedSource]) -> None:
         """Initialize dataset from ASPIRE source object.
@@ -178,20 +190,28 @@ class CovarDataset(Dataset):
         if isinstance(mask, Volume):
             mask = torch.tensor(mask.asnumpy())
 
-        mean = Mean(
-            torch.tensor(mean_volume.asnumpy()),
-            L,
-            fourier_domain=fourier_domain,
-            volume_mask=mask if mask is not None else None,
-        )
+        if mean_volume is not None:
+            mean = Mean(
+                torch.tensor(mean_volume.asnumpy()),
+                L,
+                fourier_domain=fourier_domain,
+                volume_mask=mask if mask is not None else None,
+            )
+            if fourier_domain:
+                mean.init_grid_correction("bilinear")
+
+            dtype = mean.dtype
+            upsampling_factor = mean.upsampling_factor
+        else:
+            mean = None
+            dtype = torch.float32
+            upsampling_factor = 2
         pose = PoseModule(rot_vecs, offsets, L)
         nufft_plan = (
-            NufftPlan((self.resolution,) * 3, batch_size=1, dtype=mean.dtype, device=device)
+            NufftPlan((self.resolution,) * 3, batch_size=1, dtype=dtype, device=device)
             if not fourier_domain
-            else NufftPlanDiscretized((self.resolution,) * 3, upsample_factor=mean.upsampling_factor, mode="bilinear")
+            else NufftPlanDiscretized((self.resolution,) * 3, upsample_factor=upsampling_factor, mode="bilinear")
         )
-        if fourier_domain:
-            mean.init_grid_correction("bilinear")
 
         return mean, pose, nufft_plan
 
@@ -238,7 +258,7 @@ class CovarDataset(Dataset):
                     pts_rot, phase_shift, contrasts = pose_module(idx.to(device))
                     self.filters[idx] *= contrasts.reshape(-1, 1, 1).cpu()
                 else:
-                    pts_rot, phase_shift = pose_module(idx)
+                    pts_rot, phase_shift = pose_module(idx.to(device))
 
                 images, _, filters, _ = self[idx]
                 images = images.to(device)
@@ -259,7 +279,7 @@ class CovarDataset(Dataset):
             pbar.close()
         # After preprocessing images have no offsets or contrast variabillity.
         self.offsets[:] = 0
-        self.contrasts[:] = 1
+        self.contrasts = torch.ones((len(self)), dtype=self.offsets.dtype)
 
     def get_subset(self, idx: Iterable[int]) -> "CovarDataset":
         """Get a subset of the dataset.
@@ -546,28 +566,30 @@ class LazyCovarDataset(CovarDataset):
         actually perform any preprocessing but it update the internal objects required preprocessing
         on demand."""
 
-        mean_module = copy.deepcopy(mean_module)
         pose_module = copy.deepcopy(pose_module)
 
-        if mean_module._in_spatial_domain != self._in_spatial_domain:
-            domain_name = lambda val: "Spatial" if val else "Fourier"
-            logger.warning(
-                f"Mean module is in {domain_name(mean_module._in_spatial_domain)} domain "
-                f"while dataset is in {domain_name(self._in_spatial_domain)}. "
-                "Changing domain of the mean module to fit dataset"
-            )
+        if mean_module is not None:
+            mean_module = copy.deepcopy(mean_module)
 
-            mean_module._in_spatial_domain = self._in_spatial_domain
-
-        device = get_torch_device()
-        if nufft_plan is None:
-            nufft_plan = (
-                NufftPlan((self.resolution,) * 3, batch_size=1, dtype=mean_module.dtype, device=device)
-                if mean_module._in_spatial_domain
-                else NufftPlanDiscretized(
-                    (self.resolution,) * 3, upsample_factor=mean_module.upsampling_factor, mode="bilinear"
+            if mean_module._in_spatial_domain != self._in_spatial_domain:
+                domain_name = lambda val: "Spatial" if val else "Fourier"
+                logger.warning(
+                    f"Mean module is in {domain_name(mean_module._in_spatial_domain)} domain "
+                    f"while dataset is in {domain_name(self._in_spatial_domain)}. "
+                    "Changing domain of the mean module to fit dataset"
                 )
-            )
+
+                mean_module._in_spatial_domain = self._in_spatial_domain
+
+            device = get_torch_device()
+            if nufft_plan is None:
+                nufft_plan = (
+                    NufftPlan((self.resolution,) * 3, batch_size=1, dtype=mean_module.dtype, device=device)
+                    if mean_module._in_spatial_domain
+                    else NufftPlanDiscretized(
+                        (self.resolution,) * 3, upsample_factor=mean_module.upsampling_factor, mode="bilinear"
+                    )
+                )
 
         if not self.apply_preprocessing:
             logger.debug("Apply pre-preprocessing is False, when preprocess_from_modoules was called. Changing to True")
@@ -576,29 +598,31 @@ class LazyCovarDataset(CovarDataset):
         self._set_internal_preprocessing_modules(mean_module, pose_module, nufft_plan)
 
     def _set_internal_preprocessing_modules(self, mean_module, pose_module, nufft_plan):
-        set_module_grad(mean_module, False)
         set_module_grad(pose_module, False)
         device = get_torch_device()
         self.src = self.src.to(device)
-        mean_module = mean_module.to(device)
-
-        # _mean_volume and _mask are different than the original mean_volume and mask
-        # in that they are in fourier domain(if fourier_domain is True)
-        self._mean_volume = mean_module()
-        self._mask = mean_module.get_volume_mask()
 
         self._pose_module = pose_module.to(device)
         self._nufft_plan = nufft_plan
 
-        # Compute mask related variables
-        with torch.no_grad():
-            idx = torch.arange(min(1024, len(self)), device=device)
-            nufft_plan.setpts(pose_module(idx)[0])
-            self._mask_threshold = get_mask_threshold(self._mask, nufft_plan) if self._mask is not None else 0
-            # Mask softening kernel should be in fourier space regardless of the value of fourier_domain
-            self._softening_kernel_fourier = soft_edged_kernel(radius=5, L=self.resolution, dim=2, in_fourier=True).to(
-                device
-            )
+        if mean_module is not None:
+            set_module_grad(mean_module, False)
+            mean_module = mean_module.to(device)
+
+            # _mean_volume and _mask are different than the original mean_volume and mask
+            # in that they are in fourier domain(if fourier_domain is True)
+            self._mean_volume = mean_module()
+            self._mask = mean_module.get_volume_mask()
+
+            # Compute mask related variables
+            with torch.no_grad():
+                idx = torch.arange(min(1024, len(self)), device=device)
+                nufft_plan.setpts(pose_module(idx)[0])
+                self._mask_threshold = get_mask_threshold(self._mask, nufft_plan) if self._mask is not None else 0
+                # Mask softening kernel should be in fourier space regardless of the value of fourier_domain
+                self._softening_kernel_fourier = soft_edged_kernel(
+                    radius=5, L=self.resolution, dim=2, in_fourier=True
+                ).to(device)
 
     def __len__(self):
         return len(self.src)
@@ -621,7 +645,7 @@ class LazyCovarDataset(CovarDataset):
             Tuple[torch.Tensor,torch.Tensor,torch.Tensor]: Tuple containing images,rotated grid of fourier components
             and filters.
         """
-        device = self._mean_volume.device
+        device = self.src.device
         images = self.src.images(idx, fourier=not self._in_spatial_domain)
 
         image_sign = -1 if self.data_inverted else 1

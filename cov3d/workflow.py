@@ -14,6 +14,7 @@ from cov3d.covar_distributed import trainParallel
 from cov3d.covar_sgd import trainCovar
 from cov3d.dataset import CovarDataset, GTData, LazyCovarDataset, is_dataset_lazy
 from cov3d.logger import setup_logger
+from cov3d.mean import reconstruct_from_source
 from cov3d.poses import PoseModule, offset_mean_error, out_of_plane_rot_error, pose_ASPIRE2cryoDRGN, pose_cryoDRGN2APIRE
 from cov3d.reconstruct_utils import relionReconstruct
 from cov3d.source import ImageSource
@@ -217,7 +218,9 @@ def covar_workflow(
         noise_var = source.estimate_noise_var() if not whiten else 1
         L = source.resolution
 
-        mean_est = relionReconstruct(inputfile, path.join(output_dir, "mean_est.mrc"), overwrite=True, mrcs_index=ind)
+        logger.info("Reconstructing mean volume")
+        mean_est = aspire.volume.Volume(reconstruct_from_source(source, noise_var, lazy=True).cpu().numpy())
+        mean_est.save(path.join(output_dir, "mean_est.mrc"), overwrite=True)
 
         logger.debug(f"Norm squared of mean volume : {np.linalg.norm(mean_est)**2}")
 

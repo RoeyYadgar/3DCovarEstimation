@@ -7,7 +7,7 @@ from aspire.utils import grid_3d
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from cov3d.dataset import CovarDataset, create_dataloader, get_ordered_half_split
+from cov3d.dataset import CovarDataset, LazyCovarDataset, create_dataloader, get_ordered_half_split
 from cov3d.fsc_utils import (
     average_fourier_shell,
     expand_fourier_shell,
@@ -18,6 +18,7 @@ from cov3d.fsc_utils import (
 from cov3d.nufft_plan import NufftPlanDiscretized
 from cov3d.poses import get_phase_shift_grid, offset_to_phase_shift
 from cov3d.projection_funcs import centered_fft3, centered_ifft3, im_backward
+from cov3d.source import ImageSource
 from cov3d.utils import get_complex_real_dtype, get_cpu_count, get_torch_device
 
 logger = logging.getLogger(__name__)
@@ -418,6 +419,28 @@ def regularize_mean_from_halfsets(
         mean_volume *= mask.squeeze(0)
 
     return mean_volume
+
+
+def reconstruct_from_source(source: ImageSource, noise_var: float, lazy: bool = False) -> torch.Tensor:
+    """Reconstruct the mean volume from an image source.
+
+    Args:
+        source (ImageSource): Raw data to be reconstructed from.
+        noise_var (float): The estimated noise variance of the images.
+        lazy (bool, optional): Whether to use a lazy dataset (default: False).
+
+    Returns:
+        torch.Tensor: The reconstructed mean volume.
+    """
+    dataset_cls = CovarDataset if not lazy else LazyCovarDataset
+
+    mean_dataset = dataset_cls(source, noise_var, apply_preprocessing=False)
+    mean_dataset.to_fourier_domain()
+
+    reconstructed_mean = reconstruct_mean_from_halfsets(mean_dataset)
+
+    torch.cuda.empty_cache()
+    return reconstructed_mean
 
 
 if __name__ == "__main__":
