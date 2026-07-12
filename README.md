@@ -189,3 +189,9 @@ solvar analysis-viewer analysis_output_dir/data.pkl
     -h, --help                      Show this message and exit.
 
 </details>
+
+## Preprint & Data
+
+Preprint: [arxiv.org/abs/2602.17603](https://arxiv.org/abs/2602.17603)
+
+The synthetic datasets used to evaluate SOLVAR originate from [CryoBench](https://github.com/ml-struct-bio/CryoBench). The datasets + additional preprocessed data used for evaluation is available on Zenodo: [zenodo.org/records/21276007](https://zenodo.org/records/21276007).
